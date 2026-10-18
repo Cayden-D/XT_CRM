@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>销途 CRM 使用教程</title>
+<style>
+:root {
+  --navy:#102b3a; --navy-2:#173f52; --ink:#18313f; --muted:#6c7f88; --line:#dbe4e6; --teal:#12a594; --teal-d:#0d7c6e; --teal-pale:#e3f5f0;
+  --gold:#d79628; --warn-bg:#fff4df; --warn:#93600e; --red:#c2410c; --bg:#edf2f3; --card:#ffffff;
+  --font:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif; --mono:"SF Mono","Menlo","IBM Plex Mono",monospace;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; background:#0b1d27; color:var(--ink); font-family:var(--font); overflow:hidden; }
+body.render { background:#0b1d27; }
+#viewport { position:absolute; inset:0 0 76px 0; display:grid; place-items:center; overflow:hidden; }
+body.render #viewport { inset:0; }
+#stage { position:relative; width:1920px; height:1080px; flex:none; overflow:hidden; transform-origin:center center;
+  background:radial-gradient(1200px 700px at 78% 30%,#f6faf9 0%,#e8f0f1 55%,#dde8ea 100%); }
+.scene { position:absolute; inset:0; display:none; }
+/* chrome shared by all scenes */
+.brand { position:absolute; left:64px; top:40px; display:flex; align-items:center; gap:14px; z-index:5; }
+.brand i { width:40px; height:40px; border-radius:11px; background:var(--navy); display:grid; place-items:center; }
+.brand i::after { content:""; width:16px; height:16px; border:3px solid #5fe0c9; border-radius:50%; border-right-color:transparent; transform:rotate(-30deg); }
+.brand b { font-size:22px; color:var(--navy); letter-spacing:.02em; } .brand span { font-size:16px; color:var(--muted); margin-left:4px; }
+#chapters { position:absolute; left:64px; right:64px; bottom:34px; display:flex; gap:8px; z-index:6; }
+#chapters div { flex:1; }
+#chapters div i { display:block; height:5px; border-radius:3px; background:rgba(16,43,58,.12); overflow:hidden; }
+#chapters div i b { display:block; height:100%; width:0; background:var(--teal); }
+#chapters div span { display:block; margin-top:9px; font-size:14px; color:#8a9aa0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#chapters div.on span { color:var(--navy); font-weight:600; }
+#sub { position:absolute; left:50%; bottom:78px; transform:translateX(-50%); max-width:1400px; padding:12px 30px; border-radius:14px; background:rgba(11,29,39,.86); color:#fff;
+  font-size:34px; line-height:1.45; font-weight:500; text-align:center; letter-spacing:.02em; z-index:40; box-shadow:0 12px 30px rgba(0,0,0,.25); display:none; white-space:nowrap; }
+body.nosubs #sub { display:none !important; }
+#cursor { position:absolute; left:0; top:0; width:34px; height:34px; z-index:50; pointer-events:none; display:none; }
+#cursor svg { filter:drop-shadow(0 4px 6px rgba(0,0,0,.28)); transform-origin:4px 4px; }
+#ripple { position:absolute; width:70px; height:70px; margin:-35px 0 0 -35px; border-radius:50%; border:4px solid var(--teal); z-index:49; opacity:0; pointer-events:none; }
+
+/* caption column */
+.cap { position:absolute; left:64px; top:150px; width:560px; }
+.cap .no { font:600 18px var(--mono); color:var(--teal-d); letter-spacing:.12em; }
+.cap h2 { margin:14px 0 18px; font-size:58px; line-height:1.15; color:var(--navy); letter-spacing:.01em; }
+.cap p.lead { margin:0 0 34px; font-size:24px; line-height:1.65; color:#4d636c; }
+.cap ol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:14px; }
+.cap li { display:flex; gap:16px; align-items:flex-start; padding:16px 18px; border-radius:16px; background:rgba(255,255,255,.55); border:1px solid rgba(16,43,58,.06); color:#6b7f87; font-size:22px; line-height:1.5; transition:none; }
+.cap li em { flex:none; width:34px; height:34px; border-radius:50%; background:#dfe8ea; color:#6b7f87; font:600 17px var(--mono); font-style:normal; display:grid; place-items:center; margin-top:1px; }
+.cap li.on { background:#fff; color:var(--ink); border-color:rgba(18,165,148,.35); box-shadow:0 10px 30px rgba(16,43,58,.08); }
+.cap li.on em { background:var(--teal); color:#fff; }
+.cap li.done em { background:var(--teal-pale); color:var(--teal-d); }
+
+/* app window mock */
+.win { position:absolute; left:680px; top:120px; width:1180px; height:840px; border-radius:22px; background:var(--bg); overflow:hidden;
+  box-shadow:0 40px 90px rgba(16,43,58,.22),0 0 0 1px rgba(16,43,58,.06); }
+.app { position:absolute; inset:0; display:flex; }
+.side { width:210px; flex:none; background:var(--navy); color:#c9d8dc; padding:24px 14px; display:flex; flex-direction:column; gap:4px; }
+.side .logo { display:flex; align-items:center; gap:10px; padding:0 8px 22px; color:#fff; font-weight:700; font-size:19px; }
+.side .logo i { width:28px; height:28px; border-radius:8px; background:#1b766f; display:grid; place-items:center; }
+.side .logo i::after { content:""; width:11px; height:11px; border:2.5px solid #8be3d7; border-radius:50%; border-right-color:transparent; }
+.side .it { display:flex; align-items:center; gap:10px; height:40px; padding:0 12px; border-radius:10px; font-size:15px; color:#b4c7cc; }
+.side .it svg { width:18px; height:18px; flex:none; }
+.side .it.on { background:rgba(255,255,255,.1); color:#fff; box-shadow:inset 3px 0 0 #5fe0c9; }
+.side .it.pulse { background:rgba(95,224,201,.22); color:#fff; }
+.main { flex:1; min-width:0; display:flex; flex-direction:column; }
+.top { height:78px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 30px; background:#f8fafa; border-bottom:1px solid var(--line); }
+.top small { display:block; color:#8a9aa0; font-size:12px; } .top b { font-size:24px; color:var(--navy); }
+.top .ai { height:38px; padding:0 14px; border-radius:10px; border:1px solid #b9ddd7; background:var(--teal-pale); color:var(--teal-d); font-size:14px; font-weight:600; display:flex; align-items:center; gap:7px; }
+.body { flex:1; min-height:0; padding:24px 28px; display:flex; flex-direction:column; gap:16px; position:relative; }
+.row { display:flex; gap:14px; align-items:center; }
+.chip { height:36px; padding:0 14px; border-radius:18px; border:1px solid var(--line); background:#fff; color:#55707a; font-size:14px; display:inline-flex; align-items:center; gap:8px; }
+.chip span { min-width:22px; height:20px; padding:0 6px; border-radius:10px; background:#eef3f4; font:600 12px var(--mono); display:grid; place-items:center; }
+.chip.on { background:var(--navy); border-color:var(--navy); color:#fff; } .chip.on span { background:rgba(255,255,255,.18); color:#fff; }
+.btn { height:40px; padding:0 18px; border-radius:10px; background:var(--teal); color:#fff; font-size:15px; font-weight:600; display:inline-flex; align-items:center; gap:8px; box-shadow:0 6px 16px rgba(18,165,148,.25); }
+.btn.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); box-shadow:none; }
+.search { flex:1; height:42px; border-radius:11px; border:1px solid var(--line); background:#fff; display:flex; align-items:center; gap:10px; padding:0 14px; color:#97a6ab; font-size:15px; }
+.card { background:#fff; border:1px solid var(--line); border-radius:16px; }
+.kpis { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.kpi { padding:18px 20px; } .kpi small { color:var(--muted); font-size:14px; } .kpi strong { display:block; margin:6px 0 6px; font:600 32px var(--mono); color:var(--navy); letter-spacing:-.02em; }
+.kpi .d { font-size:13px; font-weight:600; } .up { color:#1f8a52; } .down { color:#b4412f; }
+.bars { display:flex; align-items:flex-end; gap:12px; height:170px; padding:12px 18px 0; }
+.bars i { flex:1; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#2bb9a6,#12a594); transform-origin:bottom; }
+.todo { display:flex; align-items:center; gap:14px; padding:14px 18px; border-bottom:1px solid #f0f3f4; font-size:16px; }
+.todo:last-child { border-bottom:0; }
+.todo b { margin-left:auto; font:600 20px var(--mono); color:var(--navy); } .todo .dot { width:10px; height:10px; border-radius:50%; }
+.todo.hi { background:#f3fbf9; }
+.grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+.pc { overflow:hidden; } .compact .pc .im { aspect-ratio:4/3; } .compact .pc .im svg { width:42%; height:56%; } .pc .im { aspect-ratio:1/1; position:relative; display:grid; place-items:center; }
+.pc .im svg { width:52%; height:52%; } .pc .tag { position:absolute; left:10px; top:10px; padding:3px 8px; border-radius:6px; background:rgba(16,43,58,.78); color:#fff; font-size:12px; }
+.pc .st { position:absolute; right:10px; bottom:10px; padding:3px 9px; border-radius:10px; background:#fff; font-size:12px; font-weight:700; color:var(--teal-d); }
+.pc .st.warn { background:var(--warn-bg); color:var(--warn); }
+.pc .tx { padding:10px 12px 12px; } .pc .tt { font-size:14px; font-weight:600; line-height:1.45; height:40px; overflow:hidden; }
+.pc .pr { margin-top:6px; display:flex; justify-content:space-between; align-items:baseline; } .pc .pr b { color:var(--red); font:600 16px var(--mono); } .pc .pr span { color:var(--muted); font-size:12px; }
+.pc .sl { margin-top:5px; font-size:12px; color:#6b7f87; } .pc .sl b { color:var(--teal-d); }
+table.t { width:100%; border-collapse:collapse; font-size:15px; }
+table.t th { text-align:left; padding:12px 14px; color:#7d8f96; font-size:13px; font-weight:500; background:#f6f9f9; border-bottom:1px solid var(--line); }
+table.t td { padding:13px 14px; border-bottom:1px solid #eef2f3; }
+table.t tr.hi td { background:#f3fbf9; }
+.pill { display:inline-block; padding:3px 10px; border-radius:11px; font-size:13px; font-weight:600; background:#eef3f4; color:#55707a; }
+.pill.t { background:var(--teal-pale); color:var(--teal-d); } .pill.w { background:var(--warn-bg); color:var(--warn); } .pill.b { background:#e6f1fb; color:#1f5f93; } .pill.r { background:#fbe9e5; color:#a7412f; }
+.mono { font-family:var(--mono); }
+.bar { height:10px; border-radius:5px; background:#e8eff0; overflow:hidden; } .bar i { display:block; height:100%; border-radius:5px; background:var(--teal); transform-origin:left; }
+.modal { position:absolute; inset:0; background:rgba(10,30,40,.38); display:grid; place-items:center; }
+.dialog { width:620px; background:#fff; border-radius:18px; box-shadow:0 30px 70px rgba(0,0,0,.25); padding:26px 28px; }
+.dialog h4 { margin:0 0 16px; font-size:22px; color:var(--navy); }
+.field { margin-bottom:14px; } .field small { display:block; color:var(--muted); font-size:13px; margin-bottom:6px; }
+.field div { min-height:46px; border:1px solid var(--line); border-radius:10px; padding:11px 14px; font-size:16px; line-height:1.5; }
+.toast { position:absolute; left:50%; top:96px; transform:translateX(-50%); padding:12px 20px; border-radius:12px; background:var(--navy); color:#fff; font-size:16px; display:flex; gap:10px; align-items:center; box-shadow:0 14px 30px rgba(16,43,58,.3); z-index:10; }
+.caret::after { content:""; display:inline-block; width:2px; height:1.1em; background:var(--teal); vertical-align:-3px; margin-left:2px; }
+
+/* intro / outro */
+.hero { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+.hero .mark { width:120px; height:120px; border-radius:32px; background:var(--navy); display:grid; place-items:center; box-shadow:0 30px 60px rgba(16,43,58,.3); }
+.hero .mark::after { content:""; width:48px; height:48px; border:9px solid #5fe0c9; border-radius:50%; border-right-color:transparent; transform:rotate(-30deg); }
+.hero h1 { margin:40px 0 18px; font-size:96px; color:var(--navy); letter-spacing:.02em; }
+.hero p { margin:0; font-size:32px; color:#4d636c; }
+.mods { margin-top:56px; display:flex; flex-wrap:wrap; justify-content:center; gap:16px; width:1300px; }
+.mods span { padding:14px 24px; border-radius:30px; background:#fff; border:1px solid var(--line); font-size:24px; color:var(--ink); box-shadow:0 8px 20px rgba(16,43,58,.06); display:flex; gap:10px; align-items:center; }
+.mods span svg { width:24px; height:24px; color:var(--teal-d); }
+.overview { position:absolute; left:250px; right:28px; top:100px; display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+.ov { padding:16px 18px; display:flex; gap:14px; align-items:flex-start; }
+.ov i { width:44px; height:44px; flex:none; border-radius:12px; background:var(--teal-pale); color:var(--teal-d); display:grid; place-items:center; }
+.ov i svg { width:22px; height:22px; } .ov b { display:block; font-size:18px; color:var(--navy); margin-bottom:4px; } .ov span { font-size:14px; color:var(--muted); line-height:1.5; }
+.pipe { display:flex; align-items:center; gap:0; padding:26px 22px; }
+.node { width:150px; text-align:center; } .node i { width:64px; height:64px; margin:0 auto 10px; border-radius:18px; background:#eef3f4; color:#7d8f96; display:grid; place-items:center; }
+.node i svg { width:30px; height:30px; } .node b { font-size:15px; color:var(--ink); } .node small { display:block; color:var(--muted); font-size:12px; margin-top:3px; }
+.node.on i { background:var(--teal); color:#fff; box-shadow:0 10px 24px rgba(18,165,148,.35); }
+.link { flex:1; height:4px; border-radius:2px; background:#e3eaeb; margin-top:-46px; overflow:hidden; } .link i { display:block; height:100%; background:var(--teal); transform-origin:left; }
+.aipanel { position:absolute; right:0; top:0; bottom:0; width:430px; background:#f8faf9; border-left:1px solid #cedbdd; box-shadow:-14px 0 34px rgba(21,51,61,.12); display:flex; flex-direction:column; }
+.aipanel .h { height:78px; background:#113440; color:#fff; display:flex; align-items:center; gap:12px; padding:0 20px; }
+.aipanel .h i { width:38px; height:38px; border-radius:10px; background:#1b766f; display:grid; place-items:center; color:#8be3d7; } .aipanel .h i svg { width:20px; height:20px; }
+.aipanel .h small { display:block; color:#88a6ae; font-size:12px; }
+.aipanel .ctx { padding:10px 20px; font-size:13px; color:#85949a; border-bottom:1px solid var(--line); }
+.aipanel .chat { flex:1; padding:18px; display:flex; flex-direction:column; gap:12px; overflow:hidden; }
+.msg { max-width:88%; padding:12px 14px; border-radius:14px; font-size:15px; line-height:1.6; }
+.msg.u { align-self:flex-end; background:#def2ee; border:1px solid #b9ddd7; border-radius:14px 4px 14px 14px; }
+.msg.a { align-self:flex-start; background:#fff; border:1px solid #dbe5e6; border-radius:4px 14px 14px 14px; }
+.msg.a ol { margin:6px 0 0; padding-left:20px; } .msg.a li { margin:3px 0; }
+.tools { font-size:12px; color:#3f8f84; display:flex; gap:6px; align-items:center; }
+.confirm { border:1px solid #b9ddd7; background:#f3fbf9; border-radius:12px; padding:12px; margin-top:4px; }
+.confirm b { font-size:14px; color:#1d6f65; } .confirm p { margin:6px 0; font-size:14px; }
+.confirm .bt { display:flex; gap:8px; } .confirm .bt span { height:30px; padding:0 12px; border-radius:8px; border:1px solid #cbdadb; background:#fff; font-size:13px; display:inline-flex; align-items:center; }
+.confirm .bt span.ok { background:#128f81; border-color:#128f81; color:#fff; }
+.dots { display:flex; gap:5px; } .dots i { width:8px; height:8px; border-radius:50%; background:#9cc9c3; }
+.meter { height:14px; border-radius:7px; background:#e8eff0; overflow:hidden; } .meter i { display:block; height:100%; background:linear-gradient(90deg,#12a594,#2bb9a6); transform-origin:left; }
+.recap { position:absolute; left:50%; top:450px; transform:translateX(-50%); width:1420px; display:grid; grid-template-columns:repeat(4,1fr); gap:18px; }
+.recap div { padding:24px; border-radius:20px; background:#fff; border:1px solid var(--line); box-shadow:0 12px 26px rgba(16,43,58,.06); }
+.recap b { display:block; font-size:24px; color:var(--navy); margin-bottom:8px; } .recap span { font-size:18px; color:var(--muted); line-height:1.6; }
+
+/* player controls (not rendered into the video) */
+#controls { position:absolute; left:0; right:0; bottom:0; height:76px; background:#0f2531; display:flex; align-items:center; gap:16px; padding:0 22px; color:#cfe0e4; font-size:14px; }
+body.render #controls { display:none; }
+#controls button { height:40px; min-width:40px; padding:0 14px; border:0; border-radius:10px; background:#1d3d4c; color:#fff; font:inherit; cursor:pointer; }
+#controls button:hover { background:#25505f; }
+#scrub { flex:1; accent-color:#12a594; }
+#time { font-family:var(--mono); min-width:110px; text-align:right; }
+#chapterSel { height:40px; border-radius:10px; background:#1d3d4c; color:#fff; border:0; padding:0 10px; font:inherit; }
+@media (prefers-reduced-motion:reduce) { /* playback is user-started; nothing autoplays */ }
+</style>
+</head>
+<body>
+<div id="viewport"><div id="stage">
+  <div class="brand"><i></i><b>销途 AI CRM</b><span>使用教程</span></div>
+  <div id="chapters"></div>
+  <div id="ripple"></div>
+  <div id="sub" aria-live="polite"></div>
+  <div id="cursor"><svg viewBox="0 0 24 24" width="34" height="34"><path d="M4 2 L4 20 L9 15.5 L12.5 22.5 L15.5 21 L12 14 L19 14 Z" fill="#fff" stroke="#102b3a" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+</div></div>
+<div id="controls">
+  <button id="play" aria-label="播放">▶ 播放</button>
+  <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="进度">
+  <span id="time">0:00 / 0:00</span>
+  <select id="chapterSel" aria-label="章节"></select>
+  <button id="subs" aria-pressed="true">字幕：开</button>
+  <button id="full" aria-label="全屏">全屏</button>
+</div>
+<script>
+'use strict'
+/* ───────────── icons ───────────── */
+const P = {
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.4 3.4 0 0 1 0 6.6M18.5 14.8c1.6.8 2.7 2.5 3 5.2"/>',
+  user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.2 4.1-6.5 8-6.5s7 2.3 8 6.5"/>',
+  box:'<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  db:'<ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  store:'<path d="M3.5 9 5 4h14l1.5 5"/><path d="M4.5 9v11h15V9"/><path d="M3.5 9h17M9.5 20v-6h5v6"/>',
+  queue:'<path d="M4 6h16M4 12h16M4 18h10"/><path d="m17 16 3 2-3 2"/>',
+  headset:'<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
+  gear:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  spark:'<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M17 5h4"/>',
+  search:'<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  refresh:'<path d="M20 11a8 8 0 0 0-14.5-4.6L4 8"/><path d="M4 3v5h5"/><path d="M4 13a8 8 0 0 0 14.5 4.6L20 16"/><path d="M20 21v-5h-5"/>',
+  check:'<path d="m5 12.5 4.5 4.5L19 7"/>',
+  alert:'<path d="M12 3 2.5 20h19z"/><path d="M12 10v4.5M12 17.5v.5"/>',
+  eye:'<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  tag:'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.4"/>',
+  send:'<path d="M3 11.5 21 3l-8.5 18-2.2-7.3z"/>',
+  link:'<path d="M10 14a4 4 0 0 0 5.7 0l3.6-3.6a4 4 0 0 0-5.7-5.7L12 6.3"/><path d="M14 10a4 4 0 0 0-5.7 0l-3.6 3.6a4 4 0 0 0 5.7 5.7l1.6-1.6"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  coin:'<circle cx="12" cy="12" r="9"/><path d="M9 9.5h6M9 13h6M12 9.5V17"/>',
+  shield:'<path d="M12 3 4.5 6v6c0 4.5 3.2 7.8 7.5 9 4.3-1.2 7.5-4.5 7.5-9V6z"/><path d="m8.8 12 2.3 2.3 4.2-4.6"/>',
+  layers:'<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  msg:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+}
+const ic = (name, size = 18) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${P[name]}</svg>`
+/* simple product silhouettes for fictional goods */
+const goods = {
+  vac:'<rect x="18" y="38" width="44" height="26" rx="12" fill="#fff"/><rect x="58" y="44" width="30" height="12" rx="6" fill="#fff" opacity=".85"/><rect x="26" y="60" width="10" height="22" rx="4" fill="#fff" opacity=".9"/>',
+  pump:'<rect x="26" y="20" width="48" height="62" rx="14" fill="#fff"/><circle cx="50" cy="44" r="12" fill="none" stroke="#0004" stroke-width="5"/><rect x="40" y="62" width="20" height="8" rx="4" fill="#0002"/>',
+  mop:'<rect x="47" y="10" width="7" height="60" rx="3.5" fill="#fff"/><rect x="24" y="68" width="52" height="16" rx="8" fill="#fff"/>',
+  scent:'<rect x="34" y="34" width="32" height="48" rx="10" fill="#fff"/><rect x="42" y="20" width="16" height="16" rx="4" fill="#fff" opacity=".85"/>',
+  pillow:'<path d="M20 40 Q50 18 80 40 Q86 62 70 76 Q50 84 30 76 Q14 62 20 40z" fill="#fff"/>',
+  brush:'<rect x="20" y="44" width="60" height="14" rx="7" fill="#fff"/><path d="M26 58v14M36 58v14M46 58v14M56 58v14M66 58v14M76 58v14" stroke="#fff" stroke-width="4" stroke-linecap="round"/>',
+}
+const thumb = (hue, kind) => `<div class="im" style="background:linear-gradient(140deg,hsl(${hue} 62% 62%),hsl(${hue + 24} 58% 44%))"><svg viewBox="0 0 100 100">${goods[kind]}</svg></div>`
+
+/* ───────────── timeline engine ───────────── */
+const W = 1920, H = 1080, FADE = 450
+const ease = { lin: t => t, out: t => 1 - Math.pow(1 - t, 3), inOut: t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2, back: t => { const c = 1.7; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2) } }
+const stage = document.getElementById('stage'), cursorEl = document.getElementById('cursor'), rippleEl = document.getElementById('ripple')
+const scenes = []
+function scene(id, title, dur, build) { scenes.push({ id, title, dur, build }) }
+
+function api(s) {
+  const tracks = new Map(), counters = [], flags = [], texts = [], typers = [], hooks = []
+  const el = (tag, cls = '', html = '', parent = s.root) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html) e.innerHTML = html; parent.appendChild(e); return e }
+  const anim = (e, t0, d, from, to, fn = 'out') => { if (!tracks.has(e)) tracks.set(e, []); tracks.get(e).push({ t0, d, from, to, fn }) }
+  const show = (e, t0, d = 500, dy = 24) => anim(e, t0, d, { o: 0, y: dy }, { o: 1, y: 0 })
+  const pop = (e, t0, d = 450) => anim(e, t0, d, { o: 0, s: .85 }, { o: 1, s: 1 }, 'back')
+  const hide = (e, t0, d = 350) => anim(e, t0, d, { o: 1 }, { o: 0 })
+  const count = (e, t0, d, from, to, fmt = v => Math.round(v).toLocaleString('zh-CN')) => counters.push({ e, t0, d, from, to, fmt })
+  const flag = (e, t0, cls, t1 = Infinity) => flags.push({ e, t0, t1, cls })
+  const text = (e, steps) => texts.push({ e, steps })
+  const type = (e, t0, str, cps = 16) => typers.push({ e, t0, str, cps })
+  const hook = fn => hooks.push(fn)
+  const cursor = pts => { s.cursor = pts }
+  const caption = ({ no, title, lead, steps }) => {
+    const c = el('div', 'cap')
+    el('div', 'no', no, c); const h = el('h2', '', title, c); const p = el('p', 'lead', lead, c)
+    show(c.querySelector('.no'), 150); show(h, 250); show(p, 420)
+    const ol = el('ol', '', '', c)
+    steps.forEach(([t, txt, tEnd], i) => {
+      const li = el('li', '', `<em>${i + 1}</em><span>${txt}</span>`, ol)
+      show(li, 650 + i * 160, 450, 16)
+      const next = steps[i + 1]?.[0] ?? Infinity
+      flag(li, t, 'on', tEnd ?? next); flag(li, tEnd ?? next, 'done')
+    })
+    return c
+  }
+  const app = ({ active, title, sub, ai = true }) => {
+    const w = el('div', 'win'); const a = el('div', 'app', '', w)
+    const side = el('div', 'side', '<div class="logo"><i></i>销途 AI CRM</div>', a)
+    const items = {}
+    for (const [k, icon] of [['经营看板', 'grid'], ['客户经营', 'users'], ['客户', 'user'], ['产品目录', 'box'], ['1688 商品采集', 'db'], ['1688 店铺', 'store'], ['上架队列', 'queue'], ['客服绩效', 'headset'], ['系统设置', 'gear']])
+      items[k] = el('div', `it ${k === active ? 'on' : ''}`, `${ic(icon)}<span>${k}</span>`, side)
+    const m = el('div', 'main', '', a)
+    el('div', 'top', `<div><small>${sub || ''}</small><b>${title}</b></div>${ai ? `<div class="ai">${ic('spark', 16)}问 AI</div>` : ''}`, m)
+    const body = el('div', 'body', '', m)
+    show(w, 200, 650, 40)
+    return { win: w, body, items, main: m }
+  }
+  return { el, anim, show, pop, hide, count, flag, text, type, hook, cursor, caption, app, tracks, counters, flags, texts, typers, hooks }
+}
+
+const DEF = { o: 1, x: 0, y: 0, s: 1 }
+function applyTracks(tracks, lt) {
+  for (const [e, list] of tracks) {
+    const v = { ...DEF }; const seen = {}
+    for (const tr of list) for (const k of Object.keys(tr.from)) if (!(k in seen)) { seen[k] = 1; v[k] = tr.from[k] }
+    for (const tr of list) {
+      if (lt < tr.t0) continue
+      const p = tr.d ? Math.min(1, (lt - tr.t0) / tr.d) : 1, q = ease[tr.fn](p)
+      for (const k of Object.keys(tr.to)) v[k] = tr.from[k] + (tr.to[k] - tr.from[k]) * q
+    }
+    e.style.opacity = v.o
+    const tf = []
+    if (v.x || v.y) tf.push(`translate(${v.x}px,${v.y}px)`)
+    if (v.s !== 1) tf.push(`scale(${v.s})`)
+    if ('sx' in v) tf.push(`scaleX(${v.sx})`)
+    if ('sy' in v) tf.push(`scaleY(${v.sy})`)
+    e.style.transform = tf.join(' ')
+  }
+}
+
+function build() {
+  let at = 0
+  const chapters = document.getElementById('chapters'), sel = document.getElementById('chapterSel')
+  for (const s of scenes) {
+    s.start = at; at += s.dur
+    s.root = document.createElement('div'); s.root.className = 'scene'; stage.insertBefore(s.root, chapters)
+    s.api = api(s); s.build(s.api)
+    if (s.title) {
+      const c = document.createElement('div'); c.innerHTML = `<i><b></b></i><span>${s.title}</span>`; chapters.appendChild(c); s.chip = c
+      const o = document.createElement('option'); o.value = s.start; o.textContent = s.title; sel.appendChild(o)
+    }
+  }
+  return at
+}
+
+function seek(t) {
+  let cur = null
+  for (const s of scenes) {
+    const lt = t - s.start, on = lt >= 0 && lt < s.dur
+    s.root.style.display = on ? 'block' : 'none'
+    if (s.chip) { const p = Math.max(0, Math.min(1, lt / s.dur)); s.chip.querySelector('b').style.width = `${p * 100}%`; s.chip.classList.toggle('on', on) }
+    if (!on) continue
+    cur = s
+    const first = s === scenes[0], last = s === scenes[scenes.length - 1]
+    s.root.style.opacity = Math.min(first ? 1 : Math.min(1, lt / FADE), last ? 1 : Math.min(1, (s.dur - lt) / FADE))
+    const A = s.api
+    applyTracks(A.tracks, lt)
+    for (const c of A.counters) { const p = Math.max(0, Math.min(1, (lt - c.t0) / c.d)); c.e.textContent = c.fmt(c.from + (c.to - c.from) * ease.out(p)) }
+    for (const f of A.flags) f.e.classList.toggle(f.cls, lt >= f.t0 && lt < f.t1)
+    for (const x of A.texts) { let v = x.steps[0][1]; for (const [t0, s2] of x.steps) if (lt >= t0) v = s2; if (x.e.innerHTML !== v) x.e.innerHTML = v }
+    for (const y of A.typers) { const n = Math.max(0, Math.min(y.str.length, Math.floor((lt - y.t0) / 1000 * y.cps))); const typing = lt >= y.t0 && n < y.str.length; y.e.textContent = y.str.slice(0, n); y.e.classList.toggle('caret', typing) }
+    for (const h of A.hooks) h(lt)
+    drawCursor(s, lt)
+  }
+  if (!cur) { cursorEl.style.display = 'none'; rippleEl.style.opacity = 0 }
+}
+
+function drawCursor(s, lt) {
+  const pts = s.cursor
+  if (!pts || lt < pts[0][0] - 400 || lt > pts[pts.length - 1][0] + 700) { cursorEl.style.display = 'none'; rippleEl.style.opacity = 0; return }
+  cursorEl.style.display = 'block'
+  let x = pts[0][1], y = pts[0][2]
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [t0, x0, y0] = pts[i], [t1, x1, y1] = pts[i + 1]
+    if (lt >= t1) { x = x1; y = y1; continue }
+    if (lt >= t0) { const q = ease.inOut((lt - t0) / (t1 - t0)); x = x0 + (x1 - x0) * q; y = y0 + (y1 - y0) * q }
+    break
+  }
+  cursorEl.style.opacity = Math.min(1, (lt - (pts[0][0] - 400)) / 300)
+  let press = 1, rip = null
+  for (const p of pts) if (p[3]) { const d = lt - p[0]; if (d >= 0 && d < 160) press = .82; if (d >= 0 && d < 520) rip = [p[1], p[2], d / 520] }
+  cursorEl.style.transform = `translate(${x - 6}px,${y - 4}px) scale(${press})`
+  if (rip) { rippleEl.style.left = `${rip[0]}px`; rippleEl.style.top = `${rip[1]}px`; rippleEl.style.opacity = 1 - rip[2]; rippleEl.style.transform = `scale(${.3 + rip[2] * .9})` } else rippleEl.style.opacity = 0
+}
+
+/* ───────────── scenes (all data fictional) ───────────── */
+scene('intro', '', 7000, A => {
+  const h = A.el('div', 'hero')
+  const m = A.el('div', 'mark', '', h); A.pop(m, 200, 700)
+  const t = A.el('h1', '', '销途 AI CRM 使用教程', h); A.show(t, 700, 700, 40)
+  const p = A.el('p', '', '面向 1688 店铺：商品采集上架 · 客户经营 · 客服绩效 · AI 助手', h); A.show(p, 1200, 700)
+  const mods = A.el('div', 'mods', '', h)
+  ;[['grid', '经营看板'], ['db', '商品采集'], ['queue', '上架队列'], ['box', '产品目录'], ['users', '客户经营'], ['headset', '客服绩效'], ['shield', '回复质量'], ['tag', '关键词库'], ['refresh', '数据同步'], ['spark', 'AI 助手']]
+    .forEach(([i, n], k) => A.pop(A.el('span', '', `${ic(i)}${n}`, mods), 1900 + k * 140))
+})
+
+scene('overview', '系统概览', 11000, A => {
+  A.caption({ no: '00 · 概览', title: '先认识<br>左侧导航', lead: '导航顺序就是日常工作流：从采集商品、上架，到成交后的客户经营与客服考核。', steps: [[1200, '每天先看「经营看板」，掌握成交与待办'], [4200, '商品线：采集 → 上架队列 → 产品目录'], [7200, '客户线：客户经营、客服绩效，随时问 AI']] })
+  const { body, items } = A.app({ active: '经营看板', title: '工作台', sub: '销途 AI CRM' })
+  const grid = A.el('div', 'overview', '', body.parentElement.parentElement.parentElement); grid.style.cssText = 'position:absolute;left:250px;right:28px;top:100px'
+  const mods = [['经营看板', 'grid', '成交、退款、接待、转化与待办一屏汇总'], ['客户经营', 'users', '1688 买家自动分层，提醒何时该跟进'], ['1688 商品采集', 'db', '浏览器插件一键保存货源商品'], ['上架队列', 'queue', 'AI 检查图片与属性后自动提交上架'], ['产品目录', 'box', '店铺在售商品、库存与近 30 天销量'], ['客服绩效', 'headset', '响应、转化与业绩归属，自动算提成'], ['1688 店铺', 'store', '授权店铺、同步商品、管理发布草稿'], ['系统设置', 'gear', '店铺 Agent 开关、发布模板与权限']]
+  mods.forEach(([n, i, d], k) => {
+    const c = A.el('div', 'card ov', `<i>${ic(i)}</i><div><b>${n}</b><span>${d}</span></div>`, grid)
+    A.show(c, 1100 + k * 220, 500, 18)
+    A.flag(items[n], 1100 + k * 220, 'pulse', 1100 + k * 220 + 900)
+  })
+})
+
+scene('dashboard', '经营看板', 17000, A => {
+  A.caption({ no: '01 · 经营看板', title: '经营看板', lead: '打开系统的第一页。所有数字来自已同步的订单、退款和聊天记录。', steps: [[1500, '切换今天 / 近 7 天 / 近 30 天，自动和上一周期对比'], [6800, '每日成交与接待趋势，悬停可看当天明细'], [11000, '待处理事项一键直达对应页面']] })
+  const { body } = A.app({ active: '经营看板', title: '经营看板', sub: '1688 店铺经营概览' })
+  const r = A.el('div', 'row', '', body)
+  const tabs = ['今天', '近 7 天', '近 30 天'].map((t, i) => A.el('div', `chip ${i === 1 ? 'on' : ''}`, t, r))
+  A.flag(tabs[1], 0, 'on', 3600); A.flag(tabs[2], 3600, 'on')
+  A.el('div', 'chip', `${ic('refresh', 15)}同步于 12 分钟前`, r).style.marginLeft = 'auto'
+  const k = A.el('div', 'kpis', '', body)
+  const tiles = [['净成交额', 168000, 128460, v => `¥${Math.round(v).toLocaleString('zh-CN')}`, '+12.4%', 'up'], ['付款订单', 1100, 862, null, '+8.1%', 'up'], ['退款（含运费）', 9000, 6210, v => `¥${Math.round(v).toLocaleString('zh-CN')}`, '-3.2%', 'up'],
+    ['接待人次', 1300, 1034, null, '+15.0%', 'up'], ['询单转化率', 16, 13.2, v => `${v.toFixed(1)}%`, '-1.1 个点', 'down'], ['平均首次响应', 80, 48, v => `${Math.round(v)} 秒`, '快 9 秒', 'up']]
+  tiles.forEach(([n, , to, fmt, d, cls], i) => {
+    const c = A.el('div', 'card kpi', `<small>${n}</small><strong>0</strong><span class="d ${cls}">${d} 较上一周期</span>`, k)
+    A.show(c, 700 + i * 120, 450, 16)
+  })
+  // Counting up for 近 7 天, then rescaling when 近 30 天 is chosen.
+  tiles.forEach(([, , to, fmt], i) => {
+    const strong = k.children[i].querySelector('strong')
+    const f = fmt || (v => Math.round(v).toLocaleString('zh-CN'))
+    const to30 = i === 4 ? 12.6 : i === 5 ? 52 : to * 4.1
+    A.counters.push({ e: strong, t0: 900 + i * 120, d: 1400, from: 0, to, fmt: f })
+    A.counters.push({ e: strong, t0: 3700, d: 1100, from: to, to: to30, fmt: f })
+  })
+  const lower = A.el('div', 'row', '', body); lower.style.alignItems = 'stretch'
+  const tr = A.el('div', 'card', '<div style="padding:16px 18px 0;font-weight:600;color:#102b3a">每日成交额</div>', lower); tr.style.flex = '1.3'
+  const bars = A.el('div', 'bars', '', tr)
+  ;[52, 68, 44, 80, 62, 90, 74, 58, 86, 70, 96, 66, 78, 92].forEach((h, i) => { const b = A.el('i', '', '', bars); b.style.height = `${h}%`; A.anim(b, 6800 + i * 70, 500, { o: 0, sy: 0 }, { o: 1, sy: 1 }) })
+  const tip = A.el('div', 'card', '<b style="color:#102b3a">10/12</b><br>成交 ¥21,860 · 152 单', tr); tip.style.cssText = 'position:absolute;margin:-150px 0 0 330px;padding:10px 14px;font-size:14px;box-shadow:0 10px 24px rgba(16,43,58,.14)'
+  A.show(tip, 9200, 300, 8); A.hide(tip, 10700)
+  const td = A.el('div', 'card', '<div style="padding:16px 18px 6px;font-weight:600;color:#102b3a">待处理</div>', lower); td.style.flex = '1'
+  const todos = [['#12a594', '今日待跟进客户', 126], ['#d79628', '下单未付款', 18], ['#1f5f93', '近 7 天咨询未下单', 74], ['#b4412f', '超时未回复会话', 9], ['#6b7f87', '上架受阻商品', 5]]
+    .map(([c, n, v], i) => { const r2 = A.el('div', 'todo', `<span class="dot" style="background:${c}"></span>${n}<b>${v}</b>`, td); A.show(r2, 11000 + i * 120, 400, 10); return r2 })
+  A.flag(todos[0], 14200, 'hi')
+  const toast = A.el('div', 'toast', `${ic('check', 18)}已跳转：客户经营 › 待跟进`, body); A.anim(toast, 14700, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 16300)
+  A.cursor([[1600, 1300, 600], [3500, 1120, 240, 1], [6600, 1180, 760], [9100, 1290, 760], [10600, 1640, 600], [14100, 1560, 646, 1], [16200, 1560, 646]])
+})
+
+scene('collect', '商品采集', 17000, A => {
+  A.caption({ no: '02 · 1688 商品采集', title: '一键采集货源', lead: '在 1688 商品页用采集器保存完整商品：标题、主图、详情图、SKU 与价格。', steps: [[1300, '「配置采集器」安装脚本，生成专用密钥'], [3200, '在 1688 商品详情页点「采集此商品」'], [8600, '回到工作区：按阶段查看、审核或加入 Agent 队列']] })
+  // fictional supplier page
+  const br = A.el('div', 'win'); br.style.background = '#fff'
+  br.innerHTML = `<div style="height:52px;background:#eef1f3;display:flex;align-items:center;gap:8px;padding:0 18px"><i style="width:12px;height:12px;border-radius:50%;background:#ff6058"></i><i style="width:12px;height:12px;border-radius:50%;background:#ffbd2e"></i><i style="width:12px;height:12px;border-radius:50%;background:#28c840"></i><div style="margin-left:18px;flex:1;height:32px;border-radius:8px;background:#fff;color:#8a9aa0;font-size:14px;display:flex;align-items:center;padding:0 14px">detail.1688.com/offer/示例商品.html</div></div>
+  <div style="display:flex;gap:28px;padding:32px"><div class="pc" style="width:420px;border-radius:14px;overflow:hidden">${thumb(196, 'vac')}</div>
+  <div style="flex:1"><div style="font-size:26px;font-weight:700;line-height:1.4">车载无线吸尘器 大吸力手持两用 家用车用迷你款</div><div style="margin:18px 0;padding:16px;background:#fff6ef;border-radius:10px;color:#c2410c;font:700 32px var(--mono)">¥56.50 – 88.00</div>
+  <div style="color:#6b7f87;font-size:16px;line-height:2">颜色：曜石黑 · 珍珠白 · 星空灰<br>规格：标准款 · 升级款（双电池）<br>起批：1 件 · 现货 48 小时发货</div></div></div>`
+  A.show(br, 200, 650, 40); A.anim(br, 7800, 600, { o: 1, x: 0 }, { o: 0, x: -80 })
+  const panel = A.el('div', 'card', `<div style="font-weight:700;color:#102b3a;margin-bottom:8px">销途商品采集器</div><div style="font-size:13px;color:#6b7f87;margin-bottom:12px">已连接 CRM · 采集员：示例</div><div class="btn" style="width:100%;justify-content:center">${ic('db', 16)}采集此商品</div>`, br)
+  panel.style.cssText = 'position:absolute;right:28px;bottom:28px;width:280px;padding:16px;box-shadow:0 18px 40px rgba(16,43,58,.2)'
+  A.pop(panel, 1900)
+  const ok = A.el('div', 'toast', `${ic('check', 18)}已保存到 CRM：3 个款式 · 6 个 SKU`, br); ok.style.top = '560px'; ok.style.left = '62%'; A.anim(ok, 4300, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(ok, 7300)
+  const { win, body } = A.app({ active: '1688 商品采集', title: '1688 商品采集', sub: '独立采集、查看并清洗源商品资料' })
+  A.tracks.get(win).length = 0; A.anim(win, 8000, 650, { o: 0, x: 80 }, { o: 1, x: 0 })
+  const r = A.el('div', 'row', `<div class="search">${ic('search', 18)}搜索商品名称或 1688 商品 ID</div><div class="btn">${ic('gear', 16)}配置采集器</div>`, body)
+  const tabs = A.el('div', 'row', '', body)
+  const counts = [['全部', 24, 25], ['待处理', 3, 4], ['队列中', 1, 1], ['需核对', 4, 4], ['已转正式产品', 6, 6], ['已提交平台', 10, 10]]
+  counts.forEach(([n, a, b], i) => { const c = A.el('div', `chip ${i === 0 ? 'on' : ''}`, `${n}<span>${a}</span>`, tabs); if (a !== b) A.text(c.querySelector('span'), [[0, String(a)], [10300, String(b)]]) })
+  const g = A.el('div', 'grid4 compact', '', body)
+  const items = [[196, 'vac', '车载无线吸尘器 大吸力手持两用', '¥56.50 起', '待处理', ''], [28, 'pump', '无线充气泵 数显胎压 便携打气', '¥102.00 起', '队列中', ''], [160, 'mop', '洗车拖把 伸缩长柄 软毛不伤漆', '¥9.50 起', '需核对', 'warn'], [300, 'scent', '车载香薰 智能喷雾 静音持久', '¥6.00 起', '已提交平台', ''],
+    [12, 'pillow', '记忆棉腰靠 汽车座椅护腰', '¥15.90 起', '已转正式产品', ''], [210, 'brush', '多功能除雪铲 车用刮雪刷', '¥3.50 起', '已提交平台', ''], [96, 'vac', '车载吸尘器 无刷电机 大功率', '¥57.00 起', '待处理', ''], [250, 'pump', '迷你充气泵 应急启动电源', '¥78.00 起', '需核对', 'warn']]
+  items.forEach(([h, k, t, p, st, w], i) => {
+    const c = A.el('div', 'card pc', `${thumb(h, k)}<span class="tag">1688</span><span class="st ${w}">${st}</span><div class="tx"><div class="tt">${t}</div><div class="pr"><b>${p}</b><span>${4 + i} 个 SKU</span></div></div>`, g)
+    c.querySelector('.im').append(c.querySelector('.tag'), c.querySelector('.st'))
+    if (i === 0) { A.anim(c, 10100, 600, { o: 0, s: .7, y: -40 }, { o: 1, s: 1, y: 0 }, 'back'); A.flag(c, 10100, 'hi') } else A.show(c, 8700 + i * 90, 450, 14)
+  })
+  A.cursor([[1400, 1400, 520], [3800, 1691, 895, 1], [7000, 1660, 905], [11400, 1180, 480], [12800, 1027, 420, 1], [14600, 1260, 700], [16500, 1260, 700]])
+  const tip = A.el('div', 'toast', `${ic('alert', 18)}需核对：来源类目 ID 缺失，补全后自动重新入队`, body); tip.style.background = '#93600e'; A.anim(tip, 13100, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(tip, 16400)
+})
+
+scene('queue', '上架队列', 15000, A => {
+  A.caption({ no: '03 · 上架队列', title: 'AI 自动上品', lead: '开启店铺 Agent 后，新采集的商品会自动排队，逐项检查后提交 1688。', steps: [[1300, '「系统设置」开启店铺 Agent 与“采集后自动上品”'], [3600, '队列逐项检查：图片、类目、属性、价格库存'], [10200, '有问题停在“需核对”并写明原因，不会盲目发布']] })
+  const { body } = A.app({ active: '上架队列', title: '上架队列', sub: '采集后自动上品 · 目标店铺：示例汽车用品店' })
+  const sw = A.el('div', 'card', `<div class="row" style="padding:16px 20px"><b style="font-size:17px;color:#102b3a">采集后自动上品</b><span style="color:#6b7f87;font-size:14px">新采集的 1688 商品自动进入队列</span><span class="tg" style="margin-left:auto;width:54px;height:30px;border-radius:15px;background:#cfd9db;position:relative"><i style="position:absolute;left:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px #0003"></i></span></div>`, body)
+  A.show(sw, 600)
+  const tg = sw.querySelector('.tg'), knob = tg.querySelector('i')
+  A.hook(lt => { const on = lt >= 2500; tg.style.background = on ? '#12a594' : '#cfd9db'; knob.style.left = on ? '27px' : '3px' })
+  const pipeCard = A.el('div', 'card', '', body); A.show(pipeCard, 3200)
+  const pipe = A.el('div', 'pipe', '', pipeCard)
+  const nodes = [['db', '读取采集资料', '类目 ID / 价格 / 库存'], ['eye', 'AI 识图', '水印、品牌 Logo'], ['layers', '属性与 SKU', '按平台规则映射'], ['shield', '规则校验', '标题字数、必填项'], ['send', '提交平台', '等待 1688 审核']]
+  nodes.forEach(([i, b, s2], k) => {
+    const n = A.el('div', 'node', `<i>${ic(i)}</i><b>${b}</b><small>${s2}</small>`, pipe)
+    A.flag(n, 3900 + k * 1150, 'on')
+    if (k < nodes.length - 1) { const l = A.el('div', 'link', '<i></i>', pipe); A.anim(l.firstChild, 3900 + k * 1150 + 300, 800, { sx: 0 }, { sx: 1 }) }
+  })
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>商品</th><th>阶段</th><th>状态</th><th>说明</th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 9000)
+  const tb = tbl.querySelector('tbody')
+  ;[['车载无线吸尘器 大吸力手持两用', '已提交', '<span class="pill t">已提交平台</span>', '平台审核中，通过后在产品目录可见'], ['无线充气泵 数显胎压 便携打气', '属性映射', '<span class="pill b">处理中</span>', '正在匹配“充气泵”类目属性'], ['洗车拖把 伸缩长柄 软毛不伤漆', '读取资料', '<span class="pill w">需核对</span>', '来源类目 ID 缺失，请重新采集'], ['迷你充气泵 应急启动电源', 'AI 识图', '<span class="pill w">需核对</span>', '主图含其他店铺水印']]
+    .forEach((r2, i) => { const tr = A.el('tr', '', r2.map((c, j) => `<td${j === 3 ? ' style="color:#6b7f87;font-size:14px"' : ''}>${c}</td>`).join(''), tb); A.show(tr, 9300 + i * 160, 400, 10); if (i >= 2) A.flag(tr, 10400, 'hi') })
+  A.cursor([[800, 1500, 300], [2400, 1784, 254, 1], [4500, 1300, 520], [10600, 1500, 820], [13900, 1500, 820]])
+})
+
+scene('catalog', '产品目录', 15000, A => {
+  A.caption({ no: '04 · 产品目录', title: '店铺在售商品', lead: '展示店铺在 1688 上架的商品：价格、库存、SKU，以及按订单统计的近 30 天销量。', steps: [[1300, '「同步平台商品」读取店铺最新上架情况'], [5600, '按销量、价格、库存排序，或搜索标题 / 货号'], [9800, '点开商品：刷新详情、关联产品资料、改库存']] })
+  const { body } = A.app({ active: '产品目录', title: '产品目录', sub: '店铺在 1688 上架的商品、价格库存与近 30 天销量' })
+  const r = A.el('div', 'row', `<div class="search">${ic('search', 18)}搜索标题、1688 商品 ID 或货号</div><div class="chip srt">最近更新 ▾</div><div class="btn">${ic('refresh', 16)}同步平台商品</div>`, body)
+  A.text(r.querySelector('.srt'), [[0, '最近更新 ▾'], [6400, '近 30 天销量 ▾']])
+  const note = A.el('div', 'row', '<div class="chip on">在售<span>61</span></div><div class="chip">已过期<span>18</span></div><span class="nt" style="margin-left:auto;color:#8a9aa0;font-size:14px"></span>', body)
+  A.text(note.querySelector('.nt'), [[0, '平台数据同步于 3 天前'], [2400, '正在同步：已读取 20 / 61 件'], [3100, '正在同步：已读取 40 / 61 件'], [3800, '正在同步：已读取 61 / 61 件'], [4400, '同步完成 · 平台数据同步于 刚刚']])
+  const g = A.el('div', 'grid4 compact', '', body)
+  const base = [[160, 'mop', '洗车拖把 伸缩长柄', '¥9.50–26.90', 1, 17], [196, 'vac', '车载无线吸尘器 大吸力', '¥56.50–88.00', 12, 673], [96, 'vac', '车载吸尘器 无刷电机', '¥57.00–80.00', 7, 394], [28, 'pump', '无线充气泵 数显胎压', '¥102–155', 12, 1389],
+    [300, 'scent', '车载香薰 智能喷雾', '¥6.00', 0, 0], [12, 'pillow', '记忆棉腰靠 护腰', '¥15.90–22.00', 3, 54], [250, 'pump', '迷你充气泵 应急电源', '¥78.00', 2, 156], [210, 'brush', '多功能除雪铲', '¥3.50–6.50', 0, 0]]
+  const sorted = [...base].sort((a, b) => b[5] - a[5])
+  const card = ([h, k, t, p, q, amt]) => `${thumb(h, k)}<div class="tx"><div class="tt">${t}</div><div class="pr"><b>${p}</b><span>在售</span></div><div class="sl">${q ? `近 30 天售 <b>${q}</b> 件 · ¥${amt}` : '近 30 天暂无成交'}</div></div>`
+  const cards = base.map((b, i) => { const c = A.el('div', 'card pc', card(b), g); A.show(c, 700 + i * 90, 450, 14); return c })
+  A.hook(lt => { const list = lt >= 6600 ? sorted : base; cards.forEach((c, i) => { const want = card(list[i]); if (c.dataset.k !== String(list === sorted)) { c.innerHTML = want; c.dataset.k = String(list === sorted) } }) })
+  cards.forEach((c, i) => A.anim(c, 6600 + i * 60, 420, { o: .2, y: 10 }, { o: 1, y: 0 }))
+  const modal = A.el('div', 'modal', `<div class="dialog" style="width:700px"><h4>平台商品详情</h4><div class="row" style="margin-bottom:14px"><div class="pc" style="width:96px;border-radius:12px;overflow:hidden">${thumb(28, 'pump')}</div><div><b style="font-size:18px">无线充气泵 数显胎压 便携打气</b><div style="color:#6b7f87;font-size:14px;margin-top:6px">已关联产品资料 PUMP-21 · 平台快照 刚刚</div></div></div>
+    <table class="t"><thead><tr><th>规格</th><th>当前库存</th><th>目标库存</th></tr></thead><tbody><tr><td>曜石黑 / 标准款</td><td>120</td><td><span class="stk">120</span></td></tr><tr><td>珍珠白 / 标准款</td><td>86</td><td>86</td></tr><tr><td>曜石黑 / 双电池</td><td>40</td><td>40</td></tr></tbody></table>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><div class="btn ghost">${ic('refresh', 15)}刷新详情</div><div class="btn">库存变更预览</div></div></div>`, body.parentElement.parentElement)
+  A.anim(modal, 10200, 400, { o: 0 }, { o: 1 }); A.hide(modal, 14400)
+  A.text(modal.querySelector('.stk'), [[0, '120'], [12200, '200']])
+  A.cursor([[1300, 1500, 380], [2200, 1757, 243, 1], [5800, 1600, 300], [6300, 1617, 243, 1], [9200, 1100, 470], [10000, 1027, 430, 1], [11800, 1450, 563], [12100, 1450, 563, 1], [14200, 1450, 563]])
+})
+
+scene('customers', '客户经营', 19000, A => {
+  A.caption({ no: '05 · 客户经营', title: '把买家变回头客', lead: '系统把每个 1688 买家的订单、聊天合在一起，自动分层并算出购买周期。', steps: [[1300, '按新客 / 复购 / 忠实客、等级、客单价筛选'], [5400, '「待跟进」列出今天该联系的客户与原因'], [9300, '写跟进、打标签、指定所属客服，计划到期自动提醒']] })
+  const { body } = A.app({ active: '客户经营', title: '客户经营', sub: '1688 客户档案、精细化分层、跟进与复购' })
+  const tabs = A.el('div', 'row', '', body)
+  const t1 = ['客户列表', '未成交客户', '待跟进', '分层与标签'].map((t, i) => A.el('div', `chip ${i === 0 ? 'on' : ''}`, t, tabs))
+  A.flag(t1[0], 0, 'on', 5600); A.flag(t1[2], 5600, 'on')
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>客户</th><th>类型</th><th>累计</th><th>购买周期</th><th>状态</th><th></th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 700)
+  const tb = tbl.querySelector('tbody')
+  const rows = [['张老板 · 汽配批发', '<span class="pill t">忠实客</span>', '¥45,227', '约 2 天', '<span class="pill w">超周期未跟进</span>'], ['李女士 · 洗车店', '<span class="pill b">复购客</span>', '¥8,640', '约 7 天', '<span class="pill w">计划跟进已到期</span>'], ['王先生 · 网店分销', '<span class="pill">新客</span>', '¥1,280', '—', '<span class="pill r">下单未付款</span>'], ['赵经理 · 车品连锁', '<span class="pill b">复购客</span>', '¥12,900', '约 14 天', '<span class="pill">正常</span>'], ['陈老板 · 美容养护', '<span class="pill">潜在客户</span>', '¥0', '—', '<span class="pill">咨询未下单</span>']]
+  rows.forEach((r2, i) => { const tr = A.el('tr', '', `${r2.map(c => `<td>${c}</td>`).join('')}<td><span class="pill t">写跟进</span></td>`, tb); A.show(tr, 900 + i * 120, 400, 10); if (i === 3 || i === 4) A.anim(tr, 5700, 350, { o: 1 }, { o: .25 }); if (i < 3) A.flag(tr, 5700, 'hi', 8800) })
+  const tags = A.el('div', 'row', `<span style="color:#6b7f87;font-size:14px">${ic('tag', 15)} 张老板的标签：</span><span class="pill">大客户</span>`, body); A.show(tags, 1000)
+  const newTag = A.el('span', 'pill t', '重点维护', tags); A.pop(newTag, 16800)
+  const modal = A.el('div', 'modal', `<div class="dialog"><h4>写跟进 · 张老板</h4><div class="field"><small>跟进内容</small><div class="ty"></div></div><div class="row"><div class="field" style="flex:1"><small>跟进方式</small><div>旺旺</div></div><div class="field" style="flex:1"><small>下次跟进</small><div class="dt">不需要</div></div></div><div class="row" style="justify-content:flex-end"><div class="btn ghost">取消</div><div class="btn">保存跟进</div></div></div>`, body.parentElement.parentElement)
+  A.anim(modal, 9600, 400, { o: 0 }, { o: 1 }); A.hide(modal, 15200)
+  A.type(modal.querySelector('.ty'), 10300, '已回访两批大货签收情况，客户反馈良好；推荐升级款，下周报 3000 件阶梯价。', 22)
+  A.text(modal.querySelector('.dt'), [[0, '不需要'], [13600, '10/22 09:00']])
+  const toast = A.el('div', 'toast', `${ic('check', 18)}跟进已保存，下次提醒：10/22`, body); A.anim(toast, 15300, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 18200)
+  A.cursor([[1200, 1300, 600], [5300, 1168, 240, 1], [8200, 1500, 700], [9300, 1751, 343, 1], [13300, 1410, 603, 1], [14700, 1503, 661, 1], [16400, 1300, 800], [18300, 1300, 800]])
+})
+
+scene('performance', '客服绩效', 19000, A => {
+  A.caption({ no: '06 · 客服绩效', title: '客观衡量客服', lead: '接待、响应、转化和业绩全部按聊天与订单自动计算，财务维护提成规则。', steps: [[1300, '「客服对比」：接待、首次响应、未回复、转化率'], [7000, '订单按“归属方案”算给客服，可切换对比'], [11800, '「工资管理」按阶梯提成生成工资单']] })
+  const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '1688 绩效应用授权、指标口径与绩效方案' })
+  A.el('div', 'row', ['客服对比', '综合排行', '聊天分析', '订单归属', '工资管理', '客服账号'].map((t, i) => `<div class="chip ${i === 0 ? 'on' : ''}">${t}</div>`).join(''), body)
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>客服</th><th>接待</th><th>首次响应</th><th>未回复</th><th>询单转化</th><th style="width:240px">绩效销售额</th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 700)
+  const tb = tbl.querySelector('tbody')
+  const agents = [['小林（主账号）', 412, '38 秒', 3, '15.2%', 86400, 1], ['小雨', 268, '52 秒', 1, '13.8%', 52300, .6], ['阿杰', 197, '1 分 24 秒', 6, '9.6%', 28700, .33], ['美美', 154, '44 秒', 0, '12.1%', 21900, .25]]
+  agents.forEach(([n, r2, f, u, c, amt, w], i) => {
+    const tr = A.el('tr', '', `<td><b>${n}</b></td><td class="mono">${r2}</td><td>${f}</td><td>${u ? `<span class="pill w">${u}</span>` : '<span class="pill t">0</span>'}</td><td>${c}</td><td><div class="row" style="gap:10px"><div class="bar" style="flex:1"><i></i></div><span class="mono amt" style="min-width:80px;text-align:right"></span></div></td>`, tb)
+    A.show(tr, 900 + i * 130, 400, 10)
+    A.anim(tr.querySelector('.bar i'), 1500 + i * 130, 900, { sx: 0 }, { sx: w })
+    A.count(tr.querySelector('.amt'), 1500 + i * 130, 900, 0, amt, v => `¥${Math.round(v).toLocaleString('zh-CN')}`)
+    if (i === 2) A.flag(tr, 4200, 'hi', 6800)
+  })
+  const sch = A.el('div', 'card', `<div class="row" style="padding:14px 18px"><b style="color:#102b3a">归属方案</b><span class="chip sc on">方案 2 · 优先促成下单</span><span style="color:#6b7f87;font-size:14px">下单前最后一次人工回复的客服获得这笔订单</span></div>`, body)
+  A.show(sch, 7000)
+  A.text(sch.querySelector('.sc'), [[0, '方案 2 · 优先促成下单'], [9300, '方案 9 · 所属客服 + 促成者分成']])
+  const pay = A.el('div', 'card', `<div style="padding:16px 18px"><div class="row"><b style="color:#102b3a">10 月工资单 · 小林</b><span style="margin-left:auto" class="pill t">阶梯提成 · 超额累进</span></div>
+    <div class="row" style="margin-top:14px;gap:20px;font-size:15px;color:#4d636c"><span>净绩效 <b class="mono" style="color:#102b3a">¥86,400</b></span><span>0–5 万 × 1%</span><span>5–8 万 × 1.5%</span><span>8 万以上 × 2%</span><span style="margin-left:auto">提成 <b class="mono pc2" style="color:#0d7c6e;font-size:22px"></b></span></div>
+    <div class="meter" style="margin-top:14px"><i></i></div></div>`, body)
+  A.show(pay, 11800)
+  A.anim(pay.querySelector('.meter i'), 12600, 1600, { sx: 0 }, { sx: .86 })
+  A.count(pay.querySelector('.pc2'), 12600, 1600, 0, 1078, v => `¥${Math.round(v).toLocaleString('zh-CN')}`)
+  A.cursor([[1500, 1300, 500], [4100, 1300, 445], [7600, 1300, 640], [9100, 1100, 572, 1], [12500, 1500, 800], [18200, 1500, 800]])
+})
+
+scene('quality', '回复质量', 16000, A => {
+  A.caption({ no: '07 · 回复质量', title: '话术与合规', lead: '系统读取客服发出的消息（买家原文平台不提供），联系方式先遮盖再保存，文本保留 90 天。', steps: [[1300, '每位客服的回复字数、极短回复、发图次数'], [6000, '客服发手机号、微信、站外付款用语自动报警'], [10600, '点开记录，直接定位到那条消息复盘']] })
+  const { body, main } = A.app({ active: '客服绩效', title: '客服绩效', sub: '回复质量 · 近 7 天' })
+  A.el('div', 'row', ['客服对比', '聊天分析', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 2 ? 'on' : ''}">${t}</div>`).join(''), body)
+  const k = A.el('div', 'kpis', '', body); k.style.gridTemplateColumns = 'repeat(4,1fr)'
+  ;[['站外交易风险', 1, v => String(Math.round(v)), '客服发出联系方式或外部链接', 'warn'], ['平均回复字数', 18.6, v => v.toFixed(1), '不含链接、标点与图片', ''], ['极短回复占比', 12, v => `${Math.round(v)}%`, '“嗯 / 是的 / 好” 3 字以内', ''], ['文本覆盖率', 98, v => `${Math.round(v)}%`, '已采集文本的客服消息', '']]
+    .forEach(([n, to, fmt, note, cls], i) => {
+      const c = A.el('div', 'card kpi', `<small>${n}</small><strong>0</strong><span class="d" style="color:#6c7f88;font-weight:500">${note}</span>`, k)
+      if (cls) { c.style.borderColor = '#efc8bd'; c.style.background = '#fff7f4'; c.querySelector('strong').style.color = '#a7412f' }
+      A.show(c, 700 + i * 120, 450, 14); A.count(c.querySelector('strong'), 900 + i * 120, 1200, 0, to, fmt)
+    })
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>客服</th><th>人工消息</th><th>平均字数</th><th>极短回复</th><th>图片/卡片</th><th>生硬用语</th><th>站外风险</th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 1200)
+  const tb = tbl.querySelector('tbody')
+  ;[['小林（主账号）', 412, 21.3, '9%', 120, 0, 0], ['小雨', 268, 17.8, '12%', 86, 0, 0], ['阿杰', 197, 8.2, '31%', 40, 2, 1], ['美美', 154, 19.5, '10%', 52, 0, 0]]
+    .forEach(([n, m, a, sh, im, cu, off], i) => {
+      const tr = A.el('tr', '', `<td><b>${n}</b></td><td class="mono">${m}</td><td>${a}</td><td>${sh}</td><td>${im}</td><td>${cu ? `<span class="pill w">${cu}</span>` : '0'}</td><td>${off ? `<span class="pill r">${off}</span>` : '<span class="pill t">0</span>'}</td>`, tb)
+      A.show(tr, 1400 + i * 120, 400, 10); if (i === 2) A.flag(tr, 4200, 'hi')
+    })
+  const risk = A.el('div', 'card', `<div style="padding:14px 18px 6px;font-weight:700;color:#a7412f;display:flex;gap:8px;align-items:center">${ic('shield', 18)}站外交易风险记录</div>
+    <table class="t"><tbody><tr class="rk"><td style="width:120px">10/15 14:22</td><td>阿杰</td><td>王先生 · 网店分销</td><td><span class="pill r">微信</span></td><td style="color:#33473a">加我微信 ****** 发你实拍</td><td><span class="pill t">查看会话</span></td></tr></tbody></table>`, body)
+  A.show(risk, 6200)
+  A.flag(risk.querySelector('.rk'), 6600, 'hi')
+  const modal = A.el('div', 'modal', `<div class="dialog" style="width:640px"><h4>阿杰 · 10-15 · 王先生</h4>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:15px">
+      <div class="msg u" style="align-self:flex-start;background:#f1f4f5;border-color:#dbe4e6">买家消息（12 字）</div>
+      <div class="msg a" style="align-self:flex-end">“这款有现货的，支持拿样”</div>
+      <div class="msg u" style="align-self:flex-start;background:#f1f4f5;border-color:#dbe4e6">买家消息（8 字）</div>
+      <div class="msg a fx" style="align-self:flex-end;outline:3px solid #e8a090;background:#fff7f4">“加我微信 ****** 发你实拍” <span class="pill r" style="margin-left:6px">微信</span></div>
+      <div class="msg u" style="align-self:flex-start;background:#f1f4f5;border-color:#dbe4e6">买家消息（5 字）</div>
+    </div><div style="margin-top:14px;color:#6c7f88;font-size:13px">手机号、微信号、QQ 号在保存前已遮盖；只保存客服一侧的文本</div></div>`, main.parentElement.parentElement)
+  A.anim(modal, 11000, 400, { o: 0 }, { o: 1 }); A.hide(modal, 15300)
+  A.cursor([[1300, 1300, 600], [4000, 1300, 593], [6400, 1500, 755], [10600, 1745, 755, 1], [12600, 1500, 700], [15200, 1500, 700]])
+})
+
+scene('keywords', '关键词库', 15000, A => {
+  A.caption({ no: '08 · 关键词库', title: '听见买家在问什么', lead: '买家原文被平台隐藏，关键词命中是了解买家意图的办法；新词只对之后的新消息生效。', steps: [[1300, '一键添加常用词：售后退款、投诉差评、物流催单…'], [6000, '统计买家和客服提到每个词的次数'], [10300, '经营看板提醒“买家提到退款/投诉”']] })
+  const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '关键词库 · 保存在 1688，对所有客服账号生效' })
+  A.el('div', 'row', ['客服对比', '聊天分析', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 3 ? 'on' : ''}">${t}</div>`).join(''), body)
+  const row = A.el('div', 'row', '', body); row.style.alignItems = 'stretch'
+  const lib = A.el('div', 'card', `<div style="padding:16px 18px;font-weight:700;color:#102b3a;display:flex;gap:8px;align-items:center">${ic('tag', 18)}当前词库 <span class="pill t cnt">0</span></div><div class="kws" style="padding:0 18px 16px;display:flex;flex-wrap:wrap;gap:8px;min-height:120px;align-content:flex-start"><span class="emp" style="color:#8a9aa0;font-size:14px">词库还是空的</span></div>`, row); lib.style.flex = '1.1'
+  A.show(lib, 600)
+  A.text(lib.querySelector('.cnt'), [[0, '0'], [3300, '9']])
+  const kws = lib.querySelector('.kws')
+  A.hook(lt => { kws.querySelector('.emp').style.display = lt >= 3300 ? 'none' : '' })
+  ;['退款', '退货', '换货', '质量问题', '坏了', '破损', '少发', '漏发', '错发'].forEach((w, i) => A.pop(A.el('span', 'chip', w, kws), 3300 + i * 70, 350))
+  const pre = A.el('div', 'card', `<div style="padding:16px 18px 6px;font-weight:700;color:#102b3a">常用词推荐</div>`, row); pre.style.flex = '1'
+  A.show(pre, 800)
+  ;[['售后退款', '质量、破损、少发错发', '添加 9 个'], ['投诉差评', '需要尽快安抚的会话', '添加 5 个'], ['物流催单', '催发货、问物流', '添加 6 个'], ['议价', '价格敏感，推阶梯价', '添加 6 个']]
+    .forEach(([c, h, b], i) => { const r2 = A.el('div', '', `<div style="display:flex;align-items:center;gap:10px;padding:10px 18px;border-top:1px solid #eef2f3"><div style="flex:1"><b style="color:#102b3a">${c}</b><div style="color:#8a9aa0;font-size:13px">${h}</div></div><span class="chip ${i === 0 ? 'ad' : ''}">${b}</span></div>`, pre); if (i === 0) A.text(r2.querySelector('.ad'), [[0, b], [3300, '已全部添加']]) })
+  const toast = A.el('div', 'toast', `${ic('check', 18)}已添加 9 个；新词从现在起对新消息生效`, body); A.anim(toast, 3400, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 5600)
+  const hits = A.el('div', 'card', `<div style="padding:14px 18px 4px;font-weight:700;color:#102b3a">本周命中统计</div><table class="t"><thead><tr><th>关键词</th><th>分类</th><th>买家提到</th><th>客服提到</th><th>会话数</th><th>最近命中</th></tr></thead><tbody></tbody></table>`, body)
+  A.show(hits, 6000)
+  ;[['发货', '物流催单', 22, 9, 18, '10/16 15:02'], ['退款', '售后退款', 14, 3, 11, '10/16 14:40'], ['发票', '发票', 5, 2, 5, '10/16 11:18'], ['差评', '投诉差评', 2, 0, 2, '10/15 20:31']]
+    .forEach((r2, i) => { const tr = A.el('tr', '', r2.map((c, j) => `<td>${j === 0 ? `<b>${c}</b>` : c}</td>`).join(''), hits.querySelector('tbody')); A.show(tr, 6300 + i * 140, 400, 10); if (i === 3) A.flag(tr, 8600, 'hi') })
+  const dash = A.el('div', 'card', `<div class="todo" style="border:0"><span class="dot" style="background:#b4412f"></span>买家提到退款/投诉<b>12</b></div><div style="padding:0 18px 12px;color:#6c7f88;font-size:13px">经营看板 · 待处理 · 点击直达关键词页</div>`, body)
+  dash.style.cssText += ';position:absolute;right:28px;bottom:10px;width:360px;box-shadow:0 16px 36px rgba(16,43,58,.18)'
+  A.pop(dash, 10500)
+  A.cursor([[1300, 1500, 500], [3000, 1760, 345, 1], [6000, 1300, 650], [9000, 1260, 700], [10600, 1640, 892], [14600, 1640, 892]])
+})
+
+scene('sync', '数据同步', 12000, A => {
+  A.caption({ no: '09 · 数据同步', title: '数据从哪里来', lead: '后台每 15 分钟自动同步订单、退款和聊天；打开页面只读本地数据，不消耗接口额度。', steps: [[1300, '手动同步可选：今天 / 近 7 天 / 近 30 天 / 全部'], [5200, '「历史数据范围」默认近 30 天，可改 60 / 90 天'], [8400, '每日调用额度有保护，用满后次日自动继续']] })
+  const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '客服账号 · 同步设置' })
+  const bar = A.el('div', 'card', `<div class="row" style="padding:18px 20px;flex-wrap:wrap"><span style="color:#4d636c">本次同步</span><span class="chip on sc">今天 ▾</span><div class="btn sb">${ic('refresh', 16)}立即同步</div><span style="color:#4d636c;margin-left:24px">历史数据范围</span><span class="chip hr">近 30 天 ▾</span></div>`, body)
+  A.show(bar, 600)
+  A.text(bar.querySelector('.sb'), [[0, `${ic('refresh', 16)}立即同步`], [2700, `${ic('refresh', 16)}同步中…`], [4800, `${ic('check', 16)}立即同步`]])
+  const st = A.el('div', 'card', `<div style="padding:18px 20px;font-size:16px;line-height:2;color:#4d636c" class="stx"></div>`, body); A.show(st, 900)
+  A.text(st.querySelector('.stx'), [[0, '历史数据范围：近 30 天（9/16 起）· 订单补齐至 9/16 · 会话消息已全部拉取'], [2700, '正在同步今天的订单、退款和会话…'], [4800, '同步完成：今天新增 46 个会话 · 38 笔订单 · 用时 21 秒']])
+  const q = A.el('div', 'card', `<div style="padding:18px 20px"><div class="row"><b style="color:#102b3a">今日接口调用</b><span class="mono cnt" style="margin-left:auto;font-size:20px;color:#102b3a"></span><span style="color:#8a9aa0">/ 4,500 次保护上限</span></div><div class="meter" style="margin-top:14px"><i></i></div><div style="margin-top:12px;color:#6b7f87;font-size:14px">只拉取有新消息的会话；近 7 天没有会话的子账号每 2 小时查一次</div></div>`, body)
+  A.show(q, 8200)
+  A.anim(q.querySelector('.meter i'), 8600, 1800, { sx: 0 }, { sx: .29 })
+  A.count(q.querySelector('.cnt'), 8600, 1800, 0, 1320)
+  A.cursor([[1200, 1300, 420], [2500, 1162, 261, 1], [5300, 1300, 330], [6000, 1418, 261], [8400, 1500, 640], [11500, 1500, 640]])
+})
+
+scene('ai', 'AI 助手', 20000, A => {
+  A.caption({ no: '10 · AI 助手', title: '有问题，问销途 AI', lead: '右侧 AI 按需查询系统数据再回答，包括回复质量、站外风险和关键词命中。', steps: [[1300, '任意页面点「问 AI」，直接用中文提问'], [6000, '回答注明查询了哪些数据，可点开历史对话'], [12600, '写跟进 / 改标签 / 改所属客服：确认后才保存']] })
+  const { body, main } = A.app({ active: '客户经营', title: '客户经营', sub: '1688 客户档案、精细化分层、跟进与复购' })
+  A.el('div', 'card', `<table class="t"><thead><tr><th>客户</th><th>类型</th><th>累计</th><th>状态</th></tr></thead><tbody><tr><td>张老板 · 汽配批发</td><td><span class="pill t">忠实客</span></td><td>¥45,227</td><td><span class="pill w">超周期未跟进</span></td></tr><tr><td>李女士 · 洗车店</td><td><span class="pill b">复购客</span></td><td>¥8,640</td><td><span class="pill w">计划跟进已到期</span></td></tr><tr><td>王先生 · 网店分销</td><td><span class="pill">新客</span></td><td>¥1,280</td><td><span class="pill r">下单未付款</span></td></tr></tbody></table>`, body)
+  const panel = A.el('div', 'aipanel', `<div class="h"><i>${ic('spark')}</i><div><b>销途 AI</b><small>千问已连接 · 可查询系统数据</small></div></div><div class="ctx">当前上下文：客户经营 · 示例汽车用品店</div><div class="chat"></div>
+    <div style="padding:14px"><div class="card" style="padding:12px 14px;display:flex;gap:10px;align-items:center"><span class="in" style="flex:1;font-size:15px;color:#18313f;min-height:22px"></span><span class="btn" style="height:34px;padding:0 10px">${ic('send', 16)}</span></div></div>`, main.parentElement.parentElement)
+  A.anim(panel, 1500, 600, { x: 440 }, { x: 0 })
+  const chat = panel.querySelector('.chat'), input = panel.querySelector('.in')
+  A.type(input, 2600, '今天最该优先跟进哪 3 个客户？帮第一位拟一条跟进。', 14)
+  A.hook(lt => { if (lt >= 6200) input.textContent = '' })
+  const q = A.el('div', 'msg u', '今天最该优先跟进哪 3 个客户？帮第一位拟一条跟进。', chat); A.show(q, 6200, 350, 10)
+  const think = A.el('div', 'msg a', '<div class="dots"><i></i><i></i><i></i></div><div class="tools" style="margin-top:6px">正在查询客户列表、客户资料…</div>', chat)
+  A.anim(think, 6700, 300, { o: 0 }, { o: 1 }); A.anim(think, 8900, 200, { o: 1 }, { o: 0 })
+  A.hook(lt => { think.style.display = lt >= 9100 ? 'none' : ''; think.querySelectorAll('.dots i').forEach((d, i) => { d.style.opacity = .35 + .65 * Math.max(0, Math.sin((lt / 220) - i)) }) })
+  const ans = A.el('div', 'msg a', `<b>优先跟进这 3 位：</b><ol><li><b>张老板</b>：忠实客，采购周期约 2 天，已断档 3 天</li><li><b>李女士</b>：计划跟进今天到期</li><li><b>王先生</b>：下单未付款 ¥1,280，建议催付</li></ol>
+    <div class="confirm"><b>${ic('clock', 14)} 写跟进 · 张老板</b><p>回访两批大货签收情况，推荐升级款并报 3000 件阶梯价。</p><small style="color:#6b7f87">下次跟进：10/22 09:00</small><div class="bt" style="margin-top:8px"><span class="ok cf">${ic('check', 13)}确认执行</span><span>忽略</span></div></div>
+    <div class="tools" style="margin-top:8px">${ic('db', 12)}已查询：客户列表、客户资料 · 8.4 秒</div>`, chat)
+  A.show(ans, 9100, 500, 12)
+  A.text(ans.querySelector('.bt'), [[0, `<span class="ok cf">${ic('check', 13)}确认执行</span><span>忽略</span>`], [15600, `<span style="border:0;background:none;color:#0d7c6e;font-weight:600">${ic('check', 13)} 已保存</span>`]])
+  const toast = A.el('div', 'toast', `${ic('check', 18)}跟进已保存到张老板的档案`, body); toast.style.left = '34%'; toast.style.top = '470px'; A.anim(toast, 15800, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 19000)
+  A.cursor([[800, 1600, 600], [1300, 1787, 158, 1], [3000, 1600, 880], [5900, 1812, 916, 1], [13600, 1650, 780], [15300, 1525, 630, 1], [19200, 1525, 640]])
+})
+
+scene('outro', '', 8000, A => {
+  const h = A.el('div', 'hero'); h.style.justifyContent = 'flex-start'; h.style.paddingTop = '150px'
+  const t = A.el('h1', '', '开始使用销途 AI CRM', h); t.style.fontSize = '76px'; A.show(t, 200, 700, 30)
+  const p = A.el('p', '', '每天三步：看经营看板 → 处理待跟进 → 用 AI 复盘', h); A.show(p, 600, 700)
+  const r = A.el('div', 'recap')
+  ;[['商品线', '采集 → 上架队列 → 产品目录，AI 把关图片与属性'], ['客户线', '自动分层与购买周期，待跟进清单不漏人'], ['团队线', '话术质检、站外风险提醒，客服响应、转化、业绩归属与提成自动计算'], ['安全与数据', '按权限显示数据；AI 修改须确认，全程留痕']]
+    .forEach(([b, s2], i) => A.show(A.el('div', '', `<b>${b}</b><span>${s2}</span>`, r), 1300 + i * 180, 500, 20))
+  const f = A.el('p', '', '遇到问题，随时点右上角「问 AI」'); f.style.cssText = 'position:absolute;left:0;right:0;top:720px;text-align:center;font-size:28px;color:#0d7c6e;font-weight:600'; f.style.top = '770px'
+  A.show(f, 2600)
+})
+
+/* ───────────── narration (seconds relative to each scene; exported as SRT) ───────────── */
+const NARRATION = {
+  intro: [[0.4, 2.8, '欢迎使用销途 AI CRM。'], [2.9, 6.9, '它把 1688 店铺的商品、客户和客服团队放在一个系统里管理。']],
+  overview: [[0.8, 4.0, '先认识左侧导航，它的顺序就是日常工作流。'], [4.2, 7.2, '商品线：采集货源、上架队列、产品目录。'], [7.4, 10.6, '客户线：客户经营和客服绩效，遇到问题随时问 AI。']],
+  dashboard: [[0.8, 3.4, '登录后首先看到的是经营看板。'], [3.5, 6.6, '切换今天、近 7 天或近 30 天，数字会自动和上一周期对比。'], [6.8, 10.6, '下方是每天的成交趋势，鼠标悬停可以看当天明细。'],
+    [10.8, 14.0, '右侧「待处理」列出待跟进客户、未付款订单等事项。'], [14.1, 16.6, '点任意一项，直接跳到对应页面处理。']],
+  collect: [[0.6, 2.95, '接下来是 1688 商品采集。'], [3.0, 5.2, '在 1688 商品页点「采集此商品」，'], [5.2, 8.4, '标题、图片、SKU 和价格会一起保存进 CRM。'], [8.6, 11.6, '回到采集工作区，新商品出现在最前面。'],
+    [11.6, 13.8, '顶部按处理阶段分类，方便逐个处理。'], [13.8, 16.8, '标为“需核对”的商品会写明原因，比如类目 ID 缺失。']],
+  queue: [[0.5, 3.8, '开启“采集后自动上品”后，新采集的商品会自动排队。'], [3.9, 6.6, 'AI 会读取资料，识别图片里的水印和品牌 Logo，'], [6.6, 10.0, '再按平台规则映射属性和 SKU，校验后提交 1688。'],
+    [10.2, 14.6, '有问题的商品停在“需核对”并写明原因，不会盲目发布。']],
+  catalog: [[0.5, 3.1, '产品目录展示店铺在 1688 已上架的商品。'], [3.1, 5.5, '点「同步平台商品」，读取最新的上架情况。'], [5.6, 9.6, '可以按近 30 天销量、价格或库存排序，快速找到热销和滞销商品。'],
+    [10.0, 14.6, '点开商品，可以刷新详情、关联产品资料，或修改库存。']],
+  customers: [[0.5, 3.2, '客户经营把每位买家的订单和聊天合在一起，'], [3.2, 6.0, '自动分出新客、复购客和忠实客，算出购买周期。'], [6.0, 9.2, '「待跟进」列出今天该联系的客户，以及联系的原因。'],
+    [9.3, 13.3, '点「写跟进」记录这次沟通的内容，'], [13.3, 15.4, '再设置下次跟进时间，到期自动提醒。'], [15.6, 18.6, '还可以给客户打标签，或指定所属客服。']],
+  performance: [[0.8, 4.0, '客服绩效按聊天和订单自动计算，不需要手工统计。'], [4.0, 7.0, '对比每位客服的接待、首次响应、未回复和转化率。'], [7.0, 11.4, '订单按“归属方案”算给客服，财务可以切换方案对比结果。'],
+    [11.8, 15.0, '「工资管理」按阶梯提成规则，自动生成每个人的工资单。'], [15.0, 18.4, '提成按档位逐级计算，过程清楚、方便核对。']],
+  quality: [[0.6, 3.2, '回复质量：系统只读取客服一侧的消息文本，'], [3.2, 5.8, '联系方式在保存前就会被遮盖。'], [6.0, 9.0, '客服发手机号、微信或站外付款用语，会自动列为风险。'], [9.0, 10.55, '极短回复和生硬用语也有提示。'],
+    [10.6, 14.6, '点开风险记录，直接定位到那条消息，方便复盘。']],
+  keywords: [[0.3, 3.2, '买家原文被平台隐藏，要靠关键词了解买家在问什么。'], [3.3, 5.8, '常用词可以一键添加，新词对之后的新消息生效。'], [6.0, 9.6, '系统统计买家和客服提到每个词的次数和会话。'],
+    [10.3, 14.4, '买家提到退款或投诉时，经营看板会直接提醒。']],
+  sync: [[0.5, 3.1, '系统每 15 分钟自动同步订单、退款和聊天。'], [3.1, 5.6, '也可以手动只同步今天、近 7 天或近 30 天。'], [5.6, 8.6, '「历史数据范围」默认近 30 天，可以改成 60 或 90 天。'],
+    [8.7, 11.8, '每日接口调用有保护上限，用满后会在第二天自动继续。']],
+  ai: [[0.8, 2.8, '最后是销途 AI 助手。'], [2.9, 6.0, '在任意页面点「问 AI」，直接用中文提问。'], [6.3, 9.0, 'AI 会先查询系统里的真实数据，再给出回答。'], [9.2, 12.4, '也能分析回复质量、站外风险和关键词命中。'],
+    [12.4, 15.4, '写跟进、改标签或改所属客服时，AI 只生成确认卡片，'], [15.4, 19.6, '你点「确认执行」后才会保存，全程留有记录。']],
+  outro: [[0.6, 3.6, '每天三步：看经营看板，处理待跟进，用 AI 复盘。'], [3.8, 7.6, '遇到问题，随时点右上角「问 AI」。祝经营顺利！']],
+}
+
+/* ───────────── player ───────────── */
+const TOTAL = build()
+// Absolute subtitle cues (ms), used by the player, the burned-in render and the SRT export.
+const SUBS = scenes.flatMap(s => (NARRATION[s.id] || []).map(([a, b, text]) => ({ start: s.start + Math.round(a * 1000), end: s.start + Math.round(b * 1000), text })))
+const subEl = document.getElementById('sub')
+function drawSub(t) { const cue = SUBS.find(c => t >= c.start && t < c.end); subEl.style.display = cue ? 'block' : 'none'; if (cue && subEl.textContent !== cue.text) subEl.textContent = cue.text }
+const render = new URLSearchParams(location.search).has('render')
+if (render) document.body.classList.add('render')
+// The plain render keeps the picture clean for a separate SRT; ?render=1&subs=1 burns the subtitles in.
+const params = new URLSearchParams(location.search)
+if (render && !params.has('subs')) document.body.classList.add('nosubs')
+const subsBtn = document.getElementById('subs')
+subsBtn.onclick = () => { const off = document.body.classList.toggle('nosubs'); subsBtn.textContent = off ? '字幕：关' : '字幕：开'; subsBtn.setAttribute('aria-pressed', String(!off)) }
+const fmt = ms => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+let now = 0, playing = false, last = 0
+const scrub = document.getElementById('scrub'), timeEl = document.getElementById('time'), playBtn = document.getElementById('play'), sel = document.getElementById('chapterSel')
+function go(t) {
+  now = Math.max(0, Math.min(TOTAL - 1, t)); seek(now); drawSub(now)
+  scrub.value = Math.round(now / TOTAL * 1000); timeEl.textContent = `${fmt(now)} / ${fmt(TOTAL)}`
+  let cur = ''; for (const s of scenes) if (s.title && now >= s.start) cur = String(s.start); if (cur) sel.value = cur
+}
+function loop(ts) { if (!playing) return; now += ts - last; last = ts; if (now >= TOTAL - 1) { playing = false; playBtn.textContent = '↺ 重播' } go(now); if (playing) requestAnimationFrame(loop) }
+function toggle() { if (now >= TOTAL - 1) now = 0; playing = !playing; playBtn.textContent = playing ? '❚❚ 暂停' : '▶ 播放'; if (playing) { last = performance.now(); requestAnimationFrame(loop) } }
+playBtn.onclick = toggle
+scrub.oninput = () => go(scrub.value / 1000 * TOTAL)
+sel.onchange = () => go(Number(sel.value) + 1)
+document.getElementById('full').onclick = () => document.documentElement.requestFullscreen?.()
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); toggle() } if (e.code === 'ArrowRight') go(now + 5000); if (e.code === 'ArrowLeft') go(now - 5000) })
+function fit() { const v = document.getElementById('viewport'); const k = render ? 1 : Math.min(v.clientWidth / W, v.clientHeight / H); stage.style.transform = `scale(${k})` }
+addEventListener('resize', fit); fit(); go(0)
+// Frame-exact rendering hook used by render-tutorial.mjs.
+window.__tutorial = { duration: TOTAL, seek: t => { go(t); return document.fonts.ready.then(() => true) }, chapters: scenes.filter(s => s.title).map(s => ({ title: s.title, start: s.start })), subtitles: SUBS }
+</script>
+</body>
+</html>
