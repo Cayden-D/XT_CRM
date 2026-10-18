@@ -1,7 +1,7 @@
 import AgentQueueSettings from './AgentQueueSettings'
 import { useEffect, useState } from 'react'
 import {
-  Building2, Database, Headset, Images, LayoutDashboard, LogOut, Menu, Package, PackageCheck, Settings, Sparkles, Store, Users, Wand2,
+  Building2, Database, Headset, Images, LayoutDashboard, LogOut, Menu, Package, PackageCheck, Settings, ShieldCheck, Sparkles, Store, Users, Wand2,
 } from 'lucide-react'
 import LoginPage from './LoginPage'
 import CustomersPage from './CustomersPage'
@@ -12,13 +12,14 @@ import Integration1688Page from './1688Page'
 import AgentSettingsPage from './AgentSettingsPage'
 import PerformancePage, { type View as PerfView } from './PerformancePage'
 import CustomerOpsPage from './CustomerOpsPage'
+import UsersAdminPage from './UsersAdminPage'
 import { ImageEditPage, ImageSuitePage } from './ImageWorkshop'
 import { OPEN_IMAGE_TOOL, type ImageIntent } from './imageApi'
 import AiAssistant from './AiAssistant'
 import { OPEN_AI, resetAiFocus } from './aiFocus'
 import { clearToken,getCurrentUser,getToken,type SessionUser } from './api'
 
-type Page = 'dashboard' | 'customers' | 'products' | 'collections' | 'imageEdit' | 'imageSuite' | 'shop' | 'settings' | 'queue' | 'performance' | 'customerOps'
+type Page = 'dashboard' | 'customers' | 'products' | 'collections' | 'imageEdit' | 'imageSuite' | 'shop' | 'settings' | 'queue' | 'performance' | 'customerOps' | 'users'
 
 const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   dashboard: { title: '经营看板', eyebrow: '成交、接待、客户与上架的实时概况' },
@@ -31,6 +32,7 @@ const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   queue: {title:'上架队列',eyebrow:'跟踪采集商品的检测、资料准备与发布进度'},
   customerOps: { title: '客户经营', eyebrow: '1688 客户档案、精细化分层、跟进与复购' },
   performance: { title: '客服绩效', eyebrow: '1688 绩效应用授权、指标口径与绩效方案' },
+  users: { title: '账户管理', eyebrow: '开设账号、分配角色、停用与重置密码' },
   settings: { title: '系统设置', eyebrow: '店铺 Agent 与自动发布授权' },
 }
 
@@ -47,6 +49,8 @@ const nav: Array<{ id: Page; label: string; icon: typeof LayoutDashboard; count?
   { id: 'performance', label: '客服绩效', icon: Headset },
 ]
 
+const canManageUsers = (user: SessionUser) => (user.permissions || []).some(p => p === '*' || p === 'user:*' || p === 'user:manage')
+
 function Sidebar({ page, setPage, open, close, user, onLogout }: { page: Page; setPage: (page: Page) => void; open: boolean; close: () => void; user: SessionUser; onLogout: () => void }) {
   return <>
     {open && <button className="scrim" onClick={close} aria-label="关闭导航" />}
@@ -59,8 +63,9 @@ function Sidebar({ page, setPage, open, close, user, onLogout }: { page: Page; s
         </button>)}
       </nav>
       <div className="sidebar-foot">
+        {canManageUsers(user) && <button className={page==='users'?'active':''} onClick={()=>{setPage('users');close()}}><ShieldCheck size={18} /><span>账户管理</span></button>}
         <button className={page==='settings'?'active':''} onClick={()=>{setPage('settings');close()}}><Settings size={18} /><span>系统设置</span></button>
-        <div className="profile"><div className="avatar">{user.displayName.slice(0, 1)}</div><div><b>{user.displayName}</b><small>{user.roles.includes('super_admin') ? '超级管理员' : '业务成员'}</small></div><button className="logout-button" onClick={onLogout} aria-label="退出登录"><LogOut size={16} /></button></div>
+        <div className="profile"><div className="avatar">{user.displayName.slice(0, 1)}</div><div><b>{user.displayName}</b><small>{user.roles.includes('super_admin') ? '超级管理员' : user.roles.includes('admin') ? '管理员' : '业务成员'}</small></div><button className="logout-button" onClick={onLogout} aria-label="退出登录"><LogOut size={16} /></button></div>
       </div>
     </aside>
   </>
@@ -111,7 +116,7 @@ export default function App() {
     <Sidebar page={page} setPage={next => { setSubView(undefined); setImageIntent(undefined); setPage(next) }} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
       <Topbar page={page} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
-      <div className="page-content">{page === 'dashboard' ? <DashboardPage user={session} go={go} /> : page === 'customers' ? <CustomersPage /> : page === 'products' ? <ProductsPage user={session} openShop={() => setPage('shop')} /> : page === 'collections' ? <ProductCollectionsPage user={session} /> : page === 'imageEdit' ? <ImageEditPage key={subView ?? 'imageEdit'} user={session} intent={imageIntent} /> : page === 'imageSuite' ? <ImageSuitePage key={subView ?? 'imageSuite'} user={session} intent={imageIntent} /> : page === 'shop' ? <Integration1688Page user={session} onCollections={()=>setPage('collections')}/> : page === 'queue' ? <AgentQueueSettings user={session}/> : page === 'performance' ? <PerformancePage key={subView ?? 'performance'} user={session} initialView={subView as PerfView | undefined}/> : page === 'customerOps' ? <CustomerOpsPage key={subView ?? 'customerOps'} user={session} initialView={subView as 'list' | 'pool' | 'due' | undefined} openOffline={()=>setPage('customers')}/> : <AgentSettingsPage user={session}/>}</div>
+      <div className="page-content">{page === 'dashboard' ? <DashboardPage user={session} go={go} /> : page === 'customers' ? <CustomersPage /> : page === 'products' ? <ProductsPage user={session} openShop={() => setPage('shop')} /> : page === 'collections' ? <ProductCollectionsPage user={session} /> : page === 'imageEdit' ? <ImageEditPage key={subView ?? 'imageEdit'} user={session} intent={imageIntent} /> : page === 'imageSuite' ? <ImageSuitePage key={subView ?? 'imageSuite'} user={session} intent={imageIntent} /> : page === 'shop' ? <Integration1688Page user={session} onCollections={()=>setPage('collections')}/> : page === 'queue' ? <AgentQueueSettings user={session}/> : page === 'performance' ? <PerformancePage key={subView ?? 'performance'} user={session} initialView={subView as PerfView | undefined}/> : page === 'users' && canManageUsers(session) ? <UsersAdminPage user={session} /> : page === 'customerOps' ? <CustomerOpsPage key={subView ?? 'customerOps'} user={session} initialView={subView as 'list' | 'pool' | 'due' | undefined} openOffline={()=>setPage('customers')}/> : <AgentSettingsPage user={session}/>}</div>
     </main>
     <button className={`ai-fab ${aiOpen ? 'hidden' : ''}`} onClick={() => openAI()}><Sparkles size={20} /><span>问销途 AI</span></button>
     <AiAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={page} pageTitle={pageMeta[page].title} />

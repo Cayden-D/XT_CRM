@@ -405,3 +405,16 @@
 .perf-kw-preset p span.on { background:#e3f5ec; color:#21684b; }
 .perf-keywords td small { display:block; color:#7d8c80; font-size:11px; }
 @media (max-width:900px) { .perf-kw-grid { grid-template-columns:1fr; } }
+
+/* 账户管理 */
+.users-admin .shop-table select { border:1px solid #cdd8d1; border-radius:5px; padding:5px 8px; background:#fff; font:inherit; }
+.users-admin tr.users-disabled td { color:#9aa7a0; }
+.users-self { margin-left:6px; font-size:11px; }
+.users-sub { display:block; color:#8a978f; font-size:12px; margin-top:2px; }
+.users-form { display:flex; flex-direction:column; gap:12px; }
+.users-form label { display:flex; flex-direction:column; gap:6px; font-size:13px; color:#3b5146; }
+.users-form input, .users-form select { border:1px solid #cdd8d1; border-radius:5px; padding:9px 10px; font:inherit; background:#fff; }
+.users-password { display:flex; gap:8px; }
+.users-password input { flex:1; min-width:0; font-family:'IBM Plex Mono',monospace; }
+.users-role-hint { margin-top:-6px; color:#7b887e; font-size:12px; line-height:1.6; }
+.users-issued { margin:0; padding:12px; border-radius:6px; background:#f3f6f3; border:1px solid #dbe4dd; font:13px/1.8 'IBM Plex Mono',monospace; white-space:pre-wrap; word-break:break-all; }
