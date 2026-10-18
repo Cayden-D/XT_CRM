@@ -68,6 +68,8 @@ npm run test:users-admin
 
 采集结果会按来源商品 ID 幂等更新，完整保留标题、主图、详情图、视频、卖家、源类目、商品属性、价格区间、SKU 维度、规格价格、库存和原始商品快照，作为后续 AI 清洗与官方接口发布的输入。重新生成采集密钥会立即吊销旧密钥。
 
+采集器 2.1.4 起默认连接线上地址 `https://xt.tlh666.cn/api/product-collections`；本地开发时在采集器设置里改回 `http://127.0.0.1:3001/api/product-collections` 即可。
+
 采集器 2.1.2 优先读取 `window.context.result.data.Root.fields.dataJson.tempModel.postCategoryId`，并与 `offerBaseInfo.catId` 核对后作为来源商品的发布子类目 ID；`topCategoryId` 只是顶级类目，不用于自动上品。明确 ID 缺失或冲突时仍会拦截自动发布；其它类目字段和面包屑链接仅作兜底。请在 Tampermonkey 更新本项目的 `scripts/1688-product-collector.user.js` 后重新采集缺类目的商品。若旧任务因类目缺失而被拦截，重新采集补齐 ID 后会自动重新入队（已生成正式产品或发布结果未知的任务不会自动重试）。本地提取回归：`npm run test:1688-collector-category`。
 
 ## 使用教程（动画）

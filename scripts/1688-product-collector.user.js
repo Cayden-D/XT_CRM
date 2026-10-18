@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.1.3
+// @version      2.1.4
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -11,6 +11,7 @@
 // @match        https://www.alibaba.com/*
 // @match        https://*.alibaba.com/*
 // @match        https://detail.alibaba.com/*
+// @connect      xt.tlh666.cn
 // @connect      127.0.0.1
 // @connect      localhost
 // @connect      s.alicdn.com
@@ -35,7 +36,7 @@
 (function () {
     'use strict';
 
-    globalThis.__CC_API_BASE__ = "http://127.0.0.1:3001/api/product-collections";
+    globalThis.__CC_API_BASE__ = "https://xt.tlh666.cn/api/product-collections";
 
     /**
      * Helper: get text content from a DOM element via selector
@@ -2910,7 +2911,7 @@
     };
 
     const DEFAULT_API_BASE = (globalThis.__CC_API_BASE__ ||
-        "http://127.0.0.1:3001/api/product-collections").replace(/\/$/, "");
+        "https://xt.tlh666.cn/api/product-collections").replace(/\/$/, "");
     const API_BASE_STORAGE_KEY = "cc_api_base";
     const STORAGE_KEY = "cc_auth_session";
     const AUTO_DRAFT_STORAGE_KEY = "cc_auto_platform_draft";
@@ -4071,7 +4072,7 @@
       <h2 style="margin:0 0 8px;font-size:18px;color:#333;">🔐 连接销途 CRM</h2>
       <p style="margin:0 0 16px;font-size:12px;color:#888;">在 CRM 的“1688 采集 → 配置采集器”中生成专用密钥</p>
       <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">CRM API 地址</label>
-      <input id="cc-login-email" type="text" value="${getApiBase()}" placeholder="http://127.0.0.1:3001/api/product-collections"
+      <input id="cc-login-email" type="text" value="${getApiBase()}" placeholder="https://xt.tlh666.cn/api/product-collections"
         style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d9d9d9;border-radius:6px;margin-bottom:12px;font-size:14px;" />
       <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">采集密钥</label>
       <input id="cc-login-password" type="password" placeholder="crm1688_..."
