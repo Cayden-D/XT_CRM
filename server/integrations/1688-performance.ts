@@ -2,7 +2,7 @@ import { db } from '../db.js'
 import { appCredentials, connectionToken, gateway, IntegrationError, recordOperation, signApi } from './1688.js'
 
 // Read-only interfaces from the performance solution document, keyed to their namespace.
-// Keyword writes back the 关键词库 feature; contact decryption is added only when its feature ships.
+// Keyword writes back the 关键词库 feature.
 const performanceApis: Record<string, string> = {
   'alibaba.account.basic': 'com.alibaba.account',
   'alibaba.subAccount.list': 'com.alibaba.account',
@@ -18,6 +18,10 @@ const performanceApis: Record<string, string> = {
   'alibaba.trade.refund.OpQueryBatchRefundByOrderIdAndStatus.sellerView': 'com.alibaba.trade',
   'alibaba.product.get': 'com.alibaba.product',
   'alibaba.category.get': 'com.alibaba.product',
+  // Risk-controlled, one buyer at a time and only on a person's click: decrypt to open a Wangwang chat (the nickname is
+  // never shown or stored), encrypt a loginId the merchant typed to find that buyer.
+  'wangwangnick.openuid.decrypt': 'com.alibaba.account',
+  'loginid.openuid.encrypt': 'com.alibaba.account',
 }
 
 async function invoke(id: string, tenantId: string, actorId: string | null, name: string, input: Record<string, unknown>, requestId?: string) {

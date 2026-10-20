@@ -62,7 +62,9 @@ export function applyAgentFields(schema:Json,values:Json,proposal:unknown,facts?
   if(titleLength(parsed.title)>titleLimit(schema))throw new IntegrationError('AGENT_TITLE_TOO_LONG',`AI 标题超过 ${titleLimit(schema)} 个长度单位（中文计 2，英文、数字和半角符号计 1），请缩短后重试。`,400)
   const required=(schema.data?.catProp?.fields?.dataSource||[]).filter((field:Json)=>field.required&&field.visible!==false).flatMap((field:Json)=>[field.name,field.label])
   const missing=parsed.unknown.filter(name=>required.includes(name))
-  if(missing.length)throw new IntegrationError('AGENT_MISSING_FACTS',`资料不足：${missing.join('、')}`,400)
+  // The model may name a field by its code (p-346); report the label people see (产地).
+  const labelOf=(name:string)=>(schema.data?.catProp?.fields?.dataSource||[]).find((field:Json)=>field.name===name)?.label||name
+  if(missing.length)throw new IntegrationError('AGENT_MISSING_FACTS',`资料不足：${[...new Set(missing.map(labelOf))].join('、')}`,400)
   const next={...values,title:parsed.title,catProp:{...values.catProp}}
   const properties=schema.data?.catProp?.fields?.dataSource||[]
   for(const [name,value] of Object.entries(parsed.catProp)){

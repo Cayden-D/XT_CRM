@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ChevronLeft, ChevronRight, LoaderCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LoaderCircle, MessageCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
 import { agentLabel } from './PerformanceReports'
 import {
-  attributionSchemeNames, availableSchemes, chatCategoryNames, creditBasisNames, flagNames, getChatDetail, getChatSessions, getCreditedOrders, getPerformanceAgents, getReplyQuality, OFFSITE_FLAGS,
+  attributionSchemeNames, availableSchemes, chatCategoryNames, creditBasisNames, flagNames, getChatDetail, getChatSessions, getCreditedOrders, getPerformanceAgents, getReplyQuality, OFFSITE_FLAGS, wangwangLinks,
   type AttributionScheme, type ChatCategory, type ChatDetail, type ChatSession, type CreditedOrder, type PerformanceAgent, type ReplyQuality,
 } from './performanceApi'
 
@@ -23,6 +23,24 @@ export function Drawer({title,close,children}:{title:string;close:()=>void;child
 // 1688 returns no content for "其他消息": pictures, stickers, product/order cards, auto-replies and system notices.
 const OTHER_HINT='1688 不提供这类消息的内容：图片、表情、商品/订单卡片、自动回复或系统提示等'
 const nonText=(m:ChatDetail['messages'][number])=>m.message_types.includes('其他消息')&&!m.length
+/**
+ * 旺旺联系: the window opens on the click itself (so it is not blocked as a popup) and is pointed at the 1688 chat once
+ * the platform has decrypted the buyer for this one click. The buyer's nickname is never shown on our pages.
+ */
+export function WangwangButton({buyerId,setError,label}:{buyerId:string;setError:(text:string)=>void;label?:string}) {
+  const [busy,setBusy]=useState(false)
+  async function open(){
+    const win=window.open('about:blank','_blank')
+    // Without a window (popups blocked) nothing is decrypted: the platform allows decryption only to open a chat.
+    if(!win)return setError('浏览器拦截了新窗口：请允许本站弹出窗口后再点「旺旺联系」。')
+    win.document.title='正在打开旺旺…'
+    setBusy(true)
+    try{win.location.href=(await wangwangLinks(buyerId)).data.web}
+    catch(cause){win.close();setError(message(cause))}finally{setBusy(false)}
+  }
+  return <button className={label?'shop-button':'shop-icon'} title="用旺旺联系买家" aria-label="用旺旺联系买家" disabled={busy} onClick={()=>void open()}>{busy?<LoaderCircle size={16} className="spin"/>:<MessageCircle size={16}/>}{label}</button>
+}
+
 /** Message timeline of one session: buyer text is masked by the platform; agent text is shown masked, with risk flags. */
 export function Timeline({data,focus}:{data:ChatDetail;focus?:string}) {
   return <><ol className="perf-timeline">{data.messages.map(m=><li key={m.uuid} className={`${m.direction===1?'buyer':'agent'} ${m.uuid===focus?'focus':''}`}>
@@ -60,11 +78,12 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
         <td><span className={`shop-status ${row.category==='paid'?'positive':row.category==='no_order'?'':row.category==='after_sales'?'':'warning'}`}>{chatCategoryNames[row.category]}</span></td>
         <td>{row.buyer_messages} / {row.agent_messages}{row.other_agent_messages?<small>其他 {row.other_agent_messages}</small>:null}</td><td>{seconds(row.first_response_seconds)}</td><td>{row.unanswered||'—'}</td>
         <td>{row.orders_after?.length?row.orders_after.map(id=><small key={id}><code>{id}</code>{row.paid_after?.includes(id)?' 已付款':''}</small>):'—'}</td>
-        <td><button className="shop-icon" title="查看消息记录" aria-label={`查看 ${row.chat_date} 会话`} onClick={()=>void open(row)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>
+        <td className="perf-row-actions"><WangwangButton buyerId={row.buyer_id} setError={setError}/><button className="shop-icon" title="查看消息记录" aria-label={`查看 ${row.chat_date} 会话`} onClick={()=>void open(row)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>
       {!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的会话</p></div>}</div>}
     <Pager page={page} setPage={setPage} more={rows.length===50} loading={loading}/>
     <p className="shop-note">分类按会话首轮买家消息后的归属窗口内是否下单、付款判断；售后指此前 90 天内有已付款订单。平台不提供买家消息原文，只显示时间与字数；客服消息显示遮盖了联系方式的文本（保留 90 天，文本采集上线前的消息没有文本）。</p>
     {detail&&<Drawer title={`${agentLabel(detail.row)} · ${detail.row.chat_date} · 买家 …${detail.row.buyer_tail}`} close={()=>setDetail(null)}>
+      <div className="perf-drawer-actions"><WangwangButton buyerId={detail.row.buyer_id} setError={setError} label="旺旺联系买家"/></div>
       <Timeline data={detail.data}/>
     </Drawer>}
   </section>

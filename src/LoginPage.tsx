@@ -3,7 +3,7 @@ import { ArrowRight, Eye, EyeOff, Globe2, LockKeyhole, Mail, Radio, ShieldCheck 
 import { ApiError, getCurrentUser, login, type SessionUser } from './api'
 
 export default function LoginPage({ onLogin }: { onLogin: (user: SessionUser) => void }) {
-  const [email, setEmail] = useState('admin@local.crm')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')

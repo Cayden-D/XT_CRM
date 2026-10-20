@@ -17,7 +17,7 @@ export async function performanceAnalysisRoutes(app: FastifyInstance) {
     await ensureSettings(request.authUser.tenantId)
     const params = [request.authUser.tenantId, query.connectionId, query.from, query.to, scope(request), query.category ?? null, query.agentId ?? null, (query.page - 1) * 50]
     const rows = (await db.query(`WITH ${factsSql}
-      SELECT c.id,c.agent_id,ag.login_id,ag.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,c.chat_date::text AS chat_date,c.started_at,c.last_peer_at,
+      SELECT c.id,c.agent_id,c.buyer_id,ag.login_id,ag.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,c.chat_date::text AS chat_date,c.started_at,c.last_peer_at,
         c.buyer_messages,c.agent_messages,c.other_agent_messages,c.auto_replies,c.transferred,c.category,c.orders_after,c.paid_after,c.new_customer,
         (SELECT round(perf_response_seconds(t.turn_at,r.reply_at,perf_response_clock(t.turn_at,settings.work_hours_enabled,settings.work_start,settings.work_end)))::int
           FROM perf_chat_turns t CROSS JOIN settings CROSS JOIN LATERAL (SELECT ${replyAtSql('t', 'c', 'settings')} AS reply_at) r

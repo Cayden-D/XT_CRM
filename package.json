@@ -17,6 +17,8 @@
     "test:chat-text": "tsx scripts/test-chat-text.ts",
     "test:image-workshop": "tsx scripts/test-image-workshop.ts",
     "test:users-admin": "tsx scripts/test-users-admin.ts",
+    "test:chat-inquiry": "tsx scripts/test-chat-inquiry.ts",
+    "test:1688-categories": "tsx scripts/test-1688-categories.ts",
     "test:products": "tsx scripts/test-products.ts",
     "test:product-collection": "tsx scripts/test-product-collection.ts",
     "test:1688": "tsx scripts/test-1688.ts",

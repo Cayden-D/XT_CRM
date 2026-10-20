@@ -6,6 +6,7 @@ import { fillPublishTemplate } from '../integrations/1688-publish-template.js'
 import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
+import { categoryPath } from '../integrations/1688-categories.js'
 import { requirePermission } from '../auth.js'
 import { db } from '../db.js'
 import { listingBindingRoutes } from './1688-bindings.js'
@@ -298,7 +299,8 @@ export async function integration1688Routes(app: FastifyInstance) {
     const { id } = idSchema.parse(request.params)
     const row = (await db.query('SELECT * FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2', [id, request.authUser.tenantId])).rows[0]
     if (!row) throw new IntegrationError('NOT_FOUND', '发布草稿不存在。', 404)
-    return { data: row, missing: validatePublishBody(row.platform_schema, row.data_body) }
+    const category_path = await categoryPath(row.connection_id, request.authUser.tenantId, request.authUser.sub, row.cat_id, request.id)
+    return { data: { ...row, category_path }, missing: validatePublishBody(row.platform_schema, row.data_body) }
   })
   app.patch('/drafts/:id', { preHandler: requirePermission('integration:publish'), bodyLimit: 2_000_000 }, async request => {
     const { id } = idSchema.parse(request.params)

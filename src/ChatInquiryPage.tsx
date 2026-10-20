@@ -1,0 +1,116 @@
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { AlertCircle, ChevronRight, LoaderCircle, MessagesSquare, Search, ShieldCheck, Store, X } from 'lucide-react'
+import type { SessionUser } from './api'
+import { useAiFocusPart } from './aiFocus'
+import { ChatAnalysisView, Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
+import { agentLabel } from './PerformanceReports'
+import { getChatDetail, getInquiry, getPerformanceConnections, lookupBuyer, type BuyerLookup, type ChatDetail, type InquirySummary, type PerformanceConnection } from './performanceApi'
+import './1688.css'
+
+type Tab = 'chats' | 'inquiry'
+type Preset = 'today' | 'yesterday' | '7d' | '30d'
+const presets: [Preset, string][] = [['today', '今天'], ['yesterday', '昨天'], ['7d', '近 7 天'], ['30d', '近 30 天']]
+const beijingDate = (offset = 0) => new Date(Date.now() + 8 * 3_600_000 + offset * 86_400_000).toISOString().slice(0, 10)
+const rangeOf = (p: Preset) => p === 'today' ? { from: beijingDate(), to: beijingDate() } : p === 'yesterday' ? { from: beijingDate(-1), to: beijingDate(-1) } : { from: beijingDate(p === '7d' ? -6 : -29), to: beijingDate() }
+const message = (cause: unknown) => cause instanceof Error ? cause.message : '操作未完成，请稍后重试。'
+const can = (user: SessionUser, name: string) => (user.permissions || []).some(v => v === '*' || v === name || v === `${name.split(':')[0]}:*`)
+const pct = (part: number, whole: number) => whole ? `${(part / whole * 100).toFixed(1)}%` : '—'
+const day = (value: string | null) => value ? new Date(Date.parse(value) + 8 * 3_600_000).toISOString().slice(0, 10) : '—'
+
+/** 聊天与询盘: the shop's Wangwang chats and what the pre-sales inquiries turned into. */
+export default function ChatInquiryPage({ user, initialTab = 'chats' }: { user: SessionUser; initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab)
+  const [shops, setShops] = useState<PerformanceConnection[]>([]), [shop, setShop] = useState(''), [loading, setLoading] = useState(true)
+  const [preset, setPreset] = useState<Preset | 'custom'>('7d'), [range, setRange] = useState(() => rangeOf('7d'))
+  const [error, setError] = useState('')
+  useAiFocusPart({ connectionId: shop || undefined, view: tab === 'chats' ? 'chats' : 'inquiry' })
+  const canRead = can(user, 'performance:read') || can(user, 'performance:read_own')
+  useEffect(() => {
+    if (!canRead) { setLoading(false); return }
+    getPerformanceConnections().then(r => { setShops(r.data); setShop((r.data.find(c => c.status === 'connected') || r.data[0])?.id || '') }).catch(cause => setError(message(cause))).finally(() => setLoading(false))
+  }, [canRead])
+  if (!canRead) return <section className="state-card"><ShieldCheck size={28} /><h2>暂无聊天记录访问权限</h2><p>需要客服绩效的查看权限。</p></section>
+  return <div className="shop-workspace performance-page chat-inquiry">
+    <div className="shop-toolbar"><nav className="shop-tabs" aria-label="聊天与询盘">{([['chats', '聊天记录'], ['inquiry', '询盘分析']] as [Tab, string][]).map(([id, label]) =>
+      <button key={id} aria-current={tab === id ? 'page' : undefined} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</nav></div>
+    {error && <div className="shop-feedback error" role="alert"><AlertCircle size={16} /><span>{error}</span><button title="关闭错误" onClick={() => setError('')}><X size={15} /></button></div>}
+    {loading ? <div className="shop-empty"><LoaderCircle size={26} className="spin" /></div> : !shop ? <div className="shop-empty"><Store size={28} /><p>请先在「客服绩效 → 绩效应用授权」中授权店铺</p></div> : <>
+      <div className="shop-controlbar perf-filters">
+        <div className="shop-select"><Store size={17} /><select aria-label="店铺" value={shop} onChange={e => setShop(e.target.value)}>{shops.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}</select></div>
+        <div className="perf-range"><nav className="perf-metric-tabs" aria-label="日期范围">{presets.map(([id, label]) => <button key={id} aria-pressed={preset === id} className={preset === id ? 'active' : ''} onClick={() => { setPreset(id); setRange(rangeOf(id)) }}>{label}</button>)}</nav>
+          <input type="date" aria-label="开始日期" value={range.from} max={range.to} onChange={e => { if (e.target.value) { setPreset('custom'); setRange({ ...range, from: e.target.value }) } }} /><span>至</span>
+          <input type="date" aria-label="结束日期" value={range.to} min={range.from} max={beijingDate()} onChange={e => { if (e.target.value) { setPreset('custom'); setRange({ ...range, to: e.target.value }) } }} /></div>
+      </div>
+      <BuyerFinder connectionId={shop} setError={setError} />
+      {tab === 'chats' ? <ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError} /> : <InquiryView connectionId={shop} from={range.from} to={range.to} setError={setError} />}
+    </>}
+  </div>
+}
+
+/** Finds a buyer by the Wangwang login name the merchant types (1688 encrypts it to the id our records use). */
+function BuyerFinder({ connectionId, setError }: { connectionId: string; setError: (text: string) => void }) {
+  const [loginId, setLoginId] = useState(''), [busy, setBusy] = useState(false), [result, setResult] = useState<BuyerLookup | null | undefined>(undefined)
+  const [detail, setDetail] = useState<{ title: string; data: ChatDetail } | null>(null)
+  useEffect(() => { setResult(undefined) }, [connectionId])
+  async function find(event: FormEvent) {
+    event.preventDefault()
+    if (loginId.trim().length < 2) return
+    setBusy(true); setError('')
+    try { setResult((await lookupBuyer(connectionId, loginId.trim())).data) } catch (cause) { setError(message(cause)) } finally { setBusy(false) }
+  }
+  async function open(id: string, title: string) { try { setDetail({ title, data: (await getChatDetail(id)).data }) } catch (cause) { setError(message(cause)) } }
+  return <section className="chat-finder" aria-label="按旺旺名查找买家">
+    <form onSubmit={e => void find(e)}><Search size={16} /><input value={loginId} maxLength={64} onChange={e => { setLoginId(e.target.value); if (!e.target.value) setResult(undefined) }} placeholder="输入买家旺旺名（登录名）查找聊天记录和订单" aria-label="买家旺旺名" />
+      <button className="shop-button primary" disabled={busy || loginId.trim().length < 2}>{busy ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}查找</button></form>
+    {result === null && <p className="shop-note">没有找到这位买家的聊天记录（平台已识别该旺旺名，但近 90 天内没有与本店的会话）。</p>}
+    {result && <div className="chat-finder-result">
+      <div className="chat-finder-head"><div><strong>买家 …{result.buyer_tail}</strong><small>首次咨询 {day(result.first_chat_at)} · 最近 {day(result.last_chat_at)} · {result.sessions.length} 次会话</small></div>
+        <div className="chat-finder-stats"><span>订单 <b>{result.orders.orders}</b></span><span>已付款 <b>{result.orders.paid}</b></span><span>付款金额 <b>¥{result.orders.paid_amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</b></span></div>
+        <WangwangButton buyerId={result.id} setError={setError} label="旺旺联系" />
+        <button className="shop-icon" title="关闭" aria-label="关闭查找结果" onClick={() => { setResult(undefined); setLoginId('') }}><X size={16} /></button></div>
+      {result.sessions.length > 0 && <ul className="chat-finder-sessions">{result.sessions.map(s => <li key={s.id}><button onClick={() => void open(s.id, `${agentLabel(s)} · ${s.chat_date} · 买家 …${result.buyer_tail}`)}>
+        <span>{s.chat_date}</span><span>{agentLabel(s)}</span><span>买家 {s.buyer_messages} · 客服 {s.agent_messages}</span><ChevronRight size={15} /></button></li>)}</ul>}
+    </div>}
+    <p className="chat-finder-note">旺旺名只用于这一次查询，不会保存；1688 只允许人工逐个查询。</p>
+    {detail && <Drawer title={detail.title} close={() => setDetail(null)}><Timeline data={detail.data} /></Drawer>}
+  </section>
+}
+
+/** 询盘分析: pre-sales inquiries (one per buyer per day, after-sales chats excluded) and what became of them. */
+function InquiryView({ connectionId, from, to, setError }: { connectionId: string; from: string; to: string; setError: (text: string) => void }) {
+  const [data, setData] = useState<InquirySummary | null>(null), [loading, setLoading] = useState(true)
+  const load = useCallback(() => {
+    let live = true; setLoading(true)
+    getInquiry(connectionId, from, to).then(r => { if (live) setData(r.data) }).catch(cause => live && setError(message(cause))).finally(() => live && setLoading(false))
+    return () => { live = false }
+  }, [connectionId, from, to, setError])
+  useEffect(load, [load])
+  if (loading || !data) return <div className="shop-empty"><LoaderCircle size={26} className="spin" /><p>正在统计询盘…</p></div>
+  const t = data.totals
+  if (!t.sessions) return <div className="shop-empty"><MessagesSquare size={28} /><p>所选日期内没有聊天记录</p></div>
+  const maxDay = Math.max(1, ...data.daily.map(d => d.inquiries)), maxHour = Math.max(1, ...data.hourly.map(h => h.inquiries))
+  const hours = Array.from({ length: 24 }, (_, h) => data.hourly.find(x => x.hour === h)?.inquiries ?? 0)
+  return <section className="perf-report" aria-label="询盘分析">
+    <div className="perf-kpis">
+      <article><span>询盘</span><strong>{t.inquiries}</strong><small>买家·天去重，不含售后；共 {t.sessions} 个会话</small></article>
+      <article><span>询盘后下单</span><strong>{t.ordered}</strong><small>下单率 {pct(t.ordered, t.inquiries)}</small></article>
+      <article><span>询盘后付款</span><strong>{t.paid}</strong><small>付款转化率 {pct(t.paid, t.inquiries)}</small></article>
+      <article><span>售后会话</span><strong>{t.after_sales}</strong><small>90 天内付过款的买家</small></article>
+    </div>
+    <div className="inquiry-funnel" aria-label="询盘转化">{[['询盘', t.inquiries], ['下单', t.ordered], ['付款', t.paid]].map(([label, n], i) =>
+      <div key={label as string}><span>{label}</span><div className="perf-bar-track"><i style={{ width: `${Math.max(2, Number(n) / Math.max(1, t.inquiries) * 100)}%` }} /></div><b>{n}</b>{i > 0 && <small>{pct(Number(n), t.inquiries)}</small>}</div>)}</div>
+    <h3 className="perf-chart-title">每日询盘</h3>
+    <ul className="perf-bars">{data.daily.map(d => <li key={d.date} title={`${d.date}：询盘 ${d.inquiries}，付款 ${d.paid}`}><span className="perf-bar-label">{d.date}</span>
+      <div className="perf-bar-track"><i style={{ width: `${d.inquiries / maxDay * 100}%` }} /></div><span className="perf-bar-value">{d.inquiries}<small> · 付款 {d.paid}</small></span></li>)}</ul>
+    <h3 className="perf-chart-title">询盘时段（北京时间）</h3>
+    <div className="inquiry-hours" role="img" aria-label="按小时的询盘数">{hours.map((n, h) => <div key={h} title={`${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00：${n} 个询盘`}>
+      <i style={{ height: `${n / maxHour * 100}%` }} /><span>{h % 3 === 0 ? h : ''}</span></div>)}</div>
+    <h3 className="perf-chart-title">各客服询盘转化</h3>
+    <div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>客服</th><th>询盘</th><th>下单</th><th>付款</th><th>付款转化率</th></tr></thead>
+      <tbody>{data.agents.map(a => <tr key={a.agent_id}><td><strong>{agentLabel(a)}</strong></td><td>{a.inquiries}</td><td>{a.ordered}</td><td>{a.paid}</td><td>{pct(a.paid, a.inquiries)}</td></tr>)}</tbody></table></div>
+    <h3 className="perf-chart-title">买家在问什么</h3>
+    {data.keywords.length ? <ul className="perf-bars">{data.keywords.map(k => <li key={k.word}><span className="perf-bar-label">{k.word}</span><div className="perf-bar-track"><i style={{ width: `${k.hits / data.keywords[0].hits * 100}%` }} /></div><span className="perf-bar-value">{k.hits}<small> · {k.sessions} 个会话</small></span></li>)}</ul>
+      : <p className="shop-note">所选日期内还没有买家关键词命中。买家消息正文被平台隐藏，可在「客服绩效 → 关键词」添加常见问题词（如 退款、发票、定制），之后的新消息会按词统计。</p>}
+    <p className="shop-note">询盘按“买家 × 日期”去重，以当天第一次咨询为准；下单 / 付款指咨询后在归属窗口（指标口径中设置）内产生的订单。售后会话不计入询盘。</p>
+  </section>
+}

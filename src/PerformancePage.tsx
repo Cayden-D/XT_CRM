@@ -21,7 +21,7 @@ export type View='comparison'|'kpi'|'favorites'|'hourly'|'chats'|'quality'|'keyw
 type Preset='today'|'yesterday'|'7d'|'30d'
 const reportViews:View[]=['comparison','kpi','favorites','hourly','chats','quality','keywords','orders','payroll','agents']
 const datedViews:View[]=['comparison','kpi','favorites','hourly','chats','orders']
-const tabs:[View,string][]=[['comparison','客服对比'],['kpi','综合排行'],['favorites','我关注的'],['hourly','分时接待'],['chats','聊天分析'],['quality','回复质量'],['keywords','关键词'],['orders','订单归属'],['payroll','工资管理'],['agents','客服账号'],['connections','绩效应用授权'],['settings','指标口径'],['operations','调用记录']]
+const tabs:[View,string][]=[['comparison','客服对比'],['kpi','综合排行'],['favorites','我关注的'],['hourly','分时接待'],['quality','回复质量'],['keywords','关键词'],['orders','订单归属'],['payroll','工资管理'],['agents','客服账号'],['connections','绩效应用授权'],['settings','指标口径'],['operations','调用记录']]
 const presets:[Preset,string][]=[['today','今天'],['yesterday','昨天'],['7d','近 7 天'],['30d','近 30 天']]
 const beijingDate=(offsetDays=0)=>new Date(Date.now()+8*3_600_000+offsetDays*86_400_000).toISOString().slice(0,10)
 function presetRange(preset:Preset){

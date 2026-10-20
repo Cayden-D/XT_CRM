@@ -418,3 +418,56 @@
 .users-password input { flex:1; min-width:0; font-family:'IBM Plex Mono',monospace; }
 .users-role-hint { margin-top:-6px; color:#7b887e; font-size:12px; line-height:1.6; }
 .users-issued { margin:0; padding:12px; border-radius:6px; background:#f3f6f3; border:1px solid #dbe4dd; font:13px/1.8 'IBM Plex Mono',monospace; white-space:pre-wrap; word-break:break-all; }
+
+/* 聊天与询盘 */
+.perf-row-actions { white-space:nowrap; display:flex; gap:4px; justify-content:flex-end; }
+.perf-drawer-actions { display:flex; justify-content:flex-end; margin-bottom:12px; }
+.chat-finder { background:#fff; border:1px solid #dce6df; border-radius:8px; padding:12px 14px; margin-bottom:16px; display:flex; flex-direction:column; gap:10px; }
+.chat-finder form { display:flex; align-items:center; gap:8px; color:#71838c; }
+.chat-finder form input { flex:1; min-width:0; border:1px solid #cdd8d1; border-radius:5px; padding:8px 10px; font:inherit; color:#18313f; }
+.chat-finder-note { margin:0; color:#8a978f; font-size:12px; }
+.chat-finder-result { border-top:1px solid #edf1ee; padding-top:10px; display:flex; flex-direction:column; gap:8px; }
+.chat-finder-head { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.chat-finder-head > div:first-child { display:flex; flex-direction:column; gap:3px; margin-right:auto; }
+.chat-finder-head small { color:#71838c; font-size:12px; }
+.chat-finder-stats { display:flex; gap:14px; color:#71838c; font-size:13px; }
+.chat-finder-stats b { color:#18313f; font-variant-numeric:tabular-nums; }
+.chat-finder-sessions { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; max-height:240px; overflow:auto; }
+.chat-finder-sessions button { width:100%; display:grid; grid-template-columns:100px minmax(0,1fr) 150px 16px; gap:10px; align-items:center; border:0; border-top:1px solid #f0f3f1; background:none; padding:7px 4px; text-align:left; font:inherit; font-size:13px; color:#18313f; cursor:pointer; }
+.chat-finder-sessions button:hover { background:#f2f7f4; }
+.inquiry-funnel { display:flex; flex-direction:column; gap:6px; margin:16px 0 4px; background:#fff; border:1px solid #dce6df; border-radius:8px; padding:14px 16px; }
+.inquiry-funnel > div { display:grid; grid-template-columns:72px minmax(0,1fr) 60px 56px; gap:12px; align-items:center; font-size:13px; color:#485b4c; }
+.inquiry-funnel b { color:#18313f; text-align:right; font-variant-numeric:tabular-nums; }
+.inquiry-funnel small { color:#71838c; }
+.inquiry-hours { display:grid; grid-template-columns:repeat(24,minmax(0,1fr)); gap:3px; height:150px; align-items:end; padding:8px 4px 0; background:#fff; border:1px solid #dce6df; border-radius:8px; }
+.inquiry-hours > div { height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:4px; min-width:0; }
+.inquiry-hours i { display:block; width:100%; max-width:22px; min-height:1px; background:#1f8a70; border-radius:4px 4px 0 0; }
+.inquiry-hours > div:hover i { background:#166b57; }
+.inquiry-hours span { height:16px; font-size:11px; color:#71838c; }
+@media(max-width:640px){ .chat-finder-sessions button { grid-template-columns:90px minmax(0,1fr) 16px; } .chat-finder-sessions button span:nth-child(3) { display:none; } .inquiry-funnel > div { grid-template-columns:56px minmax(0,1fr) 44px; } .inquiry-funnel small { display:none; } }
+
+/* 上架队列 · 草稿入口 */
+.queue-actions { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+/* 详情描述：图文块编辑 */
+.detail-editor { display:flex; flex-direction:column; gap:10px; }
+.detail-editor-head { display:flex; align-items:center; gap:10px; }
+.detail-editor-head small { color:#71838c; font-size:12px; margin-right:auto; }
+.detail-source { width:100%; font:12px/1.6 'IBM Plex Mono',monospace; border:1px solid #cdd8d1; border-radius:5px; padding:10px; }
+.detail-blocks { list-style:none; margin:0; padding:10px; display:flex; flex-direction:column; align-items:center; gap:0; max-height:560px; overflow:auto; background:#f4f6f5; border:1px solid #dce6df; border-radius:6px; }
+.detail-block { position:relative; width:min(100%,520px); background:#fff; }
+.detail-block.image img { display:block; width:100%; height:auto; }
+.detail-block.text { padding:8px; border-bottom:1px solid #eef2ef; }
+.detail-block.text textarea { width:100%; border:1px solid transparent; border-radius:4px; padding:6px 8px; font:inherit; resize:vertical; }
+.detail-block.text textarea:focus { border-color:#cdd8d1; outline:none; }
+.detail-raw { display:flex; gap:6px; align-items:center; padding:12px; color:#71838c; font-size:12px; background:#fafbfa; border:1px dashed #cdd8d1; }
+.detail-block-tools { position:absolute; top:6px; right:6px; display:flex; gap:4px; opacity:0; transition:opacity .15s; }
+.detail-block:hover .detail-block-tools, .detail-block:focus-within .detail-block-tools { opacity:1; }
+.detail-block-tools button { width:28px; height:28px; display:grid; place-items:center; border:0; border-radius:5px; background:rgba(24,49,63,.82); color:#fff; cursor:pointer; }
+.detail-block-tools button:disabled { opacity:.4; cursor:default; }
+.detail-empty { padding:24px; color:#8a978f; font-size:13px; }
+.detail-add { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.detail-add label.shop-button { cursor:pointer; }
+.detail-add label.shop-button.disabled { opacity:.5; pointer-events:none; }
+.detail-url { display:flex; gap:6px; flex:1; min-width:240px; }
+.detail-url input { flex:1; min-width:0; border:1px solid #cdd8d1; border-radius:5px; padding:8px 10px; font:inherit; }
+@media (hover:none) { .detail-block-tools { opacity:1; } }
