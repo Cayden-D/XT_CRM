@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { AlertCircle, Check, LoaderCircle, MessageSquareText, Plus, RefreshCw, Tags, X } from 'lucide-react'
-import { Drawer, Timeline } from './PerformanceAnalysis'
+import { Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
 import {
   addKeywords, deleteKeyword, getChatDetail, getKeywordHits, getKeywords, reconcileKeywords, setKeywordCategory,
   type ChatDetail, type KeywordHit, type KeywordPreset, type KeywordRecent, type PerfKeyword,
@@ -17,7 +17,7 @@ const day = (value:string) => new Date(value).toLocaleDateString('zh-CN',{month:
 export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}:{connectionId:string;from:string;to:string;canManage:boolean;setError:(text:string)=>void;setNotice:(text:string)=>void}) {
   const [keywords,setKeywords]=useState<PerfKeyword[]>([]),[presets,setPresets]=useState<KeywordPreset[]>([]),[hits,setHits]=useState<{words:KeywordHit[];recent:KeywordRecent[]}|null>(null)
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[word,setWord]=useState(''),[category,setCategory]=useState('售后退款')
-  const [detail,setDetail]=useState<{title:string;focus:string;data:ChatDetail}|null>(null)
+  const [detail,setDetail]=useState<{buyerId:string;title:string;focus:string;data:ChatDetail}|null>(null)
   const load=useCallback(async()=>{
     try{const [k,h]=await Promise.all([getKeywords(connectionId),getKeywordHits(connectionId,from,to)]);setKeywords(k.data);setPresets(k.presets);setHits(h.data)}
     catch(cause){setError(message(cause))}finally{setLoading(false)}
@@ -38,7 +38,7 @@ export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}
   async function remove(k:PerfKeyword){if(!window.confirm(`从 1688 词库删除“${k.word}”？已统计的历史命中保留。`))return;setBusy(k.id);setError('');try{setKeywords((await deleteKeyword(k.id)).data);setNotice(`已删除“${k.word}”`)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function recategorize(k:PerfKeyword,next:string){setBusy(k.id);try{setKeywords((await setKeywordCategory(k.id,next)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function reconcile(){setBusy('sync');setError('');try{const r=(await reconcileKeywords(connectionId)).data;setKeywords(r.keywords);setNotice(`平台词库共 ${r.platform} 个词${r.imported?`，导入 ${r.imported} 个`:''}${r.missing.length?`，${r.missing.length} 个已不在平台`:''}`)}catch(cause){setError(message(cause))}finally{setBusy('')}}
-  async function open(row:KeywordRecent){try{setDetail({title:`${row.login_id.split(':').pop()} · ${row.chat_date} · ${row.buyer_name??`买家 …${row.buyer_tail}`}`,focus:row.uuid,data:(await getChatDetail(row.session_id)).data})}catch(cause){setError(message(cause))}}
+  async function open(row:KeywordRecent){try{setDetail({buyerId:row.buyer_id,title:`${row.login_id.split(':').pop()} · ${row.chat_date} · ${row.buyer_name??`买家 …${row.buyer_tail}`}`,focus:row.uuid,data:(await getChatDetail(row.session_id)).data})}catch(cause){setError(message(cause))}}
   if(loading)return <div className="shop-empty"><LoaderCircle size={26} className="spin"/><p>正在读取…</p></div>
   const grouped=categories.map(c=>({category:c,items:keywords.filter(k=>k.category===c)})).filter(g=>g.items.length)
   const firstAdded=keywords.length?keywords.map(k=>k.created_at).sort()[0]:null
@@ -69,7 +69,7 @@ export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}
     {hits&&hits.recent.length>0&&<><h3 className="perf-chart-title">最近命中</h3><div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>时间</th><th>关键词</th><th>谁提到</th><th>客服</th><th>买家</th><th/></tr></thead>
       <tbody>{hits.recent.map(r=><tr key={`${r.uuid}-${r.word}`}><td>{dateTime(r.sent_at)}</td><td><strong>{r.word}</strong><small>{r.category}</small></td><td>{r.direction===1?<span className="shop-status warning">买家</span>:<span className="shop-status">客服</span>}</td>
         <td>{r.login_id.split(':').pop()}</td><td>{r.buyer_name??`买家 …${r.buyer_tail}`}</td>
-        <td><button className="shop-icon" title="查看会话" aria-label={`查看 ${r.chat_date} 会话`} onClick={()=>void open(r)}><MessageSquareText size={16}/></button></td></tr>)}</tbody></table></div></>}
-    {detail&&<Drawer title={detail.title} close={()=>setDetail(null)}><Timeline data={detail.data} focus={detail.focus}/></Drawer>}
+        <td className="perf-row-actions"><WangwangButton buyerId={r.buyer_id} setError={setError}/><button className="shop-icon" title="查看会话" aria-label={`查看 ${r.chat_date} 会话`} onClick={()=>void open(r)}><MessageSquareText size={16}/></button></td></tr>)}</tbody></table></div></>}
+    {detail&&<Drawer title={detail.title} close={()=>setDetail(null)}><div className="perf-drawer-actions"><WangwangButton buyerId={detail.buyerId} setError={setError} label="旺旺联系买家"/></div><Timeline data={detail.data} focus={detail.focus}/></Drawer>}
   </section>
 }

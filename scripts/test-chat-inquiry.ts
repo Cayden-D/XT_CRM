@@ -45,6 +45,17 @@ try {
   assert.equal(inquiry.json().data.totals.sessions, 1)
   assert.equal(inquiry.json().data.agents[0].login_id, 'shop:甲')
 
+  // 买家在问什么 → the sessions behind a keyword, newest first, within the user's scope.
+  await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,keywords) VALUES
+    ($1,$2,$3,'m1',1,now()-interval '2 minutes','[{"word":"退款","count":2}]'),($1,$2,$3,'m2',1,now()-interval '1 minute','[{"word":"退款"}]'),($1,$2,$3,'m3',0,now(),'[{"word":"发票"}]')`, [tenant, conn.id, session])
+  const kw = (word: string, headers = all) => app.inject({ method: 'GET', url: `${base}/inquiry/keyword-sessions?connectionId=${conn.id}&from=${today}&to=${today}&word=${encodeURIComponent(word)}`, headers })
+  const hit = (await kw('退款')).json().data
+  assert.deepEqual([hit.length, hit[0].id, hit[0].hits, hit[0].first_hit_uuid, hit[0].buyer_id, hit[0].login_id], [1, session, 3, 'm1', buyer, 'shop:甲'])
+  assert.equal((await kw('发票')).json().data.length, 0, 'only buyer messages count')
+  assert.equal((await kw('退款', auth(agentUser, ['performance:read_own']))).json().data.length, 1)
+  assert.equal((await kw('退款', auth(otherUser, ['performance:read_own']))).json().data.length, 0)
+  assert.equal((await kw('退款', auth(boss, ['*'], tenants[1]))).statusCode, 404)
+
   // Lookup: the typed login name is encrypted by the platform and matched to our buyer; unknown names find nothing.
   const found = (await app.inject({ method: 'POST', url: `${base}/buyers/lookup`, headers: all, payload: { connectionId: conn.id, loginId: 'buyer-one' } })).json().data
   assert.deepEqual([found.id, found.sessions.length, found.sessions[0].id], [buyer, 1, session])
@@ -78,7 +89,7 @@ try {
   assert.equal(status, 429)
   assert.equal(calls.length - before, 29, 'the refused request does not reach 1688')
 
-  console.log(JSON.stringify({ inquiry: 'ok', lookup: 'ok', notFound: 'ok', wangwangLinks: 'ok', nothingStored: 'ok', ownScope: 'ok', isolation: 'ok', throttle: 'ok' }))
+  console.log(JSON.stringify({ keywordSessions: 'ok', inquiry: 'ok', lookup: 'ok', notFound: 'ok', wangwangLinks: 'ok', nothingStored: 'ok', ownScope: 'ok', isolation: 'ok', throttle: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   for (const id of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }

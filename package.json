@@ -47,7 +47,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:1688-listing-sync": "tsx scripts/test-1688-listing-sync.ts"
+    "test:1688-listing-sync": "tsx scripts/test-1688-listing-sync.ts",
+    "test:connection-delete": "tsx scripts/test-connection-delete.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

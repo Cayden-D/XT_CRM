@@ -56,7 +56,7 @@ body.nosubs #sub { display:none !important; }
 .side .logo { display:flex; align-items:center; gap:10px; padding:0 8px 22px; color:#fff; font-weight:700; font-size:19px; }
 .side .logo i { width:28px; height:28px; border-radius:8px; background:#1b766f; display:grid; place-items:center; }
 .side .logo i::after { content:""; width:11px; height:11px; border:2.5px solid #8be3d7; border-radius:50%; border-right-color:transparent; }
-.side .it { display:flex; align-items:center; gap:10px; height:40px; padding:0 12px; border-radius:10px; font-size:15px; color:#b4c7cc; }
+.side .it { display:flex; align-items:center; gap:10px; height:38px; padding:0 12px; border-radius:10px; font-size:15px; color:#b4c7cc; }
 .side .it svg { width:18px; height:18px; flex:none; }
 .side .it.on { background:rgba(255,255,255,.1); color:#fff; box-shadow:inset 3px 0 0 #5fe0c9; }
 .side .it.pulse { background:rgba(95,224,201,.22); color:#fff; }
@@ -199,6 +199,12 @@ const P = {
   shield:'<path d="M12 3 4.5 6v6c0 4.5 3.2 7.8 7.5 9 4.3-1.2 7.5-4.5 7.5-9V6z"/><path d="m8.8 12 2.3 2.3 4.2-4.6"/>',
   layers:'<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   msg:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+  wand:'<path d="m4 20 11-11"/><path d="m13 7 4 4"/><path d="M17 3v3M15.5 4.5h3M20 9v2M19 10h2"/>',
+  images:'<rect x="7" y="3" width="14" height="14" rx="2"/><path d="M3 7v12a2 2 0 0 0 2 2h12"/><path d="m7 14 4-4 3 3 2-2 5 5"/>',
+  receipt:'<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  chats:'<path d="M3 5h12v8H8l-4 3z"/><path d="M15 9h6v8l-3-2h-6v-2"/>',
+  userplus:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M19 8v6M16 11h6"/>',
+  upload:'<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/>',
 }
 const ic = (name, size = 18) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${P[name]}</svg>`
 /* simple product silhouettes for fictional goods */
@@ -210,6 +216,7 @@ const goods = {
   pillow:'<path d="M20 40 Q50 18 80 40 Q86 62 70 76 Q50 84 30 76 Q14 62 20 40z" fill="#fff"/>',
   brush:'<rect x="20" y="44" width="60" height="14" rx="7" fill="#fff"/><path d="M26 58v14M36 58v14M46 58v14M56 58v14M66 58v14M76 58v14" stroke="#fff" stroke-width="4" stroke-linecap="round"/>',
 }
+const shot = (bg, kind, ink = '#5d7682') => `<div class="im" style="background:${bg}"><svg viewBox="0 0 100 100">${goods[kind].replaceAll('#fff', ink)}</svg></div>`
 const thumb = (hue, kind) => `<div class="im" style="background:linear-gradient(140deg,hsl(${hue} 62% 62%),hsl(${hue + 24} 58% 44%))"><svg viewBox="0 0 100 100">${goods[kind]}</svg></div>`
 
 /* ───────────── timeline engine ───────────── */
@@ -249,7 +256,7 @@ function api(s) {
     const w = el('div', 'win'); const a = el('div', 'app', '', w)
     const side = el('div', 'side', '<div class="logo"><i></i>销途 AI CRM</div>', a)
     const items = {}
-    for (const [k, icon] of [['经营看板', 'grid'], ['客户经营', 'users'], ['客户', 'user'], ['产品目录', 'box'], ['1688 商品采集', 'db'], ['1688 店铺', 'store'], ['上架队列', 'queue'], ['客服绩效', 'headset'], ['系统设置', 'gear']])
+    for (const [k, icon] of [['经营看板', 'grid'], ['客户经营', 'users'], ['客户', 'user'], ['产品目录', 'box'], ['1688 商品采集', 'db'], ['图片编辑', 'wand'], ['电商套图', 'images'], ['1688 店铺', 'store'], ['上架队列', 'queue'], ['订单', 'receipt'], ['聊天与询盘', 'chats'], ['客服绩效', 'headset'], ['账户管理', 'userplus'], ['系统设置', 'gear']])
       items[k] = el('div', `it ${k === active ? 'on' : ''}`, `${ic(icon)}<span>${k}</span>`, side)
     const m = el('div', 'main', '', a)
     el('div', 'top', `<div><small>${sub || ''}</small><b>${title}</b></div>${ai ? `<div class="ai">${ic('spark', 16)}问 AI</div>` : ''}`, m)
@@ -340,21 +347,23 @@ scene('intro', '', 7000, A => {
   const h = A.el('div', 'hero')
   const m = A.el('div', 'mark', '', h); A.pop(m, 200, 700)
   const t = A.el('h1', '', '销途 AI CRM 使用教程', h); A.show(t, 700, 700, 40)
-  const p = A.el('p', '', '面向 1688 店铺：商品采集上架 · 客户经营 · 客服绩效 · AI 助手', h); A.show(p, 1200, 700)
+  const p = A.el('p', '', '面向 1688 店铺：商品采集上架 · 订单与客户 · 客服绩效 · AI 助手', h); A.show(p, 1200, 700)
   const mods = A.el('div', 'mods', '', h)
-  ;[['grid', '经营看板'], ['db', '商品采集'], ['queue', '上架队列'], ['box', '产品目录'], ['users', '客户经营'], ['headset', '客服绩效'], ['shield', '回复质量'], ['tag', '关键词库'], ['refresh', '数据同步'], ['spark', 'AI 助手']]
-    .forEach(([i, n], k) => A.pop(A.el('span', '', `${ic(i)}${n}`, mods), 1900 + k * 140))
+  ;[['grid', '经营看板'], ['db', '商品采集'], ['wand', '图片工坊'], ['queue', '上架队列'], ['box', '产品目录'], ['receipt', '订单'], ['users', '客户经营'], ['chats', '聊天与询盘'], ['headset', '客服绩效'], ['shield', '回复质量'], ['tag', '关键词库'], ['refresh', '数据同步'], ['userplus', '账户管理'], ['spark', 'AI 助手']]
+    .forEach(([i, n], k) => A.pop(A.el('span', '', `${ic(i)}${n}`, mods), 1900 + k * 110))
 })
 
-scene('overview', '系统概览', 11000, A => {
-  A.caption({ no: '00 · 概览', title: '先认识<br>左侧导航', lead: '导航顺序就是日常工作流：从采集商品、上架，到成交后的客户经营与客服考核。', steps: [[1200, '每天先看「经营看板」，掌握成交与待办'], [4200, '商品线：采集 → 上架队列 → 产品目录'], [7200, '客户线：客户经营、客服绩效，随时问 AI']] })
+scene('overview', '系统概览', 12000, A => {
+  A.caption({ no: '00 · 概览', title: '先认识<br>左侧导航', lead: '导航顺序就是日常工作流：从采集商品、做图、上架，到成交后的订单、客户与客服考核。', steps: [[1200, '每天先看「经营看板」，掌握成交与待办'], [4200, '商品线：采集 → 图片 → 上架队列 → 产品目录'], [7600, '客户线：订单、客户经营、聊天与询盘、客服绩效']] })
   const { body, items } = A.app({ active: '经营看板', title: '工作台', sub: '销途 AI CRM' })
   const grid = A.el('div', 'overview', '', body.parentElement.parentElement.parentElement); grid.style.cssText = 'position:absolute;left:250px;right:28px;top:100px'
-  const mods = [['经营看板', 'grid', '成交、退款、接待、转化与待办一屏汇总'], ['客户经营', 'users', '1688 买家自动分层，提醒何时该跟进'], ['1688 商品采集', 'db', '浏览器插件一键保存货源商品'], ['上架队列', 'queue', 'AI 检查图片与属性后自动提交上架'], ['产品目录', 'box', '店铺在售商品、库存与近 30 天销量'], ['客服绩效', 'headset', '响应、转化与业绩归属，自动算提成'], ['1688 店铺', 'store', '授权店铺、同步商品、管理发布草稿'], ['系统设置', 'gear', '店铺 Agent 开关、发布模板与权限']]
-  mods.forEach(([n, i, d], k) => {
-    const c = A.el('div', 'card ov', `<i>${ic(i)}</i><div><b>${n}</b><span>${d}</span></div>`, grid)
-    A.show(c, 1100 + k * 220, 500, 18)
-    A.flag(items[n], 1100 + k * 220, 'pulse', 1100 + k * 220 + 900)
+  const mods = [['经营看板', 'grid', '成交、退款、接待、转化与待办一屏汇总'], ['1688 商品采集', 'db', '浏览器插件一键保存货源商品'], ['图片编辑', 'wand', '白底图、换背景、改尺寸，AI 生成电商套图', '图片编辑 · 电商套图'], ['上架队列', 'queue', 'AI 检查图片与属性后自动上架，草稿可预览'], ['产品目录', 'box', '店铺在售商品，只同步有变动的商品'], ['订单', 'receipt', '按状态查订单，实时查看订单详情'],
+    ['客户经营', 'users', '1688 买家自动分层，提醒何时该跟进'], ['聊天与询盘', 'chats', '聊天记录、询盘转化，旺旺一键联系'], ['客服绩效', 'headset', '响应、转化与业绩归属，自动算提成'], ['账户管理', 'userplus', '超级管理员为同事开设账号']]
+  mods.forEach(([n, i, d, label], k) => {
+    const c = A.el('div', 'card ov', `<i>${ic(i)}</i><div><b>${label || n}</b><span>${d}</span></div>`, grid); c.style.padding = '13px 18px'
+    A.show(c, 1100 + k * 200, 500, 18)
+    A.flag(items[n], 1100 + k * 200, 'pulse', 1100 + k * 200 + 900)
+    if (n === '图片编辑') A.flag(items['电商套图'], 1100 + k * 200, 'pulse', 1100 + k * 200 + 900)
   })
 })
 
@@ -425,8 +434,51 @@ scene('collect', '商品采集', 17000, A => {
   const tip = A.el('div', 'toast', `${ic('alert', 18)}需核对：来源类目 ID 缺失，补全后自动重新入队`, body); tip.style.background = '#93600e'; A.anim(tip, 13100, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(tip, 16400)
 })
 
-scene('queue', '上架队列', 15000, A => {
-  A.caption({ no: '03 · 上架队列', title: 'AI 自动上品', lead: '开启店铺 Agent 后，新采集的商品会自动排队，逐项检查后提交 1688。', steps: [[1300, '「系统设置」开启店铺 Agent 与“采集后自动上品”'], [3600, '队列逐项检查：图片、类目、属性、价格库存'], [10200, '有问题停在“需核对”并写明原因，不会盲目发布']] })
+scene('images', '图片工坊', 18000, A => {
+  A.caption({ no: '03 · 图片工坊', title: '图片编辑<br>与电商套图', lead: '用 AI 处理商品图、生成整套主图。带他人水印或品牌 Logo 的图片不会被编辑，请用干净的图片生成新图。', steps: [[1300, '「图片编辑」：白底图、换背景、改尺寸'], [6800, '「电商套图」：按商品资料生成 6 张主图'], [12400, '上传到店铺相册并替换主图，随时可撤销']] })
+  const { body, items, main } = A.app({ active: '图片编辑', title: '图片编辑', sub: '千问图像编辑 · 结果保存在图片库' })
+  A.flag(items['图片编辑'], 0, 'on', 6500); A.flag(items['电商套图'], 6500, 'on')
+  A.text(main.querySelector('.top b'), [[0, '图片编辑'], [6500, '电商套图']])
+  A.text(main.querySelector('.top small'), [[0, '千问图像编辑 · 结果保存在图片库'], [6500, 'AI 根据商品资料生成 6 张电商主图']])
+  // 1. Edit one picture
+  const edit = A.el('div', '', '', body); edit.style.cssText = 'display:flex;flex-direction:column;gap:16px'
+  const ops = A.el('div', 'row', '', edit)
+  const chips = [['白底图', '保留商品，换成纯白背景'], ['换背景', '把商品放进新场景'], ['改尺寸', '裁切或补白到指定尺寸']].map(([n, d], i) => A.el('div', `card`, `<div style="padding:14px 18px"><b style="color:#102b3a">${n}</b><div style="color:#8a9aa0;font-size:13px;margin-top:4px">${d}</div></div>`, ops))
+  chips.forEach((c, i) => { c.style.flex = '1'; A.show(c, 700 + i * 120, 450, 12) })
+  A.hook(lt => chips.forEach((c, i) => { const on = i === 0 && lt >= 2200; c.style.borderColor = on ? '#12a594' : ''; c.style.boxShadow = on ? '0 0 0 3px rgba(18,165,148,.18)' : '' }))
+  const pair = A.el('div', 'row', '', edit); pair.style.alignItems = 'stretch'
+  const before = A.el('div', 'card', `<div style="padding:12px 16px;color:#6b7f87;font-size:14px">原图 · 采集商品主图</div><div class="pc" style="margin:0 16px 16px;border-radius:12px;overflow:hidden">${thumb(196, 'vac')}</div>`, pair); before.style.flex = '1'
+  A.show(before, 900)
+  const after = A.el('div', 'card', `<div style="padding:12px 16px;color:#6b7f87;font-size:14px" class="st">处理结果会出现在这里。</div><div class="pc rs" style="margin:0 16px 16px;border-radius:12px;overflow:hidden;border:1px solid #eef2f3">${shot('#ffffff', 'vac')}</div>`, pair); after.style.flex = '1'
+  A.show(after, 1000)
+  const rs = after.querySelector('.rs'); A.anim(rs, 4300, 600, { o: 0, s: .94 }, { o: 1, s: 1 })
+  A.text(after.querySelector('.st'), [[0, '处理结果会出现在这里。'], [3000, '排队中… 千问正在处理'], [4300, '白底图 · 已保存到图片库']])
+  A.hook(lt => { edit.style.display = lt < 6500 ? 'flex' : 'none' })
+  // 2. Generate a set of six
+  const suite = A.el('div', '', '', body); suite.style.cssText = 'display:none;flex-direction:column;gap:16px'
+  A.hook(lt => { suite.style.display = lt >= 6500 ? 'flex' : 'none' })
+  A.el('div', 'card', `<div class="row" style="padding:14px 18px"><div class="pc" style="width:56px;border-radius:10px;overflow:hidden">${thumb(196, 'vac')}</div><div><b style="color:#102b3a">车载无线吸尘器 大吸力手持两用</b><div style="color:#8a9aa0;font-size:13px;margin-top:4px">参考 3 张干净图片 · 卖点：12000Pa 吸力、双电池续航</div></div><div class="btn" style="margin-left:auto">${ic('spark', 16)}生成 6 张套图</div></div>`, suite)
+  const g = A.el('div', 'grid4 compact', '', suite); g.style.gridTemplateColumns = 'repeat(3,1fr)'
+  const set = [['白底图', '#ffffff', 'vac'], ['场景氛围图', 'linear-gradient(160deg,#d9e8f2,#9fb8c9)', 'vac'], ['细节图', 'linear-gradient(160deg,#f1ebe2,#d9c9b2)', 'brush'], ['模特场景图', 'linear-gradient(160deg,#e8efe6,#b9cdb4)', 'vac'], ['卖点图', 'linear-gradient(160deg,#fff1e0,#f3c995)', 'pump'], ['规格尺寸图', 'linear-gradient(160deg,#eef1f5,#cfd6df)', 'vac']]
+  set.forEach(([n, bg, k], i) => {
+    const c = A.el('div', 'card pc', `${shot(bg, k)}<div class="tx"><div class="tt" style="height:auto">${n}</div><div class="sl gs">生成中…</div></div>`, g)
+    A.show(c, 7000 + i * 80, 400, 12)
+    A.anim(c.querySelector('.im'), 8200 + i * 450, 500, { o: .15 }, { o: 1 })
+    A.text(c.querySelector('.gs'), [[0, '生成中…'], [8200 + i * 450, i === 0 ? '主图 1 · 首图' : `主图 ${i + 1}`]])
+  })
+  // 3. Upload to the album and replace the listing's main picture
+  const modal = A.el('div', 'modal', `<div class="dialog" style="width:660px"><h4>上传相册并替换主图</h4>
+    <div class="field"><small>1 · 店铺相册</small><div>示例汽车用品店 · 相册「新品主图」</div></div>
+    <div style="margin-bottom:14px"><small style="display:block;color:var(--muted);font-size:13px;margin-bottom:6px">2 · 替换哪件商品的哪张主图</small><div class="row" style="gap:12px;border:1px solid var(--line);border-radius:10px;padding:10px 14px"><div class="pc" style="width:64px;border-radius:8px;overflow:hidden">${thumb(196, 'vac')}</div><span style="color:#8a9aa0">→</span><div class="pc" style="width:64px;border-radius:8px;overflow:hidden;border:1px solid #eef2f3">${shot('#ffffff', 'vac')}</div><span>车载无线吸尘器 · 主图 1 · 首图</span></div></div>
+    <div style="color:#6b7f87;font-size:13px;margin-bottom:14px">原图保留记录，替换后可随时撤销</div>
+    <div class="row" style="justify-content:flex-end"><div class="btn ghost">取消</div><div class="btn">${ic('upload', 16)}上传并替换主图</div></div></div>`, main.parentElement.parentElement)
+  A.anim(modal, 12400, 400, { o: 0 }, { o: 1 }); A.hide(modal, 15300)
+  const toast = A.el('div', 'toast', `${ic('check', 18)}已上传到店铺相册，商品主图已替换`, body); A.anim(toast, 15400, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 17600)
+  A.cursor([[1300, 1150, 330], [2100, 1060, 262, 1], [3200, 1500, 500], [6200, 984, 418], [6800, 984, 418, 1], [7600, 1720, 262, 1], [11400, 1500, 600], [12000, 1100, 470, 1], [14600, 1640, 707, 1], [17400, 1640, 707]])
+})
+
+scene('queue', '上架队列', 21000, A => {
+  A.caption({ no: '04 · 上架队列', title: 'AI 自动上品', lead: '开启店铺 Agent 后，新采集的商品会自动排队，逐项检查后提交 1688。', steps: [[1300, '「系统设置」开启店铺 Agent 与“采集后自动上品”'], [3600, '队列逐项检查：图片、类目、属性、价格库存'], [10200, '有问题停在“需核对”并写明原因，不会盲目发布'], [14800, '点「草稿」直接预览：类目名称、属性、详情图可删改上传']] })
   const { body } = A.app({ active: '上架队列', title: '上架队列', sub: '采集后自动上品 · 目标店铺：示例汽车用品店' })
   const sw = A.el('div', 'card', `<div class="row" style="padding:16px 20px"><b style="font-size:17px;color:#102b3a">采集后自动上品</b><span style="color:#6b7f87;font-size:14px">新采集的 1688 商品自动进入队列</span><span class="tg" style="margin-left:auto;width:54px;height:30px;border-radius:15px;background:#cfd9db;position:relative"><i style="position:absolute;left:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 2px 6px #0003"></i></span></div>`, body)
   A.show(sw, 600)
@@ -440,20 +492,31 @@ scene('queue', '上架队列', 15000, A => {
     A.flag(n, 3900 + k * 1150, 'on')
     if (k < nodes.length - 1) { const l = A.el('div', 'link', '<i></i>', pipe); A.anim(l.firstChild, 3900 + k * 1150 + 300, 800, { sx: 0 }, { sx: 1 }) }
   })
-  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>商品</th><th>阶段</th><th>状态</th><th>说明</th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 9000)
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>商品</th><th>阶段</th><th>状态</th><th>说明</th><th></th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 9000)
   const tb = tbl.querySelector('tbody')
   ;[['车载无线吸尘器 大吸力手持两用', '已提交', '<span class="pill t">已提交平台</span>', '平台审核中，通过后在产品目录可见'], ['无线充气泵 数显胎压 便携打气', '属性映射', '<span class="pill b">处理中</span>', '正在匹配“充气泵”类目属性'], ['洗车拖把 伸缩长柄 软毛不伤漆', '读取资料', '<span class="pill w">需核对</span>', '来源类目 ID 缺失，请重新采集'], ['迷你充气泵 应急启动电源', 'AI 识图', '<span class="pill w">需核对</span>', '主图含其他店铺水印']]
-    .forEach((r2, i) => { const tr = A.el('tr', '', r2.map((c, j) => `<td${j === 3 ? ' style="color:#6b7f87;font-size:14px"' : ''}>${c}</td>`).join(''), tb); A.show(tr, 9300 + i * 160, 400, 10); if (i >= 2) A.flag(tr, 10400, 'hi') })
-  A.cursor([[800, 1500, 300], [2400, 1784, 254, 1], [4500, 1300, 520], [10600, 1500, 820], [13900, 1500, 820]])
+    .forEach((r2, i) => { const tr = A.el('tr', '', r2.map((c, j) => `<td${j === 3 ? ' style="color:#6b7f87;font-size:14px"' : ''}>${c}</td>`).join('') + '<td><span class="pill t">草稿</span></td>', tb); A.show(tr, 9300 + i * 160, 400, 10); if (i >= 2) A.flag(tr, 10400, 'hi', 14000) })
+  const draft = A.el('div', 'modal', `<div class="dialog" style="width:760px"><h4 style="margin-bottom:6px">发布草稿 · 车载无线吸尘器 大吸力手持两用</h4>
+    <div style="color:#6b7f87;font-size:14px;margin-bottom:16px">类目：<b style="color:#0d7c6e">汽车用品 › 车载电器 › 车载吸尘器</b> · 目标店铺：示例汽车用品店</div>
+    <div class="row" style="gap:10px;margin-bottom:14px"><span class="pill">品牌：无品牌</span><span class="pill">功率：120W</span><span class="pill">供电方式：充电式</span><span class="pill t">已按采集属性自动填好</span></div>
+    <div style="font-weight:600;color:#102b3a;margin-bottom:8px">详情描述 · <span class="dc">4</span> 张详情图</div>
+    <div class="row dt" style="gap:10px;align-items:flex-start"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px"><div class="btn ghost">${ic('upload', 15)}上传详情图</div><div class="btn">保存草稿</div></div></div>`, body.parentElement.parentElement)
+  A.anim(draft, 14800, 400, { o: 0 }, { o: 1 }); A.hide(draft, 20400)
+  const dt = draft.querySelector('.dt')
+  const blocks = [[196, 'vac'], [205, 'vac'], [28, 'pump'], [214, 'vac']].map(([h, k], i) => { const b = A.el('div', 'card', `<div class="pc" style="border-radius:10px 10px 0 0;overflow:hidden">${thumb(h, k)}</div><div style="display:flex;justify-content:center;gap:12px;padding:6px;color:#6b7f87;font-size:13px">↑ ↓ <span style="color:#a7412f">删除</span></div>`, dt); b.style.flex = '1'; return b })
+  A.anim(blocks[2], 17600, 450, { o: 1, s: 1 }, { o: 0, s: .9 }); A.hook(lt => { blocks[2].style.display = lt >= 18050 ? 'none' : '' })
+  A.text(draft.querySelector('.dc'), [[0, '4'], [18050, '3']])
+  A.cursor([[800, 1500, 300], [2400, 1784, 254, 1], [4500, 1300, 520], [10600, 1500, 820], [13800, 1790, 660], [14400, 1790, 660, 1], [16800, 1500, 760], [17500, 1569, 777, 1], [20200, 1500, 760]])
 })
 
 scene('catalog', '产品目录', 15000, A => {
-  A.caption({ no: '04 · 产品目录', title: '店铺在售商品', lead: '展示店铺在 1688 上架的商品：价格、库存、SKU，以及按订单统计的近 30 天销量。', steps: [[1300, '「同步平台商品」读取店铺最新上架情况'], [5600, '按销量、价格、库存排序，或搜索标题 / 货号'], [9800, '点开商品：刷新详情、关联产品资料、改库存']] })
+  A.caption({ no: '05 · 产品目录', title: '店铺在售商品', lead: '展示店铺在 1688 上架的商品：价格、库存、SKU，以及按订单统计的近 30 天销量。', steps: [[1300, '「同步变动」只读取上次同步后修改过的商品'], [5600, '按销量、价格、库存排序，或搜索标题 / 货号'], [9800, '点开商品：刷新详情、关联产品资料、改库存']] })
   const { body } = A.app({ active: '产品目录', title: '产品目录', sub: '店铺在 1688 上架的商品、价格库存与近 30 天销量' })
-  const r = A.el('div', 'row', `<div class="search">${ic('search', 18)}搜索标题、1688 商品 ID 或货号</div><div class="chip srt">最近更新 ▾</div><div class="btn">${ic('refresh', 16)}同步平台商品</div>`, body)
+  const r = A.el('div', 'row', `<div class="search">${ic('search', 18)}搜索标题、1688 商品 ID 或货号</div><div class="chip srt">最近更新 ▾</div><div class="btn">${ic('refresh', 16)}同步变动</div><div class="btn ghost">全量同步</div>`, body)
   A.text(r.querySelector('.srt'), [[0, '最近更新 ▾'], [6400, '近 30 天销量 ▾']])
   const note = A.el('div', 'row', '<div class="chip on">在售<span>61</span></div><div class="chip">已过期<span>18</span></div><span class="nt" style="margin-left:auto;color:#8a9aa0;font-size:14px"></span>', body)
-  A.text(note.querySelector('.nt'), [[0, '平台数据同步于 3 天前'], [2400, '正在同步：已读取 20 / 61 件'], [3100, '正在同步：已读取 40 / 61 件'], [3800, '正在同步：已读取 61 / 61 件'], [4400, '同步完成 · 平台数据同步于 刚刚']])
+  A.text(note.querySelector('.nt'), [[0, '平台数据同步于 昨天 18:20'], [2400, '增量同步：正在读取 3 / 3 件'], [3300, '增量同步完成：昨天 18:10 之后有变动的商品 3 件'], [5400, '平台数据同步于 刚刚']])
   const g = A.el('div', 'grid4 compact', '', body)
   const base = [[160, 'mop', '洗车拖把 伸缩长柄', '¥9.50–26.90', 1, 17], [196, 'vac', '车载无线吸尘器 大吸力', '¥56.50–88.00', 12, 673], [96, 'vac', '车载吸尘器 无刷电机', '¥57.00–80.00', 7, 394], [28, 'pump', '无线充气泵 数显胎压', '¥102–155', 12, 1389],
     [300, 'scent', '车载香薰 智能喷雾', '¥6.00', 0, 0], [12, 'pillow', '记忆棉腰靠 护腰', '¥15.90–22.00', 3, 54], [250, 'pump', '迷你充气泵 应急电源', '¥78.00', 2, 156], [210, 'brush', '多功能除雪铲', '¥3.50–6.50', 0, 0]]
@@ -467,11 +530,38 @@ scene('catalog', '产品目录', 15000, A => {
     <div class="row" style="justify-content:flex-end;margin-top:16px"><div class="btn ghost">${ic('refresh', 15)}刷新详情</div><div class="btn">库存变更预览</div></div></div>`, body.parentElement.parentElement)
   A.anim(modal, 10200, 400, { o: 0 }, { o: 1 }); A.hide(modal, 14400)
   A.text(modal.querySelector('.stk'), [[0, '120'], [12200, '200']])
-  A.cursor([[1300, 1500, 380], [2200, 1757, 243, 1], [5800, 1600, 300], [6300, 1617, 243, 1], [9200, 1100, 470], [10000, 1027, 430, 1], [11800, 1450, 563], [12100, 1450, 563, 1], [14200, 1450, 563]])
+  A.cursor([[1300, 1500, 380], [2200, 1640, 243, 1], [5800, 1500, 300], [6300, 1505, 243, 1], [9200, 1100, 470], [10000, 1027, 430, 1], [11800, 1450, 563], [12100, 1450, 563, 1], [14200, 1450, 563]])
+})
+
+scene('orders', '订单', 16000, A => {
+  A.caption({ no: '06 · 订单', title: '订单一览', lead: '店铺订单按状态分组，归属客服一目了然；详情实时读取 1688，买家信息由平台打码。', steps: [[1300, '按状态查看：待付款、待发货、已发货、有退款…'], [5400, '搜索订单号、商品或备注，查看归属客服'], [9000, '点「详情」查看进度、金额、物流与收货信息']] })
+  const { body, main } = A.app({ active: '订单', title: '订单', sub: '店铺订单列表 · 详情实时读取 1688' })
+  const tabs = A.el('div', 'row', '', body)
+  const groups = [['全部', 1286], ['待付款', 23], ['待发货', 41], ['已发货', 156], ['已完成', 1012], ['已关闭', 38], ['有退款', 16]].map(([n, c], i) => A.el('div', `chip ${i === 0 ? 'on' : ''}`, `${n}<span>${c}</span>`, tabs))
+  A.flag(groups[0], 0, 'on', 3200); A.flag(groups[2], 3200, 'on')
+  A.el('div', 'row', `<div class="search">${ic('search', 18)}<span class="q">订单号、商品名称或卖家备注</span></div><div class="chip">近 30 天 ▾</div>`, body)
+  A.text(body.querySelector('.q'), [[0, '订单号、商品名称或卖家备注'], [5800, '吸尘器']])
+  const sum = A.el('div', '', '', body); sum.style.cssText = 'color:#6b7f87;font-size:14px'
+  A.text(sum, [[0, '近 30 天 1,286 单 · 实付 ¥168,240.50 · 16 单有退款'], [3200, '待发货 41 单 · 实付 ¥6,912.00'], [5800, '待发货 · 搜索“吸尘器”：12 单 · 实付 ¥2,184.00']])
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>下单时间</th><th>商品</th><th>买家</th><th>实付</th><th>状态</th><th>归属客服</th><th></th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 700)
+  const tb = tbl.querySelector('tbody')
+  ;[['10/20 09:42', '车载无线吸尘器 曜石黑 ×2', '…a3f9c2', '¥113.00', '<span class="pill w">待发货</span>', '小雨'], ['10/20 09:15', '无线充气泵 数显 ×1', '…7d01be', '¥102.00', '<span class="pill w">待发货</span>', '小林'], ['10/19 21:08', '车载吸尘器 无刷 ×5', '…c88e41', '¥285.00', '<span class="pill w">待发货</span>', '阿杰'], ['10/19 17:30', '洗车拖把 伸缩 ×10', '…19ab07', '¥95.00', '<span class="pill w">待发货</span>', '美美']]
+    .forEach((r2, i) => { const tr = A.el('tr', '', r2.map((c, j) => `<td${j === 0 || j === 2 ? ' class="mono" style="font-size:14px"' : ''}>${c}</td>`).join('') + '<td><span class="pill t">详情</span></td>', tb); A.show(tr, 900 + i * 120, 400, 10); if (i === 0) A.flag(tr, 8600, 'hi') })
+  const drawer = A.el('div', 'aipanel', `<div class="h" style="background:#fff;color:#102b3a;border-bottom:1px solid var(--line)"><div><b>订单 3289•••••4471</b><small style="color:#8a9aa0">实时读取 1688 · 买家信息已由平台打码</small></div></div>
+    <div style="padding:18px;display:flex;flex-direction:column;gap:14px;font-size:15px">
+      <div class="row" style="gap:6px">${['下单', '付款', '发货', '收货', '完成'].map((n, i) => `<div style="flex:1;text-align:center"><div style="height:6px;border-radius:3px;background:${i < 2 ? '#12a594' : '#e3eaeb'}"></div><small style="color:${i < 2 ? '#0d7c6e' : '#8a9aa0'}">${n}</small></div>`).join('')}</div>
+      <div class="row"><div class="pc" style="width:64px;border-radius:10px;overflow:hidden">${thumb(196, 'vac')}</div><div><b>车载无线吸尘器 大吸力</b><div style="color:#6b7f87;font-size:13px">曜石黑 / 标准款 · ¥56.50 × 2</div></div></div>
+      <div style="line-height:1.9;color:#4d636c">货款 ¥113.00 · 运费 ¥0.00<br>优惠 / 改价 −¥0.00 · <b style="color:#102b3a">实付 ¥113.00</b></div>
+      <div style="line-height:1.9;color:#4d636c">收货人：陈* · 131****1700<br>浙江省金华市义乌市****</div>
+      <div style="color:#6b7f87;font-size:14px">买家留言：尽快发货，谢谢</div>
+      <div class="row"><span class="btn ghost" style="height:34px">${ic('msg', 15)}旺旺联系</span><span class="btn ghost" style="height:34px">${ic('link', 15)}在 1688 打开</span></div>
+    </div>`, main.parentElement.parentElement)
+  A.anim(drawer, 9300, 600, { x: 440 }, { x: 0 }); A.anim(drawer, 15200, 500, { x: 0 }, { x: 440 })
+  A.cursor([[1300, 1200, 300], [3000, 1150, 240, 1], [5200, 1300, 300], [5700, 1200, 300, 1], [8400, 1500, 460], [9100, 1809, 452, 1], [11600, 1600, 620], [15000, 1600, 620]])
 })
 
 scene('customers', '客户经营', 19000, A => {
-  A.caption({ no: '05 · 客户经营', title: '把买家变回头客', lead: '系统把每个 1688 买家的订单、聊天合在一起，自动分层并算出购买周期。', steps: [[1300, '按新客 / 复购 / 忠实客、等级、客单价筛选'], [5400, '「待跟进」列出今天该联系的客户与原因'], [9300, '写跟进、打标签、指定所属客服，计划到期自动提醒']] })
+  A.caption({ no: '07 · 客户经营', title: '把买家变回头客', lead: '系统把每个 1688 买家的订单、聊天合在一起，自动分层并算出购买周期。', steps: [[1300, '按新客 / 复购 / 忠实客、等级、客单价筛选'], [5400, '「待跟进」列出今天该联系的客户与原因'], [9300, '写跟进、打标签、指定所属客服，计划到期自动提醒']] })
   const { body } = A.app({ active: '客户经营', title: '客户经营', sub: '1688 客户档案、精细化分层、跟进与复购' })
   const tabs = A.el('div', 'row', '', body)
   const t1 = ['客户列表', '未成交客户', '待跟进', '分层与标签'].map((t, i) => A.el('div', `chip ${i === 0 ? 'on' : ''}`, t, tabs))
@@ -490,10 +580,36 @@ scene('customers', '客户经营', 19000, A => {
   A.cursor([[1200, 1300, 600], [5300, 1168, 240, 1], [8200, 1500, 700], [9300, 1751, 343, 1], [13300, 1410, 603, 1], [14700, 1503, 661, 1], [16400, 1300, 800], [18300, 1300, 800]])
 })
 
+scene('inquiry', '聊天与询盘', 17000, A => {
+  A.caption({ no: '08 · 聊天与询盘', title: '聊天与询盘', lead: '查看客服与买家的聊天记录，分析询盘的转化。买家消息原文由平台隐藏。', steps: [[1300, '「询盘分析」：每日询盘、新买家与付款转化'], [6400, '各客服询盘转化，买家在问什么一目了然'], [10400, '按旺旺名找买家，点「旺旺联系」直接发起聊天']] })
+  const { body } = A.app({ active: '聊天与询盘', title: '聊天与询盘', sub: '聊天记录 · 询盘分析 · 近 7 天' })
+  A.el('div', 'row', `<div class="chip">聊天记录</div><div class="chip on">询盘分析</div><div class="chip" style="margin-left:auto">${ic('search', 15)}按旺旺名查找买家</div>`, body)
+  const k = A.el('div', 'kpis', '', body); k.style.gridTemplateColumns = 'repeat(4,1fr)'
+  ;[['询盘', 486, v => String(Math.round(v))], ['新买家', 212, v => String(Math.round(v))], ['询盘后下单', 98, v => String(Math.round(v))], ['付款转化率', 18.1, v => `${v.toFixed(1)}%`]]
+    .forEach(([n, to, fmt], i) => { const c = A.el('div', 'card kpi', `<small>${n}</small><strong>0</strong>`, k); A.show(c, 700 + i * 120, 450, 14); A.count(c.querySelector('strong'), 900 + i * 120, 1200, 0, to, fmt) })
+  const lower = A.el('div', 'row', '', body); lower.style.alignItems = 'stretch'
+  const daily = A.el('div', 'card', '<div style="padding:14px 18px 0;font-weight:600;color:#102b3a">每日询盘</div>', lower); daily.style.flex = '1'
+  const bars = A.el('div', 'bars', '', daily); bars.style.height = '150px'
+  ;[62, 70, 58, 84, 76, 92, 66].forEach((h, i) => { const b = A.el('i', '', '', bars); b.style.height = `${h}%`; A.anim(b, 2600 + i * 80, 500, { o: 0, sy: 0 }, { o: 1, sy: 1 }) })
+  const ag = A.el('div', 'card', `<div style="padding:14px 18px 4px;font-weight:600;color:#102b3a">各客服询盘转化</div><table class="t"><tbody>${[['小林', 168, '21%'], ['小雨', 131, '19%'], ['阿杰', 102, '11%'], ['美美', 85, '17%']].map(([n, q, c], i) => `<tr class="r${i}"><td><b>${n}</b></td><td>询盘 ${q}</td><td>付款转化 ${c}</td></tr>`).join('')}</tbody></table>`, lower); ag.style.flex = '1.1'
+  A.show(ag, 6400); A.flag(ag.querySelector('.r2'), 7600, 'hi', 10000)
+  const kw = A.el('div', 'row', `<span style="color:#6b7f87;font-size:14px">买家在问什么：</span><span class="chip">发货 22</span><span class="chip">退款 14</span><span class="chip">发票 5</span><span class="chip">定制 4</span>`, body); A.show(kw, 7200)
+  const finder = A.el('div', 'modal', `<div class="dialog" style="width:620px"><h4>按旺旺名查找买家</h4>
+    <div class="field"><small>买家旺旺名（登录名）</small><div class="ty"></div></div>
+    <div class="card fr" style="padding:14px 16px"><div class="row"><b style="color:#102b3a">买家 …a3f9c2</b><span class="pill t">90 天内付过款</span><span class="btn" style="margin-left:auto;height:34px">${ic('msg', 15)}旺旺联系</span></div>
+    <div style="color:#6b7f87;font-size:14px;margin-top:8px">近 90 天 3 次会话（小雨）· 2 单已付款 ¥3,560 · 最近下单 10/20</div></div>
+    <div style="color:#8a9aa0;font-size:13px;margin-top:12px">旺旺名只用于这一次查询，不会保存；1688 只允许人工逐个查询。</div></div>`, body.parentElement.parentElement)
+  A.anim(finder, 10600, 400, { o: 0 }, { o: 1 }); A.hide(finder, 16200)
+  A.type(finder.querySelector('.ty'), 11200, '示例汽配批发', 8)
+  A.show(finder.querySelector('.fr'), 12600, 400, 10)
+  const toast = A.el('div', 'toast', `${ic('check', 18)}已打开与该买家的旺旺聊天窗口`, body); toast.style.zIndex = '20'; A.anim(toast, 14300, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 16400)
+  A.cursor([[1300, 1300, 420], [6000, 1500, 520], [10000, 1760, 243, 1], [12900, 1500, 560], [13900, 1655, 590, 1], [16300, 1655, 590]])
+})
+
 scene('performance', '客服绩效', 19000, A => {
-  A.caption({ no: '06 · 客服绩效', title: '客观衡量客服', lead: '接待、响应、转化和业绩全部按聊天与订单自动计算，财务维护提成规则。', steps: [[1300, '「客服对比」：接待、首次响应、未回复、转化率'], [7000, '订单按“归属方案”算给客服，可切换对比'], [11800, '「工资管理」按阶梯提成生成工资单']] })
+  A.caption({ no: '09 · 客服绩效', title: '客观衡量客服', lead: '接待、响应、转化和业绩全部按聊天与订单自动计算，财务维护提成规则。', steps: [[1300, '「客服对比」：接待、首次响应、未回复、转化率'], [7000, '订单按“归属方案”算给客服，可切换对比'], [11800, '「工资管理」按阶梯提成生成工资单']] })
   const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '1688 绩效应用授权、指标口径与绩效方案' })
-  A.el('div', 'row', ['客服对比', '综合排行', '聊天分析', '订单归属', '工资管理', '客服账号'].map((t, i) => `<div class="chip ${i === 0 ? 'on' : ''}">${t}</div>`).join(''), body)
+  A.el('div', 'row', ['客服对比', '综合排行', '回复质量', '关键词', '订单归属', '工资管理', '客服账号'].map((t, i) => `<div class="chip ${i === 0 ? 'on' : ''}">${t}</div>`).join(''), body)
   const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>客服</th><th>接待</th><th>首次响应</th><th>未回复</th><th>询单转化</th><th style="width:240px">绩效销售额</th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 700)
   const tb = tbl.querySelector('tbody')
   const agents = [['小林（主账号）', 412, '38 秒', 3, '15.2%', 86400, 1], ['小雨', 268, '52 秒', 1, '13.8%', 52300, .6], ['阿杰', 197, '1 分 24 秒', 6, '9.6%', 28700, .33], ['美美', 154, '44 秒', 0, '12.1%', 21900, .25]]
@@ -517,9 +633,9 @@ scene('performance', '客服绩效', 19000, A => {
 })
 
 scene('quality', '回复质量', 16000, A => {
-  A.caption({ no: '07 · 回复质量', title: '话术与合规', lead: '系统读取客服发出的消息（买家原文平台不提供），联系方式先遮盖再保存，文本保留 90 天。', steps: [[1300, '每位客服的回复字数、极短回复、发图次数'], [6000, '客服发手机号、微信、站外付款用语自动报警'], [10600, '点开记录，直接定位到那条消息复盘']] })
+  A.caption({ no: '10 · 回复质量', title: '话术与合规', lead: '系统读取客服发出的消息（买家原文平台不提供），联系方式先遮盖再保存，文本保留 90 天。', steps: [[1300, '每位客服的回复字数、极短回复、发图次数'], [6000, '客服发手机号、微信、站外付款用语自动报警'], [10600, '点开记录，直接定位到那条消息复盘']] })
   const { body, main } = A.app({ active: '客服绩效', title: '客服绩效', sub: '回复质量 · 近 7 天' })
-  A.el('div', 'row', ['客服对比', '聊天分析', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 2 ? 'on' : ''}">${t}</div>`).join(''), body)
+  A.el('div', 'row', ['客服对比', '综合排行', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 2 ? 'on' : ''}">${t}</div>`).join(''), body)
   const k = A.el('div', 'kpis', '', body); k.style.gridTemplateColumns = 'repeat(4,1fr)'
   ;[['站外交易风险', 1, v => String(Math.round(v)), '客服发出联系方式或外部链接', 'warn'], ['平均回复字数', 18.6, v => v.toFixed(1), '不含链接、标点与图片', ''], ['极短回复占比', 12, v => `${Math.round(v)}%`, '“嗯 / 是的 / 好” 3 字以内', ''], ['文本覆盖率', 98, v => `${Math.round(v)}%`, '已采集文本的客服消息', '']]
     .forEach(([n, to, fmt, note, cls], i) => {
@@ -551,9 +667,9 @@ scene('quality', '回复质量', 16000, A => {
 })
 
 scene('keywords', '关键词库', 15000, A => {
-  A.caption({ no: '08 · 关键词库', title: '听见买家在问什么', lead: '买家原文被平台隐藏，关键词命中是了解买家意图的办法；新词只对之后的新消息生效。', steps: [[1300, '一键添加常用词：售后退款、投诉差评、物流催单…'], [6000, '统计买家和客服提到每个词的次数'], [10300, '经营看板提醒“买家提到退款/投诉”']] })
+  A.caption({ no: '11 · 关键词库', title: '听见买家在问什么', lead: '买家原文被平台隐藏，关键词命中是了解买家意图的办法；新词只对之后的新消息生效。', steps: [[1300, '一键添加常用词：售后退款、投诉差评、物流催单…'], [6000, '统计买家和客服提到每个词的次数'], [10300, '经营看板提醒“买家提到退款/投诉”']] })
   const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '关键词库 · 保存在 1688，对所有客服账号生效' })
-  A.el('div', 'row', ['客服对比', '聊天分析', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 3 ? 'on' : ''}">${t}</div>`).join(''), body)
+  A.el('div', 'row', ['客服对比', '综合排行', '回复质量', '关键词', '订单归属', '工资管理'].map((t, i) => `<div class="chip ${i === 3 ? 'on' : ''}">${t}</div>`).join(''), body)
   const row = A.el('div', 'row', '', body); row.style.alignItems = 'stretch'
   const lib = A.el('div', 'card', `<div style="padding:16px 18px;font-weight:700;color:#102b3a;display:flex;gap:8px;align-items:center">${ic('tag', 18)}当前词库 <span class="pill t cnt">0</span></div><div class="kws" style="padding:0 18px 16px;display:flex;flex-wrap:wrap;gap:8px;min-height:120px;align-content:flex-start"><span class="emp" style="color:#8a9aa0;font-size:14px">词库还是空的</span></div>`, row); lib.style.flex = '1.1'
   A.show(lib, 600)
@@ -577,7 +693,7 @@ scene('keywords', '关键词库', 15000, A => {
 })
 
 scene('sync', '数据同步', 12000, A => {
-  A.caption({ no: '09 · 数据同步', title: '数据从哪里来', lead: '后台每 15 分钟自动同步订单、退款和聊天；打开页面只读本地数据，不消耗接口额度。', steps: [[1300, '手动同步可选：今天 / 近 7 天 / 近 30 天 / 全部'], [5200, '「历史数据范围」默认近 30 天，可改 60 / 90 天'], [8400, '每日调用额度有保护，用满后次日自动继续']] })
+  A.caption({ no: '12 · 数据同步', title: '数据从哪里来', lead: '后台每 15 分钟自动同步订单、退款和聊天；打开页面只读本地数据，不消耗接口额度。', steps: [[1300, '手动同步可选：今天 / 近 7 天 / 近 30 天 / 全部'], [5200, '「历史数据范围」默认近 30 天，可改 60 / 90 天'], [8400, '每日调用额度有保护，用满后次日自动继续']] })
   const { body } = A.app({ active: '客服绩效', title: '客服绩效', sub: '客服账号 · 同步设置' })
   const bar = A.el('div', 'card', `<div class="row" style="padding:18px 20px;flex-wrap:wrap"><span style="color:#4d636c">本次同步</span><span class="chip on sc">今天 ▾</span><div class="btn sb">${ic('refresh', 16)}立即同步</div><span style="color:#4d636c;margin-left:24px">历史数据范围</span><span class="chip hr">近 30 天 ▾</span></div>`, body)
   A.show(bar, 600)
@@ -591,8 +707,30 @@ scene('sync', '数据同步', 12000, A => {
   A.cursor([[1200, 1300, 420], [2500, 1162, 261, 1], [5300, 1300, 330], [6000, 1418, 261], [8400, 1500, 640], [11500, 1500, 640]])
 })
 
+scene('accounts', '账户管理', 12000, A => {
+  A.caption({ no: '13 · 账户管理', title: '为同事开设账号', lead: '超级管理员在「账户管理」开设管理员账号；管理员可用全部业务功能，但不能管理账号。', steps: [[1300, '「开设账号」：姓名、登录邮箱，随机生成初始密码'], [6000, '登录信息只显示一次，复制后交给使用者'], [8800, '停用或重置密码，对方立即退出登录']] })
+  const { body, main } = A.app({ active: '账户管理', title: '账户管理', sub: '超级管理员 · 开设与管理账号' })
+  A.el('div', 'row', `<span style="color:#6b7f87;font-size:14px">共 3 个账号</span><div class="btn" style="margin-left:auto">${ic('userplus', 16)}开设账号</div>`, body)
+  const tbl = A.el('div', 'card', `<table class="t"><thead><tr><th>姓名</th><th>登录邮箱</th><th>角色</th><th>状态</th><th>最近登录</th><th></th></tr></thead><tbody></tbody></table>`, body); A.show(tbl, 700)
+  const tb = tbl.querySelector('tbody')
+  ;[['店长（我）', 'boss@example.com', '<span class="pill b">超级管理员</span>', '<span class="pill t">启用</span>', '刚刚', ''], ['运营小周', 'zhou@example.com', '<span class="pill">管理员</span>', '<span class="pill t">启用</span>', '今天 09:12', '<span class="pill">重置密码</span> <span class="pill">停用</span>']]
+    .forEach((r2, i) => A.show(A.el('tr', '', r2.map(c => `<td>${c}</td>`).join(''), tb), 900 + i * 120, 400, 10))
+  const added = A.el('tr', '', '<td>王店长</td><td>wang@example.com</td><td><span class="pill">管理员</span></td><td><span class="pill t">启用</span></td><td>—</td><td><span class="pill">重置密码</span> <span class="pill">停用</span></td>', tb)
+  A.anim(added, 9000, 500, { o: 0, y: 10 }, { o: 1, y: 0 }); A.flag(added, 9000, 'hi')
+  const modal = A.el('div', 'modal', `<div class="dialog"><h4 class="mt">开设账号</h4>
+    <div class="f1"><div class="field"><small>姓名</small><div class="n"></div></div><div class="field"><small>登录邮箱</small><div class="e"></div></div><div class="row"><div class="field" style="flex:1"><small>角色</small><div>管理员</div></div><div class="field" style="flex:1"><small>初始密码</small><div class="mono">随机生成 ••••••••••••</div></div></div></div>
+    <div class="f2" style="display:none"><p style="margin:0 0 12px;color:#4d636c">请把下面的登录信息交给使用者。密码只显示这一次，关闭后无法再查看。</p><div class="field"><div class="mono">wang@example.com<br>Kq7m2Rx9vT4p</div></div></div>
+    <div class="row" style="justify-content:flex-end"><div class="btn ghost">取消</div><div class="btn ok">开设账号</div></div></div>`, main.parentElement.parentElement)
+  A.anim(modal, 1800, 400, { o: 0 }, { o: 1 }); A.hide(modal, 8700)
+  A.type(modal.querySelector('.n'), 2500, '王店长', 6); A.type(modal.querySelector('.e'), 3400, 'wang@example.com', 14)
+  A.hook(lt => { const done = lt >= 5900; modal.querySelector('.f1').style.display = done ? 'none' : ''; modal.querySelector('.f2').style.display = done ? '' : 'none' })
+  A.text(modal.querySelector('.mt'), [[0, '开设账号'], [5900, '账号已开设']]); A.text(modal.querySelector('.ok'), [[0, '开设账号'], [5900, '复制登录信息']])
+  const toast = A.el('div', 'toast', `${ic('check', 18)}已复制登录信息`, body); toast.style.zIndex = '20'; A.anim(toast, 7600, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 9200)
+  A.cursor([[1200, 1500, 300], [1600, 1755, 243, 1], [4800, 1500, 640], [5500, 1530, 640, 1], [7300, 1500, 600, 1], [9600, 1700, 450], [11600, 1700, 450]])
+})
+
 scene('ai', 'AI 助手', 20000, A => {
-  A.caption({ no: '10 · AI 助手', title: '有问题，问销途 AI', lead: '右侧 AI 按需查询系统数据再回答，包括回复质量、站外风险和关键词命中。', steps: [[1300, '任意页面点「问 AI」，直接用中文提问'], [6000, '回答注明查询了哪些数据，可点开历史对话'], [12600, '写跟进 / 改标签 / 改所属客服：确认后才保存']] })
+  A.caption({ no: '14 · AI 助手', title: '有问题，问销途 AI', lead: '右侧 AI 按需查询系统数据再回答，回答边生成边显示；也能分析回复质量、站外风险和关键词命中。', steps: [[1300, '任意页面点「问 AI」，直接用中文提问'], [6000, '先显示正在查询的数据，回答随即逐字出现'], [12600, '写跟进 / 改标签 / 改所属客服：确认后才保存']] })
   const { body, main } = A.app({ active: '客户经营', title: '客户经营', sub: '1688 客户档案、精细化分层、跟进与复购' })
   A.el('div', 'card', `<table class="t"><thead><tr><th>客户</th><th>类型</th><th>累计</th><th>状态</th></tr></thead><tbody><tr><td>张老板 · 汽配批发</td><td><span class="pill t">忠实客</span></td><td>¥45,227</td><td><span class="pill w">超周期未跟进</span></td></tr><tr><td>李女士 · 洗车店</td><td><span class="pill b">复购客</span></td><td>¥8,640</td><td><span class="pill w">计划跟进已到期</span></td></tr><tr><td>王先生 · 网店分销</td><td><span class="pill">新客</span></td><td>¥1,280</td><td><span class="pill r">下单未付款</span></td></tr></tbody></table>`, body)
   const panel = A.el('div', 'aipanel', `<div class="h"><i>${ic('spark')}</i><div><b>销途 AI</b><small>千问已连接 · 可查询系统数据</small></div></div><div class="ctx">当前上下文：客户经营 · 示例汽车用品店</div><div class="chat"></div>
@@ -602,13 +740,18 @@ scene('ai', 'AI 助手', 20000, A => {
   A.type(input, 2600, '今天最该优先跟进哪 3 个客户？帮第一位拟一条跟进。', 14)
   A.hook(lt => { if (lt >= 6200) input.textContent = '' })
   const q = A.el('div', 'msg u', '今天最该优先跟进哪 3 个客户？帮第一位拟一条跟进。', chat); A.show(q, 6200, 350, 10)
-  const think = A.el('div', 'msg a', '<div class="dots"><i></i><i></i><i></i></div><div class="tools" style="margin-top:6px">正在查询客户列表、客户资料…</div>', chat)
-  A.anim(think, 6700, 300, { o: 0 }, { o: 1 }); A.anim(think, 8900, 200, { o: 1 }, { o: 0 })
-  A.hook(lt => { think.style.display = lt >= 9100 ? 'none' : ''; think.querySelectorAll('.dots i').forEach((d, i) => { d.style.opacity = .35 + .65 * Math.max(0, Math.sin((lt / 220) - i)) }) })
-  const ans = A.el('div', 'msg a', `<b>优先跟进这 3 位：</b><ol><li><b>张老板</b>：忠实客，采购周期约 2 天，已断档 3 天</li><li><b>李女士</b>：计划跟进今天到期</li><li><b>王先生</b>：下单未付款 ¥1,280，建议催付</li></ol>
+  const think = A.el('div', 'msg a', '<div class="dots"><i></i><i></i><i></i></div><div class="tools" style="margin-top:6px">正在查询：客户列表、客户资料…</div>', chat)
+  A.anim(think, 6700, 300, { o: 0 }, { o: 1 }); A.anim(think, 7900, 150, { o: 1 }, { o: 0 })
+  A.hook(lt => { think.style.display = lt >= 8050 ? 'none' : ''; think.querySelectorAll('.dots i').forEach((d, i) => { d.style.opacity = .35 + .65 * Math.max(0, Math.sin((lt / 220) - i)) }) })
+  // Streamed answer: each line is written out as it arrives, then the confirmation card and the sources line.
+  const ans = A.el('div', 'msg a', `<b class="s0"></b><ol><li class="l1"><b>张老板</b>：<span class="s1"></span></li><li class="l2"><b>李女士</b>：<span class="s2"></span></li><li class="l3"><b>王先生</b>：<span class="s3"></span></li></ol>
     <div class="confirm"><b>${ic('clock', 14)} 写跟进 · 张老板</b><p>回访两批大货签收情况，推荐升级款并报 3000 件阶梯价。</p><small style="color:#6b7f87">下次跟进：10/22 09:00</small><div class="bt" style="margin-top:8px"><span class="ok cf">${ic('check', 13)}确认执行</span><span>忽略</span></div></div>
-    <div class="tools" style="margin-top:8px">${ic('db', 12)}已查询：客户列表、客户资料 · 8.4 秒</div>`, chat)
-  A.show(ans, 9100, 500, 12)
+    <div class="tools sr" style="margin-top:8px"></div>`, chat)
+  A.anim(ans, 8050, 250, { o: 0 }, { o: 1 })
+  A.type(ans.querySelector('.s0'), 8100, '优先跟进这 3 位：', 22)
+  ;[['忠实客，采购周期约 2 天，已断档 3 天', 8600], ['计划跟进今天到期', 9800], ['下单未付款 ¥1,280，建议催付', 10500]].forEach(([t, at], i) => { A.anim(ans.querySelector(`.l${i + 1}`), at, 150, { o: 0 }, { o: 1 }); A.type(ans.querySelector(`.s${i + 1}`), at + 150, t, 24) })
+  const card = ans.querySelector('.confirm'); A.show(card, 11800, 400, 8); A.hook(lt => { card.style.display = lt >= 11800 ? '' : 'none' })
+  A.text(ans.querySelector('.sr'), [[0, `<span style="color:#6b7f87">生成中…</span>`], [12300, `${ic('db', 12)}已查询：客户列表、客户资料 · 6.2 秒`]])
   A.text(ans.querySelector('.bt'), [[0, `<span class="ok cf">${ic('check', 13)}确认执行</span><span>忽略</span>`], [15600, `<span style="border:0;background:none;color:#0d7c6e;font-weight:600">${ic('check', 13)} 已保存</span>`]])
   const toast = A.el('div', 'toast', `${ic('check', 18)}跟进已保存到张老板的档案`, body); toast.style.left = '34%'; toast.style.top = '470px'; A.anim(toast, 15800, 400, { o: 0, y: -10 }, { o: 1, y: 0 }); A.hide(toast, 19000)
   A.cursor([[800, 1600, 600], [1300, 1787, 158, 1], [3000, 1600, 880], [5900, 1812, 916, 1], [13600, 1650, 780], [15300, 1525, 630, 1], [19200, 1525, 640]])
@@ -619,7 +762,7 @@ scene('outro', '', 8000, A => {
   const t = A.el('h1', '', '开始使用销途 AI CRM', h); t.style.fontSize = '76px'; A.show(t, 200, 700, 30)
   const p = A.el('p', '', '每天三步：看经营看板 → 处理待跟进 → 用 AI 复盘', h); A.show(p, 600, 700)
   const r = A.el('div', 'recap')
-  ;[['商品线', '采集 → 上架队列 → 产品目录，AI 把关图片与属性'], ['客户线', '自动分层与购买周期，待跟进清单不漏人'], ['团队线', '话术质检、站外风险提醒，客服响应、转化、业绩归属与提成自动计算'], ['安全与数据', '按权限显示数据；AI 修改须确认，全程留痕']]
+  ;[['商品线', '采集 → 图片工坊 → 上架队列 → 产品目录，AI 把关图片与属性'], ['客户线', '订单、聊天与询盘，自动分层与待跟进清单不漏人'], ['团队线', '话术质检、站外风险提醒，客服响应、转化、业绩归属与提成自动计算'], ['安全与数据', '账号由超级管理员开设，按权限显示数据；AI 修改须确认，全程留痕']]
     .forEach(([b, s2], i) => A.show(A.el('div', '', `<b>${b}</b><span>${s2}</span>`, r), 1300 + i * 180, 500, 20))
   const f = A.el('p', '', '遇到问题，随时点右上角「问 AI」'); f.style.cssText = 'position:absolute;left:0;right:0;top:720px;text-align:center;font-size:28px;color:#0d7c6e;font-weight:600'; f.style.top = '770px'
   A.show(f, 2600)
@@ -628,17 +771,23 @@ scene('outro', '', 8000, A => {
 /* ───────────── narration (seconds relative to each scene; exported as SRT) ───────────── */
 const NARRATION = {
   intro: [[0.4, 2.8, '欢迎使用销途 AI CRM。'], [2.9, 6.9, '它把 1688 店铺的商品、客户和客服团队放在一个系统里管理。']],
-  overview: [[0.8, 4.0, '先认识左侧导航，它的顺序就是日常工作流。'], [4.2, 7.2, '商品线：采集货源、上架队列、产品目录。'], [7.4, 10.6, '客户线：客户经营和客服绩效，遇到问题随时问 AI。']],
+  overview: [[0.8, 4.0, '先认识左侧导航，它的顺序就是日常工作流。'], [4.2, 7.4, '商品线：采集货源、处理图片、上架队列、产品目录。'], [7.6, 11.6, '客户线：订单、客户经营、聊天与询盘和客服绩效。']],
   dashboard: [[0.8, 3.4, '登录后首先看到的是经营看板。'], [3.5, 6.6, '切换今天、近 7 天或近 30 天，数字会自动和上一周期对比。'], [6.8, 10.6, '下方是每天的成交趋势，鼠标悬停可以看当天明细。'],
     [10.8, 14.0, '右侧「待处理」列出待跟进客户、未付款订单等事项。'], [14.1, 16.6, '点任意一项，直接跳到对应页面处理。']],
   collect: [[0.6, 2.95, '接下来是 1688 商品采集。'], [3.0, 5.2, '在 1688 商品页点「采集此商品」，'], [5.2, 8.4, '标题、图片、SKU 和价格会一起保存进 CRM。'], [8.6, 11.6, '回到采集工作区，新商品出现在最前面。'],
     [11.6, 13.8, '顶部按处理阶段分类，方便逐个处理。'], [13.8, 16.8, '标为“需核对”的商品会写明原因，比如类目 ID 缺失。']],
+  images: [[0.6, 3.6, '「图片编辑」用 AI 处理商品图片，'], [3.6, 6.4, '可以做白底图、换背景，或改成指定尺寸。'], [6.6, 9.4, '「电商套图」根据商品资料一次生成 6 张主图，'], [9.4, 12.2, '包括白底图、场景图、细节图、卖点图和尺寸图。'],
+    [12.4, 15.2, '选好图片，一键上传店铺相册并替换主图，'], [15.2, 17.6, '原图保留记录，随时可以撤销。']],
   queue: [[0.5, 3.8, '开启“采集后自动上品”后，新采集的商品会自动排队。'], [3.9, 6.6, 'AI 会读取资料，识别图片里的水印和品牌 Logo，'], [6.6, 10.0, '再按平台规则映射属性和 SKU，校验后提交 1688。'],
-    [10.2, 14.6, '有问题的商品停在“需核对”并写明原因，不会盲目发布。']],
-  catalog: [[0.5, 3.1, '产品目录展示店铺在 1688 已上架的商品。'], [3.1, 5.5, '点「同步平台商品」，读取最新的上架情况。'], [5.6, 9.6, '可以按近 30 天销量、价格或库存排序，快速找到热销和滞销商品。'],
+    [10.2, 14.6, '有问题的商品停在“需核对”并写明原因，不会盲目发布。'], [14.8, 17.6, '点「草稿」可以直接预览要发布的内容，'], [17.6, 20.6, '类目显示中文名称，详情图可以删除、排序或上传。']],
+  catalog: [[0.5, 3.1, '产品目录展示店铺在 1688 已上架的商品。'], [3.1, 5.5, '点「同步变动」，只读取上次同步后改过的商品。'], [5.6, 9.6, '可以按近 30 天销量、价格或库存排序，快速找到热销和滞销商品。'],
     [10.0, 14.6, '点开商品，可以刷新详情、关联产品资料，或修改库存。']],
+  orders: [[0.6, 3.4, '「订单」页列出店铺的全部订单，'], [3.4, 5.4, '按待付款、待发货、有退款等状态分组。'], [5.6, 8.8, '可以搜索订单号或商品，每单都标明归属客服。'],
+    [9.0, 12.2, '点「详情」实时查看订单进度、金额和物流，'], [12.2, 15.4, '买家和收货信息由 1688 打码，系统不保存。']],
   customers: [[0.5, 3.2, '客户经营把每位买家的订单和聊天合在一起，'], [3.2, 6.0, '自动分出新客、复购客和忠实客，算出购买周期。'], [6.0, 9.2, '「待跟进」列出今天该联系的客户，以及联系的原因。'],
     [9.3, 13.3, '点「写跟进」记录这次沟通的内容，'], [13.3, 15.4, '再设置下次跟进时间，到期自动提醒。'], [15.6, 18.6, '还可以给客户打标签，或指定所属客服。']],
+  inquiry: [[0.6, 3.4, '「聊天与询盘」查看客服和买家的聊天记录。'], [3.4, 6.2, '询盘分析统计每天的询盘、新买家和付款转化，'], [6.4, 10.2, '还能对比各客服的询盘转化，看买家都在问什么。'],
+    [10.4, 13.6, '输入买家的旺旺名，就能找到他的聊天和订单，'], [13.6, 16.6, '点「旺旺联系」直接发起聊天，旺旺名不会保存。']],
   performance: [[0.8, 4.0, '客服绩效按聊天和订单自动计算，不需要手工统计。'], [4.0, 7.0, '对比每位客服的接待、首次响应、未回复和转化率。'], [7.0, 11.4, '订单按“归属方案”算给客服，财务可以切换方案对比结果。'],
     [11.8, 15.0, '「工资管理」按阶梯提成规则，自动生成每个人的工资单。'], [15.0, 18.4, '提成按档位逐级计算，过程清楚、方便核对。']],
   quality: [[0.6, 3.2, '回复质量：系统只读取客服一侧的消息文本，'], [3.2, 5.8, '联系方式在保存前就会被遮盖。'], [6.0, 9.0, '客服发手机号、微信或站外付款用语，会自动列为风险。'], [9.0, 10.55, '极短回复和生硬用语也有提示。'],
@@ -647,7 +796,8 @@ const NARRATION = {
     [10.3, 14.4, '买家提到退款或投诉时，经营看板会直接提醒。']],
   sync: [[0.5, 3.1, '系统每 15 分钟自动同步订单、退款和聊天。'], [3.1, 5.6, '也可以手动只同步今天、近 7 天或近 30 天。'], [5.6, 8.6, '「历史数据范围」默认近 30 天，可以改成 60 或 90 天。'],
     [8.7, 11.8, '每日接口调用有保护上限，用满后会在第二天自动继续。']],
-  ai: [[0.8, 2.8, '最后是销途 AI 助手。'], [2.9, 6.0, '在任意页面点「问 AI」，直接用中文提问。'], [6.3, 9.0, 'AI 会先查询系统里的真实数据，再给出回答。'], [9.2, 12.4, '也能分析回复质量、站外风险和关键词命中。'],
+  accounts: [[0.6, 3.6, '超级管理员可以在「账户管理」为同事开设账号。'], [3.6, 6.0, '填写姓名和登录邮箱，系统随机生成初始密码。'], [6.0, 8.8, '登录信息只显示一次，复制后交给使用者。'], [8.8, 11.6, '停用或重置密码后，对方会立即退出登录。']],
+  ai: [[0.8, 2.8, '最后是销途 AI 助手。'], [2.9, 6.0, '在任意页面点「问 AI」，直接用中文提问。'], [6.3, 9.2, 'AI 先查询系统里的真实数据，回答边生成边显示。'], [9.4, 12.4, '也能分析回复质量、站外风险和关键词命中。'],
     [12.4, 15.4, '写跟进、改标签或改所属客服时，AI 只生成确认卡片，'], [15.4, 19.6, '你点「确认执行」后才会保存，全程留有记录。']],
   outro: [[0.6, 3.6, '每天三步：看经营看板，处理待跟进，用 AI 复盘。'], [3.8, 7.6, '遇到问题，随时点右上角「问 AI」。祝经营顺利！']],
 }

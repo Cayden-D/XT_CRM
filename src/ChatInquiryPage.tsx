@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { AlertCircle, ChevronRight, LoaderCircle, MessagesSquare, Search, ShieldCheck, Store, X } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, LoaderCircle, MessageSquareText, MessagesSquare, Search, ShieldCheck, Store, X } from 'lucide-react'
 import type { SessionUser } from './api'
 import { useAiFocusPart } from './aiFocus'
 import { ChatAnalysisView, Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
 import { agentLabel } from './PerformanceReports'
-import { getChatDetail, getInquiry, getPerformanceConnections, lookupBuyer, type BuyerLookup, type ChatDetail, type InquirySummary, type PerformanceConnection } from './performanceApi'
+import { getChatDetail, getInquiry, getKeywordSessions, getPerformanceConnections, lookupBuyer, type BuyerLookup, type ChatDetail, type InquirySummary, type KeywordSession, type PerformanceConnection } from './performanceApi'
 import './1688.css'
 
 type Tab = 'chats' | 'inquiry'
@@ -78,7 +78,8 @@ function BuyerFinder({ connectionId, setError }: { connectionId: string; setErro
 
 /** 询盘分析: pre-sales inquiries (one per buyer per day, after-sales chats excluded) and what became of them. */
 function InquiryView({ connectionId, from, to, setError }: { connectionId: string; from: string; to: string; setError: (text: string) => void }) {
-  const [data, setData] = useState<InquirySummary | null>(null), [loading, setLoading] = useState(true)
+  const [data, setData] = useState<InquirySummary | null>(null), [loading, setLoading] = useState(true), [open, setOpen] = useState('')
+  useEffect(() => setOpen(''), [connectionId, from, to])
   const load = useCallback(() => {
     let live = true; setLoading(true)
     getInquiry(connectionId, from, to).then(r => { if (live) setData(r.data) }).catch(cause => live && setError(message(cause))).finally(() => live && setLoading(false))
@@ -109,8 +110,31 @@ function InquiryView({ connectionId, from, to, setError }: { connectionId: strin
     <div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>客服</th><th>询盘</th><th>下单</th><th>付款</th><th>付款转化率</th></tr></thead>
       <tbody>{data.agents.map(a => <tr key={a.agent_id}><td><strong>{agentLabel(a)}</strong></td><td>{a.inquiries}</td><td>{a.ordered}</td><td>{a.paid}</td><td>{pct(a.paid, a.inquiries)}</td></tr>)}</tbody></table></div>
     <h3 className="perf-chart-title">买家在问什么</h3>
-    {data.keywords.length ? <ul className="perf-bars">{data.keywords.map(k => <li key={k.word}><span className="perf-bar-label">{k.word}</span><div className="perf-bar-track"><i style={{ width: `${k.hits / data.keywords[0].hits * 100}%` }} /></div><span className="perf-bar-value">{k.hits}<small> · {k.sessions} 个会话</small></span></li>)}</ul>
+    {data.keywords.length ? <ul className="perf-bars inquiry-keywords">{data.keywords.map(k => <li key={k.word} className={open === k.word ? 'open' : ''}>
+      <button className="inquiry-keyword-row" aria-expanded={open === k.word} onClick={() => setOpen(open === k.word ? '' : k.word)}>
+        <span className="perf-bar-label">{open === k.word ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{k.word}</span><div className="perf-bar-track"><i style={{ width: `${k.hits / data.keywords[0].hits * 100}%` }} /></div><span className="perf-bar-value">{k.hits}<small> · {k.sessions} 个会话</small></span></button>
+      {open === k.word && <KeywordSessions connectionId={connectionId} from={from} to={to} word={k.word} setError={setError} />}</li>)}</ul>
       : <p className="shop-note">所选日期内还没有买家关键词命中。买家消息正文被平台隐藏，可在「客服绩效 → 关键词」添加常见问题词（如 退款、发票、定制），之后的新消息会按词统计。</p>}
     <p className="shop-note">询盘按“买家 × 日期”去重，以当天第一次咨询为准；下单 / 付款指咨询后在归属窗口（指标口径中设置）内产生的订单。售后会话不计入询盘。</p>
   </section>
+}
+
+/** The conversations behind one 买家在问什么 keyword: open the messages (at the first hit) or contact the buyer. */
+function KeywordSessions({ connectionId, from, to, word, setError }: { connectionId: string; from: string; to: string; word: string; setError: (text: string) => void }) {
+  const [rows, setRows] = useState<KeywordSession[] | null>(null), [more, setMore] = useState(false), [detail, setDetail] = useState<{ title: string; focus: string; data: ChatDetail } | null>(null)
+  useEffect(() => { let live = true; setRows(null)
+    getKeywordSessions(connectionId, from, to, word).then(r => { if (live) { setRows(r.data); setMore(r.hasMore) } }).catch(cause => live && setError(message(cause)))
+    return () => { live = false } }, [connectionId, from, to, word, setError])
+  const buyer = (r: KeywordSession) => r.buyer_name ?? `买家 …${r.buyer_tail}`
+  async function show(r: KeywordSession) { try { setDetail({ title: `${agentLabel(r)} · ${r.chat_date} · ${buyer(r)}`, focus: r.first_hit_uuid, data: (await getChatDetail(r.id)).data }) } catch (cause) { setError(message(cause)) } }
+  if (!rows) return <p className="shop-note inquiry-keyword-sessions"><LoaderCircle size={14} className="spin" /> 正在读取提到「{word}」的会话…</p>
+  return <div className="inquiry-keyword-sessions">
+    {rows.length ? <table className="shop-table"><thead><tr><th>首次提到</th><th>买家</th><th>接待客服</th><th>命中</th><th>买家 / 客服消息</th><th /></tr></thead>
+      <tbody>{rows.map(r => <tr key={r.id}><td>{new Date(r.first_hit_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>{buyer(r)}</td><td>{agentLabel(r)}{r.user_name && <small>{r.user_name}</small>}</td>
+        <td>{r.hits} 次</td><td>{r.buyer_messages} / {r.agent_messages}</td>
+        <td className="perf-row-actions"><WangwangButton buyerId={r.buyer_id} setError={setError} /><button className="shop-icon" title="查看对话" aria-label={`查看 ${r.chat_date} 的对话`} onClick={() => void show(r)}><MessageSquareText size={16} /></button></td></tr>)}</tbody></table>
+      : <p className="shop-note">没有找到会话（可能不在你的查看范围内）。</p>}
+    {more && <p className="shop-note">只显示最近 50 个会话，可缩小日期范围查看更早的。</p>}
+    {detail && <Drawer title={detail.title} close={() => setDetail(null)}><div className="perf-drawer-actions"><WangwangButton buyerId={rows.find(r => r.first_hit_uuid === detail.focus)?.buyer_id ?? ''} setError={setError} label="旺旺联系买家" /></div><Timeline data={detail.data} focus={detail.focus} /></Drawer>}
+  </div>
 }

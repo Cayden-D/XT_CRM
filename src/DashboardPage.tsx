@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { AlertCircle, ArrowDownRight, ArrowUpRight, ChevronRight, Clock3, LoaderCircle, MessageSquareWarning, PackageX, RefreshCw, ShoppingCart, UserRoundCheck, UsersRound, ShieldAlert } from 'lucide-react'
+import { AlertCircle, ArrowDownRight, ArrowUpRight, ChevronRight, Clock3, LoaderCircle, MessageSquareWarning, PackageX, RefreshCw, ShoppingCart, Store, UserRoundCheck, UsersRound, ShieldAlert } from 'lucide-react'
 import type { SessionUser } from './api'
 import { useAiFocusPart } from './aiFocus'
 import { getDashboard, type Dashboard, type DashboardRange, type PeriodTotals } from './dashboardApi'
@@ -100,7 +100,7 @@ export default function DashboardPage({user,go}:{user:SessionUser;go:(target:Das
   return <div className="dash">
     <div className="dash-toolbar">
       <div className="perf-metric-tabs" role="tablist" aria-label="时间范围">{ranges.map(([id,text])=><button key={id} role="tab" aria-selected={range===id} className={range===id?'active':''} onClick={()=>setRange(id)}>{text}</button>)}</div>
-      {data.shops.length>1 && <select className="perf-select" aria-label="店铺" value={shop} onChange={e=>setShop(e.target.value)}>{data.shops.map(s=><option key={s.id} value={s.id}>{s.display_name||'店铺'}</option>)}</select>}
+      {data.shops.length>0 && <label className="dash-shop"><Store size={16}/><select className="perf-select" aria-label="店铺" value={shop} onChange={e=>setShop(e.target.value)}>{data.shops.map(s=><option key={s.id} value={s.id}>{s.display_name||'店铺'}{s.status==='connected'?'':' · 已停用'}</option>)}</select></label>}
       <span className="dash-period">{data.period.from===data.period.to?data.period.from:`${data.period.from} 至 ${data.period.to}`}</span>
       {sync && <span className={`shop-status ${throttled?'warning':'positive'}`} title={throttled?'开发测试阶段应用流量为 5000 次/天，上线后 10 万次/天；进度已保存，次日自动继续':undefined}>{throttled?'今日平台调用额度已用完 · ':'已同步 · '}最近成功 {time(sync.last_success)}</span>}
       {loading && <LoaderCircle className="spin" size={16}/>}

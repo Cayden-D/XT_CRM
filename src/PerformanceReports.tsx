@@ -88,7 +88,7 @@ export function HourlyView({connectionId,from,to,setError}:{connectionId:string;
   return <section className="perf-report" aria-label="分时接待">
     <div className="shop-table-scroll"><table className="shop-table perf-heat"><thead><tr><th>客服 / 时段</th>{data.buckets.map(b=><th key={b.key}>{b.label}</th>)}</tr></thead>
       <tbody>{active.map(agent=><tr key={agent.id}><td><strong>{agentLabel(agent)}</strong></td>{data.buckets.map(b=>{const value=cell.get(`${agent.id}:${b.key}`)||0;const share=value/max
-        return <td key={b.key} title={`${agentLabel(agent)} ${b.label}：${value} 人`} style={value?{background:`color-mix(in srgb, #1f8a70 ${Math.round(10+share*80)}%, #ffffff)`,color:share>0.5?'#fff':'#18313f'}:undefined}>{value||<span className="perf-zero">0</span>}</td>})}</tr>)}
+        return <td key={b.key} title={`${agentLabel(agent)} ${b.label}：${value} 人`} style={value?{background:`color-mix(in srgb, #2763b8 ${Math.round(10+share*80)}%, #ffffff)`,color:share>0.5?'#fff':'#1d2f44'}:undefined}>{value||<span className="perf-zero">0</span>}</td>})}</tr>)}
         <tr className="perf-total"><td><strong>合计</strong></td>{data.buckets.map(b=><td key={b.key}>{column(b.key)}</td>)}</tr></tbody></table></div>
     <p className="shop-note">按买家消息开始的时间（北京时间）统计，每格为该时段接待的买家人数（按日去重）；00:00–09:00 合并为一列。颜色越深人数越多。</p>
   </section>

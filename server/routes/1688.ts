@@ -159,6 +159,20 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     }
 }
 
+/** What deleting a product connection would remove (or why it cannot be deleted). */
+async function connectionUsage(id: string, tenantId: string) {
+  const row = (await db.query(`SELECT c.status,c.display_name,
+      (SELECT count(*) FROM integration_1688_listings l WHERE l.connection_id=c.id)::int AS listings,
+      (SELECT count(*) FROM integration_1688_listings l WHERE l.connection_id=c.id AND l.product_id IS NOT NULL)::int AS bound,
+      (SELECT count(*) FROM integration_1688_publish_drafts d WHERE d.connection_id=c.id AND (d.status='published' OR d.offer_id IS NOT NULL))::int AS published,
+      (SELECT count(*) FROM integration_1688_publish_drafts d WHERE d.connection_id=c.id AND d.status<>'published' AND d.offer_id IS NULL)::int AS drafts,
+      (SELECT count(*) FROM integration_1688_collection_queue_jobs j WHERE j.connection_id=c.id)::int AS queue_jobs,
+      (SELECT count(*) FROM integration_1688_agent_jobs j WHERE j.connection_id=c.id)::int AS agent_jobs
+    FROM integration_1688_connections c WHERE c.id=$1 AND c.tenant_id=$2`, [id, tenantId])).rows[0]
+  if (!row) throw new IntegrationError('NOT_FOUND', '连接不存在。', 404)
+  return row as { status: string; display_name: string; listings: number; bound: number; published: number; drafts: number; queue_jobs: number; agent_jobs: number }
+}
+
 export async function integration1688Routes(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof IntegrationError) return reply.code(error.statusCode).send({ error: error.code, message: error.message })
@@ -218,6 +232,30 @@ export async function integration1688Routes(app: FastifyInstance) {
     if (!result.rows.length) throw new IntegrationError('NOT_FOUND', '连接不存在。', 404)
     await audit(request.authUser.tenantId, request.authUser.sub, id, '1688.disable', request.id)
     return { data: { disabled: true } }
+  })
+  // Removing a connection nobody uses (a duplicate authorization, a test shop). Only a disabled connection can go, and
+  // never one with products published through it: that history stays. Synced listings, unpublished drafts, queue and
+  // Agent jobs go with it (they can be synced or recreated); call logs and pictures are kept without the link.
+  app.get('/connections/:id/usage', { preHandler: requirePermission('integration:manage') }, async request => {
+    const { id } = idSchema.parse(request.params)
+    return { data: await connectionUsage(id, request.authUser.tenantId) }
+  })
+  app.delete('/connections/:id', { preHandler: requirePermission('integration:manage') }, async request => {
+    const { id } = idSchema.parse(request.params)
+    const usage = await connectionUsage(id, request.authUser.tenantId)
+    if (usage.status !== 'disabled') throw new IntegrationError('CONNECTION_ACTIVE', '请先停用这个店铺连接，再删除。', 409)
+    if (usage.published) throw new IntegrationError('CONNECTION_IN_USE', `这个店铺有 ${usage.published} 个通过本系统发布过的商品，发布记录需要保留，不能删除；保持停用即可。`, 409)
+    const client = await db.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query("DELETE FROM integration_1688_publish_drafts WHERE connection_id=$1 AND tenant_id=$2 AND status<>'published' AND offer_id IS NULL", [id, request.authUser.tenantId])
+      const removed = await client.query('DELETE FROM integration_1688_connections WHERE id=$1 AND tenant_id=$2 AND status=\'disabled\' RETURNING id', [id, request.authUser.tenantId])
+      if (!removed.rows.length) throw new IntegrationError('NOT_FOUND', '连接不存在或状态已变化，请刷新后重试。', 409)
+      await client.query('INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [request.authUser.tenantId, request.authUser.sub, '1688.connection.delete', '1688_connection', id, JSON.stringify(usage), request.id])
+      await client.query('COMMIT')
+    } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+    return { data: { deleted: true } }
   })
   app.get('/operations', { preHandler: requirePermission('integration:read') }, async request => {
     const { page } = listInput.parse(request.query)

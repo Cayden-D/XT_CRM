@@ -32,6 +32,9 @@ export const startShopAuthorization = () => post<{data:{authorizationUrl:string}
 export const completeShopAuthorization = (callbackUrl:string) => post<{data:ShopConnection}>('/authorizations/complete',{callbackUrl})
 export const testShopConnection = (id:string) => post(`/connections/${id}/test`)
 export const refreshShopToken = (id:string) => post(`/connections/${id}/refresh`)
+export type ShopConnectionUsage = { status:string; display_name:string; listings:number; bound:number; published:number; drafts:number; queue_jobs:number; agent_jobs:number }
+export const getShopConnectionUsage = (id:string) => request<{data:ShopConnectionUsage}>(`${base}/connections/${id}/usage`)
+export const deleteShopConnection = (id:string) => request<{data:{deleted:boolean}}>(`${base}/connections/${id}`,{method:'DELETE'})
 export const disableShopConnection = (id:string) => post(`/connections/${id}/disable`)
 export type SyncWindow = { from:string|null; to:string }
 /** One page of 平台商品 sync; page 1 picks the window (incremental needs an earlier completed sync, else it reads everything). */

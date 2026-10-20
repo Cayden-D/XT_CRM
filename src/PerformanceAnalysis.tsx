@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ChevronLeft, ChevronRight, LoaderCircle, MessageCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LoaderCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
 import { agentLabel } from './PerformanceReports'
+import wangwangIcon from './assets/wangwang.png'
+import OrderDrawer from './OrderDrawer'
 import {
   attributionSchemeNames, availableSchemes, chatCategoryNames, creditBasisNames, flagNames, getChatDetail, getChatSessions, getCreditedOrders, getPerformanceAgents, getReplyQuality, OFFSITE_FLAGS, wangwangLinks,
   type AttributionScheme, type ChatCategory, type ChatDetail, type ChatSession, type CreditedOrder, type PerformanceAgent, type ReplyQuality,
@@ -38,7 +40,7 @@ export function WangwangButton({buyerId,setError,label}:{buyerId:string;setError
     try{win.location.href=(await wangwangLinks(buyerId)).data.web}
     catch(cause){win.close();setError(message(cause))}finally{setBusy(false)}
   }
-  return <button className={label?'shop-button':'shop-icon'} title="用旺旺联系买家" aria-label="用旺旺联系买家" disabled={busy} onClick={()=>void open()}>{busy?<LoaderCircle size={16} className="spin"/>:<MessageCircle size={16}/>}{label}</button>
+  return <button className={label?'shop-button':'shop-icon'} title="用旺旺联系买家" aria-label="用旺旺联系买家" disabled={busy} onClick={()=>void open()}>{busy?<LoaderCircle size={16} className="spin"/>:<img className="wangwang-icon" src={wangwangIcon} alt="" width={18} height={18}/>}{label}</button>
 }
 
 /** Message timeline of one session: buyer text is masked by the platform; agent text is shown masked, with risk flags. */
@@ -60,7 +62,7 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
   const agents=useAgents(connectionId,setError)
   const [category,setCategory]=useState<ChatCategory|''>(''),[agentId,setAgentId]=useState(''),[page,setPage]=useState(1)
   const [rows,setRows]=useState<ChatSession[]>([]),[counts,setCounts]=useState<Partial<Record<ChatCategory,number>>>({}),[loading,setLoading]=useState(true)
-  const [detail,setDetail]=useState<{row:ChatSession;data:ChatDetail}|null>(null)
+  const [detail,setDetail]=useState<{row:ChatSession;data:ChatDetail}|null>(null),[order,setOrder]=useState('')
   useEffect(()=>{setPage(1)},[connectionId,from,to,category,agentId])
   useEffect(()=>{let live=true;setLoading(true)
     getChatSessions({connectionId,from,to,category:category||undefined,agentId:agentId||undefined,page}).then(r=>{if(live){setRows(r.data);setCounts(r.counts)}}).catch(cause=>live&&setError(message(cause))).finally(()=>live&&setLoading(false))
@@ -77,15 +79,17 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
       <tbody>{rows.map(row=><tr key={row.id}><td><strong>{agentLabel(row)}</strong></td><td>{row.chat_date}<small>{clock(row.started_at)} 起</small></td><td>…{row.buyer_tail}{row.new_customer&&<small>新客</small>}</td>
         <td><span className={`shop-status ${row.category==='paid'?'positive':row.category==='no_order'?'':row.category==='after_sales'?'':'warning'}`}>{chatCategoryNames[row.category]}</span></td>
         <td>{row.buyer_messages} / {row.agent_messages}{row.other_agent_messages?<small>其他 {row.other_agent_messages}</small>:null}</td><td>{seconds(row.first_response_seconds)}</td><td>{row.unanswered||'—'}</td>
-        <td>{row.orders_after?.length?row.orders_after.map(id=><small key={id}><code>{id}</code>{row.paid_after?.includes(id)?' 已付款':''}</small>):'—'}</td>
+        <td>{row.orders_after?.length?row.orders_after.map(id=><small key={id}><button className="perf-order-link" title="查看订单详情" onClick={()=>setOrder(id)}>{id}</button>{row.paid_after?.includes(id)?' 已付款':''}</small>):'—'}</td>
         <td className="perf-row-actions"><WangwangButton buyerId={row.buyer_id} setError={setError}/><button className="shop-icon" title="查看消息记录" aria-label={`查看 ${row.chat_date} 会话`} onClick={()=>void open(row)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>
       {!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的会话</p></div>}</div>}
     <Pager page={page} setPage={setPage} more={rows.length===50} loading={loading}/>
     <p className="shop-note">分类按会话首轮买家消息后的归属窗口内是否下单、付款判断；售后指此前 90 天内有已付款订单。平台不提供买家消息原文，只显示时间与字数；客服消息显示遮盖了联系方式的文本（保留 90 天，文本采集上线前的消息没有文本）。</p>
     {detail&&<Drawer title={`${agentLabel(detail.row)} · ${detail.row.chat_date} · 买家 …${detail.row.buyer_tail}`} close={()=>setDetail(null)}>
-      <div className="perf-drawer-actions"><WangwangButton buyerId={detail.row.buyer_id} setError={setError} label="旺旺联系买家"/></div>
+      <div className="perf-drawer-actions"><WangwangButton buyerId={detail.row.buyer_id} setError={setError} label="旺旺联系买家"/>
+        {detail.row.orders_after?.length?<span className="perf-drawer-orders">相关订单：{detail.row.orders_after.map(id=><button key={id} className="perf-order-link" onClick={()=>setOrder(id)}>{id}</button>)}</span>:null}</div>
       <Timeline data={detail.data}/>
     </Drawer>}
+    {order&&<OrderDrawer connectionId={connectionId} orderId={order} close={()=>setOrder('')} setError={setError}/>}
   </section>
 }
 

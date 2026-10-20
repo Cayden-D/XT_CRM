@@ -4,11 +4,12 @@ import { ChatAnalysisView, OrdersView, QualityView } from './PerformanceAnalysis
 import { KeywordsView } from './PerformanceKeywords'
 import { FavoritesView, KpiView, PayrollView } from './PerformancePayroll'
 import './1688.css'
-import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Link2, LoaderCircle, Power, RefreshCw, Save, ShieldCheck, Store, X } from 'lucide-react'
+import ConnectionDelete from './ConnectionDelete'
+import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Link2, LoaderCircle, Power, RefreshCw, Save, ShieldCheck, Store, Trash2, X } from 'lucide-react'
 import type { SessionUser } from './api'
 import { useAiFocusPart } from './aiFocus'
 import {
-  attributionSchemeNames, availableSchemes, completePerformanceAuthorization, disablePerformanceConnection, getPerformanceConnections, getPerformanceOperations, getPerformanceSettings,
+  attributionSchemeNames, availableSchemes, completePerformanceAuthorization, deletePerformanceConnection, disablePerformanceConnection, getPerformanceConnectionUsage, getPerformanceConnections, getPerformanceOperations, getPerformanceSettings,
   refreshPerformanceToken, savePerformanceSettings, startPerformanceAuthorization, testPerformanceConnection,
   type AttributionScheme, type PerformanceConnection, type PerformanceOperation, type PerformanceSettings,
 } from './performanceApi'
@@ -45,7 +46,7 @@ export default function PerformancePage({user,initialView='comparison'}:{user:Se
   const [operations,setOperations]=useState<PerformanceOperation[]>([]),[page,setPage]=useState(1)
   const [settings,setSettings]=useState<PerformanceSettings|null>(null),[draft,setDraft]=useState({windowHours:'',thresholdSeconds:'',countOther:false,workHours:true,workStart:'09:00',workEnd:'22:00',scheme:'order_first' as AttributionScheme,orderShare:'50',ownerShare:'50',autoOwner:true})
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('')
-  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<PerformanceConnection|null>(null)
+  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<PerformanceConnection|null>(null),[remove,setRemove]=useState<PerformanceConnection|null>(null)
   const canRead=permission(user,'performance:read')||permission(user,'performance:read_own'),canReadAll=permission(user,'performance:read'),canPayrollRead=permission(user,'payroll:read'),canManage=permission(user,'performance:manage'),canPayroll=permission(user,'payroll:manage')
   const applySettings=(data:PerformanceSettings)=>{setSettings(data);setDraft({windowHours:String(data.attribution_window_hours),thresholdSeconds:String(data.unanswered_threshold_seconds),countOther:data.count_other_as_reply,workHours:data.work_hours_enabled,workStart:data.work_start,workEnd:data.work_end,scheme:data.default_scheme,orderShare:String(Math.round(data.split_order_share*100)),ownerShare:String(Math.round(data.owner_share*100)),autoOwner:data.auto_assign_owner})}
   const load=useCallback(async()=>{
@@ -100,6 +101,7 @@ export default function PerformancePage({user,initialView='comparison'}:{user:Se
           <button title="验证主账号与子账号接口" aria-label={`验证 ${c.display_name}`} disabled={Boolean(busy)||c.status!=='connected'} onClick={()=>void action(c.id,()=>testPerformanceConnection(c.id),'绩效应用验证成功')}><ShieldCheck size={17}/></button>
           <button title="刷新访问令牌" aria-label={`刷新 ${c.display_name}`} disabled={Boolean(busy)||c.status!=='connected'} onClick={()=>void action(c.id,()=>refreshPerformanceToken(c.id),'访问令牌已刷新')}><RefreshCw size={17}/></button>
           <button title="停用连接" aria-label={`停用 ${c.display_name}`} disabled={Boolean(busy)||c.status==='disabled'} onClick={()=>setDisable(c)}><Power size={17}/></button>
+          <button title={c.status==='disabled'?'删除连接':'先停用，再删除'} aria-label={`删除 ${c.display_name}`} disabled={Boolean(busy)||c.status!=='disabled'} onClick={()=>setRemove(c)}><Trash2 size={17}/></button>
         </>}</div></td></tr>)}</tbody></table>{!connections.length&&<div className="shop-empty"><Store size={28}/><p>尚未授权绩效应用</p></div>}</div>}
       {view==='settings'&&settings&&<section className="shop-comparison publish-template-settings" aria-label="指标口径">
         <div className="shop-sku-heading"><h3>指标口径</h3></div>
@@ -131,6 +133,10 @@ export default function PerformancePage({user,initialView='comparison'}:{user:Se
     </>}
     {view==='operations'&&<div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} 页</span><button className="shop-icon" title="下一页" disabled={loading||operations.length<50} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>}
     {authUrl&&<Modal title="授权 1688 绩效应用" close={()=>setAuthUrl('')}><div className="shop-modal-body"><p className="shop-note">请使用店铺主账号登录授权，子账号授权无法读取全部客服数据。</p><a className="shop-button primary" href={authUrl} target="_blank" rel="noreferrer">前往 1688 授权 <ExternalLink size={16}/></a><label>完整回跳地址<input value={callbackUrl} onChange={e=>setCallbackUrl(e.target.value)} autoComplete="off" placeholder="https://…?code=…&state=…"/></label><p className="shop-note">授权码有效期 2 分钟</p></div><footer><button className="shop-button" onClick={()=>setAuthUrl('')}>取消</button><button className="shop-button primary" disabled={!callbackUrl||Boolean(busy)} onClick={()=>void action('complete',async()=>{await completePerformanceAuthorization(callbackUrl);setAuthUrl('');setCallbackUrl('')},'绩效应用授权完成，请点击验证确认主账号')}><CheckCircle2 size={16}/>完成授权</button></footer></Modal>}
+    {remove&&<ConnectionDelete name={remove.display_name} account={remove.login_id||remove.member_id} close={()=>setRemove(null)} done={()=>{setRemove(null);setNotice('绩效应用连接已删除');void load()}} remove={()=>deletePerformanceConnection(remove.id)}
+      impact={async()=>{const u=(await getPerformanceConnectionUsage(remove.id)).data,kept=[u.followups&&`${u.followups} 条跟进记录`,u.attachments&&`${u.attachments} 个客户附件`,u.locked_payrolls&&`${u.locked_payrolls} 期已锁定工资单`].filter(Boolean)
+        return{blocked:kept.length?`这个店铺有 ${kept.join('、')}，需要保留，不能删除；保持停用即可。`:null,
+          removes:[u.orders&&`${u.orders} 笔订单`,u.sessions&&`${u.sessions} 个聊天会话`,u.buyers&&`${u.buyers} 位买家及其客户资料`,u.agents&&`${u.agents} 个客服账号及提成规则`,u.payrolls&&`${u.payrolls} 期未锁定的工资单草稿`].filter((x):x is string=>Boolean(x))}}}/>}
     {disable&&<Modal title="停用绩效连接" close={()=>setDisable(null)}><div className="shop-modal-body"><p>{disable.display_name} 的绩效数据将停止同步，商品应用连接不受影响，历史记录保留。</p></div><footer><button className="shop-button" onClick={()=>setDisable(null)}>取消</button><button className="shop-button danger" disabled={Boolean(busy)} onClick={()=>void action('disable',async()=>{await disablePerformanceConnection(disable.id);setDisable(null)},'绩效连接已停用')}>停用连接</button></footer></Modal>}
   </div>
 }

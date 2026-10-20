@@ -64,7 +64,14 @@ try {
   assert.equal((await app.inject({ method: 'GET', url: `${base}/order-list/9999999999999999999?connectionId=${conn.id}`, headers: all })).statusCode, 404, 'unknown orders are not fetched')
   assert.equal((await app.inject({ method: 'GET', url: `${base}/order-list/3300000000000000001?connectionId=${conn.id}`, headers: auth(boss, ['*'], tenants[1]) })).statusCode, 404)
   assert.equal(detailCalls, 1, 'refused requests never reach the platform')
-  console.log(JSON.stringify({ list: 'ok', groups: 'ok', search: 'ok', ownScope: 'ok', detail: 'ok', masked: 'ok', isolation: 'ok' }))
+  // Once the agent has chatted with that buyer, their orders open from the chat even when credited to someone else.
+  const buyer = (await db.query("INSERT INTO perf_buyers(tenant_id,connection_id,buyer_key) VALUES($1,$2,'BBBbuyer1') RETURNING id", [tenant, conn.id])).rows[0].id
+  await db.query('INSERT INTO perf_buyer_identities(connection_id,open_uid,buyer_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [conn.id, 'BBBbuyer1', buyer])
+  await db.query("INSERT INTO perf_chat_sessions(tenant_id,connection_id,agent_id,buyer_id,cid,chat_date,last_peer_at,needs_sync) VALUES($1,$2,$3,$4,'c-o',$5::date,now(),false)", [tenant, conn.id, agent, buyer, today])
+  assert.equal((await app.inject({ method: 'GET', url: `${base}/order-list/3300000000000000002?connectionId=${conn.id}`, headers: auth(agentUser, ['performance:read_own']) })).statusCode, 200)
+  assert.equal((await app.inject({ method: 'GET', url: `${base}/order-list/3300000000000000002?connectionId=${conn.id}`, headers: auth(other, ['performance:read_own']) })).statusCode, 404)
+  assert.equal(detailCalls, 2)
+  console.log(JSON.stringify({ list: 'ok', groups: 'ok', search: 'ok', ownScope: 'ok', detail: 'ok', masked: 'ok', isolation: 'ok', fromChat: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   for (const id of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }

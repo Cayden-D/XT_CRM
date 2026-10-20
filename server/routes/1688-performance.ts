@@ -52,6 +52,22 @@ async function audit(tenantId: string, actorId: string, entityType: string, id: 
     [tenantId, actorId, action, entityType, id, after ? JSON.stringify(after) : null, requestId])
 }
 
+/** What deleting a performance connection would remove (or why it cannot be deleted). */
+async function perfConnectionUsage(id: string, tenantId: string) {
+  const row = (await db.query(`SELECT c.status,c.display_name,
+      (SELECT count(*) FROM perf_orders o WHERE o.connection_id=c.id)::int AS orders,
+      (SELECT count(*) FROM perf_chat_sessions s WHERE s.connection_id=c.id)::int AS sessions,
+      (SELECT count(*) FROM perf_buyers b WHERE b.connection_id=c.id)::int AS buyers,
+      (SELECT count(*) FROM perf_agents a WHERE a.connection_id=c.id)::int AS agents,
+      (SELECT count(*) FROM cust_followups f JOIN perf_buyers b ON b.id=f.buyer_id WHERE b.connection_id=c.id)::int AS followups,
+      (SELECT count(*) FROM cust_attachments t JOIN perf_buyers b ON b.id=t.buyer_id WHERE b.connection_id=c.id)::int AS attachments,
+      (SELECT count(*) FROM perf_payroll_periods p WHERE p.connection_id=c.id)::int AS payrolls,
+      (SELECT count(*) FROM perf_payroll_periods p WHERE p.connection_id=c.id AND p.status='locked')::int AS locked_payrolls
+    FROM integration_1688_perf_connections c WHERE c.id=$1 AND c.tenant_id=$2`, [id, tenantId])).rows[0]
+  if (!row) throw new IntegrationError('NOT_FOUND', '绩效连接不存在。', 404)
+  return row as { status: string; display_name: string; orders: number; sessions: number; buyers: number; agents: number; followups: number; attachments: number; payrolls: number; locked_payrolls: number }
+}
+
 export async function performanceRoutes(app: FastifyInstance) {
   app.get('/connections', { preHandler: readScope }, async request => {
     const rows = await db.query(`SELECT ${publicPerfConnectionColumns} FROM integration_1688_perf_connections WHERE tenant_id=$1 ORDER BY created_at`, [request.authUser.tenantId])
@@ -98,6 +114,30 @@ export async function performanceRoutes(app: FastifyInstance) {
     if (!result.rows.length) throw new IntegrationError('NOT_FOUND', '绩效连接不存在。', 404)
     await audit(request.authUser.tenantId, request.authUser.sub, '1688_perf_connection', id, '1688.performance.disable', request.id)
     return { data: { disabled: true } }
+  })
+  // Removing a performance connection nobody uses. Only a disabled one, and never one holding work people typed in
+  // (follow-ups, attachments) or locked payroll: those stay with the shop. Orders, chats and buyers synced from 1688
+  // go with it (a new authorization syncs them again).
+  app.get('/connections/:id/usage', { preHandler: requirePermission('performance:manage') }, async request => {
+    const { id } = idSchema.parse(request.params)
+    return { data: await perfConnectionUsage(id, request.authUser.tenantId) }
+  })
+  app.delete('/connections/:id', { preHandler: requirePermission('performance:manage') }, async request => {
+    const { id } = idSchema.parse(request.params)
+    const usage = await perfConnectionUsage(id, request.authUser.tenantId)
+    if (usage.status !== 'disabled') throw new IntegrationError('CONNECTION_ACTIVE', '请先停用这个绩效应用连接，再删除。', 409)
+    const kept = [usage.followups && `${usage.followups} 条跟进记录`, usage.attachments && `${usage.attachments} 个客户附件`, usage.locked_payrolls && `${usage.locked_payrolls} 期已锁定工资单`].filter(Boolean)
+    if (kept.length) throw new IntegrationError('CONNECTION_IN_USE', `这个店铺有 ${kept.join('、')}，需要保留，不能删除；保持停用即可。`, 409)
+    const client = await db.connect()
+    try {
+      await client.query('BEGIN')
+      const removed = await client.query("DELETE FROM integration_1688_perf_connections WHERE id=$1 AND tenant_id=$2 AND status='disabled' RETURNING id", [id, request.authUser.tenantId])
+      if (!removed.rows.length) throw new IntegrationError('NOT_FOUND', '连接不存在或状态已变化，请刷新后重试。', 409)
+      await client.query('INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [request.authUser.tenantId, request.authUser.sub, '1688.performance.delete', '1688_perf_connection', id, JSON.stringify(usage), request.id])
+      await client.query('COMMIT')
+    } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+    return { data: { deleted: true } }
   })
   app.get('/operations', { preHandler: requirePermission('performance:read') }, async request => {
     const { page } = z.object({ page: z.coerce.number().int().min(1).default(1) }).parse(request.query)

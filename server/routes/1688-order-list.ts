@@ -106,8 +106,11 @@ export async function orderListRoutes(app: FastifyInstance) {
     const scheme = schemeOf((await db.query('SELECT default_scheme FROM perf_settings WHERE tenant_id=$1', [tenant(request)])).rows[0].default_scheme)
     const local = (await db.query(`SELECT o.id,o.seller_memo,o.seller_flag,(SELECT i.buyer_id FROM perf_buyer_identities i WHERE i.connection_id=o.connection_id AND i.open_uid=o.buyer_open_uid LIMIT 1) AS buyer_id
       FROM perf_orders o WHERE o.connection_id=$1 AND o.tenant_id=$2 AND o.order_id=$3
-      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM perf_order_attributions a JOIN perf_agents ag ON ag.id=a.agent_id WHERE a.order_id=o.id AND a.scheme=$5 AND ag.user_id=$4))`,
+      AND ($4::uuid IS NULL OR EXISTS(SELECT 1 FROM perf_order_attributions a JOIN perf_agents ag ON ag.id=a.agent_id WHERE a.order_id=o.id AND a.scheme=$5 AND ag.user_id=$4)
+        OR EXISTS(SELECT 1 FROM perf_buyer_identities i JOIN perf_chat_sessions s ON s.buyer_id=i.buyer_id JOIN perf_agents ag ON ag.id=s.agent_id
+          WHERE i.connection_id=o.connection_id AND i.open_uid=o.buyer_open_uid AND ag.user_id=$4))`,
     [connectionId, tenant(request), orderId, scope(request), scheme])).rows[0]
+    // Own-only users see orders credited to them and orders of buyers they have chatted with (linked from their chats).
     if (!local) throw new IntegrationError('NOT_FOUND', '订单不存在，或不在你的查看范围内。', 404)
     const raw = await callPerformanceApi(connectionId, tenant(request), request.authUser.sub, 'alibaba.trade.ec.getOrder.sellerView',
       { orderId, includeFields: 'GuaranteesTerms,NativeLogistics,RateDetail,OrderInvoice' }, request.id) as Json

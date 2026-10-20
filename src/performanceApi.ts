@@ -109,7 +109,7 @@ export const getReplyQuality = (connectionId:string,from:string,to:string) => re
 export type PerfKeyword = { id:string; word:string; category:string; on_platform:boolean; created_at:string; checked_at:string; created_by_name:string|null }
 export type KeywordPreset = { category:string; hint:string; words:string[] }
 export type KeywordHit = { word:string; category:string; buyer_hits:number; agent_hits:number; sessions:number; buyers:number; last_hit:string }
-export type KeywordRecent = { uuid:string; sent_at:string; direction:0|1; word:string; category:string; session_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_name:string|null }
+export type KeywordRecent = { uuid:string; sent_at:string; direction:0|1; word:string; category:string; session_id:string; buyer_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_name:string|null }
 export const getKeywords = (connectionId:string) => request<{data:PerfKeyword[];presets:KeywordPreset[]}>(`${base}/keywords?${new URLSearchParams({connectionId})}`)
 export const addKeywords = (connectionId:string,words:{word:string;category:string}[]) => post<{data:{added:string[];skipped:string[];failed:{word:string;message:string}[];keywords:PerfKeyword[]}}>('/keywords',{connectionId,words})
 export const deleteKeyword = (id:string) => request<{data:PerfKeyword[]}>(`${base}/keywords/${id}`,{method:'DELETE'})
@@ -127,6 +127,12 @@ export type InquirySummary = {
 export type BuyerLookup = { id:string; buyer_tail:string; first_chat_at:string|null; last_chat_at:string|null
   sessions:{ id:string; chat_date:string; buyer_messages:number; agent_messages:number; login_id:string; is_main:boolean; user_name:string|null }[]
   orders:{ orders:number; paid:number; paid_amount:number; last_order_at:string|null } }
+export type KeywordSession = { id:string; chat_date:string; buyer_id:string; buyer_tail:string; buyer_name:string|null; login_id:string; is_main:boolean; user_name:string|null; buyer_messages:number; agent_messages:number; hits:number; first_hit_at:string; first_hit_uuid:string }
+/** Sessions in the period where a buyer message carried `word` (newest first, up to 50). */
+export const getKeywordSessions = (connectionId:string, from:string, to:string, word:string) => request<{data:KeywordSession[];hasMore:boolean}>(`${base}/inquiry/keyword-sessions?${new URLSearchParams({ connectionId, from, to, word })}`)
+export type PerfConnectionUsage = { status:string; display_name:string; orders:number; sessions:number; buyers:number; agents:number; followups:number; attachments:number; payrolls:number; locked_payrolls:number }
+export const getPerformanceConnectionUsage = (id:string) => request<{data:PerfConnectionUsage}>(`${base}/connections/${id}/usage`)
+export const deletePerformanceConnection = (id:string) => request<{data:{deleted:boolean}}>(`${base}/connections/${id}`,{method:'DELETE'})
 export const getInquiry = (connectionId:string, from:string, to:string) => request<{data:InquirySummary}>(`${base}/inquiry?${new URLSearchParams({ connectionId, from, to })}`)
 export const lookupBuyer = (connectionId:string, loginId:string) => post<{data:BuyerLookup|null}>('/buyers/lookup', { connectionId, loginId })
 export const wangwangLinks = (buyerId:string) => post<{data:{ web:string; client:string }}>(`/buyers/${buyerId}/wangwang`, {})

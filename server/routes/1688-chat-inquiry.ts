@@ -71,6 +71,22 @@ export async function chatInquiryRoutes(app: FastifyInstance) {
     return { data: { totals, daily, hourly, agents, keywords } }
   })
 
+  // 买家在问什么 → the conversations behind one keyword: sessions in the period where a buyer message carried it.
+  app.get('/inquiry/keyword-sessions', { preHandler: readScope }, async request => {
+    const q = reportQuery.extend({ word: z.string().trim().min(1).max(50) }).parse(request.query)
+    await ensureConnection(tenant(request), q.connectionId)
+    const rows = (await db.query(`SELECT s.id,s.chat_date::text AS chat_date,s.buyer_id,right(b.buyer_key,6) AS buyer_tail,p.name AS buyer_name,
+        ag.login_id,ag.is_main,u.display_name AS user_name,s.buyer_messages,s.agent_messages,
+        sum(coalesce((k->>'count')::int,1))::int AS hits,min(m.sent_at) AS first_hit_at,(array_agg(m.uuid ORDER BY m.sent_at))[1] AS first_hit_uuid
+      FROM perf_chat_messages m JOIN perf_chat_sessions s ON s.id=m.session_id JOIN perf_agents ag ON ag.id=s.agent_id JOIN perf_buyers b ON b.id=s.buyer_id
+        LEFT JOIN cust_profiles p ON p.buyer_id=b.id LEFT JOIN users u ON u.id=ag.user_id CROSS JOIN LATERAL jsonb_array_elements(m.keywords) k
+      WHERE s.tenant_id=$1 AND s.connection_id=$2 AND s.chat_date BETWEEN $3::date AND $4::date AND m.direction=1 AND m.keywords<>'[]'::jsonb AND k->>'word'=$5
+        AND ($6::uuid IS NULL OR ag.user_id=$6)
+      GROUP BY s.id,b.buyer_key,p.name,ag.login_id,ag.is_main,u.display_name ORDER BY min(m.sent_at) DESC LIMIT 51`,
+    [tenant(request), q.connectionId, q.from, q.to, q.word, scope(request)])).rows
+    return { data: rows.slice(0, 50), hasMore: rows.length > 50 }
+  })
+
   // Find a buyer by the Wangwang login name the merchant typed (encrypted by 1688 to the openUid our records use).
   app.post('/buyers/lookup', { preHandler: readScope }, async request => {
     const input = z.object({ connectionId: z.string().uuid(), loginId: z.string().trim().min(2, '请输入买家的旺旺名（登录名）。').max(64) }).strict().parse(request.body)

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import './1688.css'
-import { AlertCircle, Sparkles, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, Paperclip, PenLine, Plus, Save, Search, ShieldCheck, Store, Tag as TagIcon, Trash2, X } from 'lucide-react'
+import { AlertCircle, Sparkles, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, MessageSquareText, Paperclip, PenLine, Plus, Save, Search, ShieldCheck, Store, Tag as TagIcon, Trash2, X } from 'lucide-react'
 import { getAccounts, type Account, type SessionUser } from './api'
 import { DATA_CHANGED, openAi, useAiFocusPart } from './aiFocus'
+import OrderDrawer from './OrderDrawer'
+import { Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
+import { getChatDetail, type ChatDetail } from './performanceApi'
 import {
   addFollowup, attachmentMimes, bulkTag, createTag, deleteAttachment, deleteTag, exportCustomers, getAttachments, getCustomer, getCustomers, getCustomerSettings, getOptions, getShopAgents,
   saveCustomerSettings, saveProfile, setCustomerTags, uploadAttachment,
@@ -35,6 +38,8 @@ function FilterRow({title,options,value,onChange,single}:{title:string;options:[
 
 export default function CustomerOpsPage({user,openOffline,initialView='list'}:{user:SessionUser;openOffline:()=>void;initialView?:'list'|'pool'|'due'}) {
   const canRead=permission(user,'customer_ops:read'),canUpdate=permission(user,'customer_ops:update'),canManage=permission(user,'customer_ops:manage')
+  // Order detail, chat messages and Wangwang go through the performance app, so they need its read access.
+  const canChat=permission(user,'performance:read')||permission(user,'performance:read_own')
   const [options,setOptions]=useState<Options|null>(null),[shop,setShop]=useState(''),[view,setView]=useState<View>(initialView)
   const [filters,setFilters]=useState<Filters>({}),[search,setSearch]=useState(''),[page,setPage]=useState(1)
   const [rows,setRows]=useState<Customer[]>([]),[total,setTotal]=useState(0),[online,setOnline]=useState(0),[loading,setLoading]=useState(true)
@@ -116,7 +121,7 @@ export default function CustomerOpsPage({user,openOffline,initialView='list'}:{u
       <p className="shop-note">购买数据来自已同步的 1688 订单（按订单修改时间同步，未补齐的历史订单不计入）；平台不提供买家姓名和联系方式，名称、电话等需在“资料”中手动维护。</p>
     </>}
     {followupFor&&<FollowupModal customer={followupFor} close={()=>setFollowupFor(null)} saved={()=>{setFollowupFor(null);setNotice('跟进已记录');void load()}} setError={setError}/>}
-    {detail&&<DetailDrawer id={detail} options={options} canUpdate={canUpdate} close={()=>setDetail(null)} changed={()=>{void load();void loadOptions()}} setError={setError} setNotice={setNotice}/>}
+    {detail&&<DetailDrawer id={detail} options={options} canUpdate={canUpdate} canChat={canChat} close={()=>setDetail(null)} changed={()=>{void load();void loadOptions()}} setError={setError} setNotice={setNotice}/>}
   </div>
 }
 
@@ -134,10 +139,11 @@ function FollowupModal({customer,close,saved,setError}:{customer:Customer;close:
   </div><footer><button className="shop-button" onClick={close}>关闭</button><button className="shop-button primary" disabled={busy} onClick={()=>void submit()}>提交</button></footer></Modal>
 }
 
-function DetailDrawer({id,options,canUpdate,close,changed,setError,setNotice}:{id:string;options:Options;canUpdate:boolean;close:()=>void;changed:()=>void;setError:(t:string)=>void;setNotice:(t:string)=>void}) {
+function DetailDrawer({id,options,canUpdate,canChat,close,changed,setError,setNotice}:{id:string;options:Options;canUpdate:boolean;canChat:boolean;close:()=>void;changed:()=>void;setError:(t:string)=>void;setNotice:(t:string)=>void}) {
   const [data,setData]=useState<CustomerDetail|null>(null),[form,setForm]=useState<ProfileInput|null>(null),[busy,setBusy]=useState(false)
   const [agents,setAgents]=useState<{id:string;login_id:string;is_main:boolean}[]>([]),[accountSearch,setAccountSearch]=useState(''),[accounts,setAccounts]=useState<Account[]>([]),[newTag,setNewTag]=useState('')
-  const [tagIds,setTagIds]=useState<string[]>([])
+  const [tagIds,setTagIds]=useState<string[]>([]),[order,setOrder]=useState(''),[chat,setChat]=useState<{title:string;data:ChatDetail}|null>(null)
+  async function openChat(c:CustomerDetail['chats'][number]){try{setChat({title:`${c.is_main?'主账号':c.login_id} · ${c.chat_date}`,data:(await getChatDetail(c.id)).data})}catch(cause){setError(message(cause))}}
   const load=useCallback(async()=>{try{const r=(await getCustomer(id)).data;const c=r.customer;setData(r);setTagIds(c.tag_ids)
     setForm({revision:c.revision,name:c.name,wangwangId:c.wangwang_id,phone:c.phone,wechat:c.wechat,email:c.email,qq:c.qq,address:c.address,memberIdentity:c.member_identity,purchaseType:c.purchase_type,salesChannels:c.sales_channels,cycleMode:c.cycle_mode,cycleDays:c.cycle_days,note:c.note,accountId:c.account_id,ownerAgentId:c.owner_source==='manual'?c.owner_agent_id:'auto'})
     setAgents((await getShopAgents(c.connection_id)).data)}catch(cause){setError(message(cause))}},[id,setError])
@@ -178,9 +184,12 @@ function DetailDrawer({id,options,canUpdate,close,changed,setError,setNotice}:{i
       <h3 className="perf-chart-title">跟进记录（{data.followups.length}）</h3>
       {data.followups.length?<ul className="co-timeline">{data.followups.map(f=><li key={f.id}><time>{dateTime(f.created_at)}</time><span>{f.content}</span><small>{f.method==='wangwang'?'旺旺跟进':'其他方式'} · {f.created_by_name??''}{f.need_follow_up?` · 下次 ${dateTime(f.next_follow_up_at)}${f.superseded?'（已更新）':''}`:' · 无需跟进'}</small></li>)}</ul>:<p className="shop-note">暂无跟进记录。</p>}
       <h3 className="perf-chart-title">最近订单</h3>
-      {data.orders.length?<div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>订单号</th><th>下单 / 付款</th><th>商品</th><th>金额</th><th>状态</th></tr></thead><tbody>{data.orders.map(o=><tr key={o.order_id}><td><code>{o.order_id}</code></td><td>{dateTime(o.placed_at)}<small>{o.paid_at?`付款 ${dateTime(o.paid_at)}`:'未付款'}</small></td><td>{o.items.slice(0,2).map((i,n)=><small key={n}>{i.name} × {i.quantity}</small>)}</td><td>{yuan(o.total_amount)}{o.refunded>0&&<small>退款 {yuan(o.refunded)}</small>}</td><td>{orderStatus[o.status]??o.status}</td></tr>)}</tbody></table></div>:<p className="shop-note">暂无订单。</p>}
-      <h3 className="perf-chart-title">最近咨询</h3>
-      {data.chats.length?<ul className="co-timeline">{data.chats.map(c=><li key={c.id}><time>{c.chat_date}</time><span>{c.is_main?'主账号':c.login_id} 接待</span><small>买家 {c.buyer_messages} 条 / 客服 {c.agent_messages} 条</small></li>)}</ul>:<p className="shop-note">暂无咨询记录。</p>}
+      {data.orders.length?<div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>订单号</th><th>下单 / 付款</th><th>商品</th><th>金额</th><th>状态</th></tr></thead><tbody>{data.orders.map(o=><tr key={o.order_id}><td>{canChat?<button className="perf-order-link" title="查看订单详情" onClick={()=>setOrder(o.order_id)}>{o.order_id}</button>:<code>{o.order_id}</code>}</td><td>{dateTime(o.placed_at)}<small>{o.paid_at?`付款 ${dateTime(o.paid_at)}`:'未付款'}</small></td><td>{o.items.slice(0,2).map((i,n)=><small key={n}>{i.name} × {i.quantity}</small>)}</td><td>{yuan(o.total_amount)}{o.refunded>0&&<small>退款 {yuan(o.refunded)}</small>}</td><td>{orderStatus[o.status]??o.status}</td></tr>)}</tbody></table></div>:<p className="shop-note">暂无订单。</p>}
+      <h3 className="perf-chart-title co-chats-title">最近咨询{canChat&&data.chats.length>0&&<WangwangButton buyerId={id} setError={setError} label="旺旺联系"/>}</h3>
+      {data.chats.length?<ul className="co-timeline">{data.chats.map(c=><li key={c.id}><time>{c.chat_date}</time><span>{c.is_main?'主账号':c.login_id} 接待</span><small>买家 {c.buyer_messages} 条 / 客服 {c.agent_messages} 条</small>
+        {canChat&&<span className="co-chat-actions"><WangwangButton buyerId={id} setError={setError}/><button className="shop-icon" title="查看对话" aria-label={`查看 ${c.chat_date} 的对话`} onClick={()=>void openChat(c)}><MessageSquareText size={16}/></button></span>}</li>)}</ul>:<p className="shop-note">暂无咨询记录。</p>}
+      {order&&<OrderDrawer connectionId={data.customer.connection_id} orderId={order} close={()=>setOrder('')} setError={setError}/>}
+      {chat&&<Drawer title={chat.title} close={()=>setChat(null)}><div className="perf-drawer-actions"><WangwangButton buyerId={id} setError={setError} label="旺旺联系买家"/></div><Timeline data={chat.data}/></Drawer>}
     </div>
     {canUpdate&&<footer><button className="shop-button" onClick={close}>关闭</button><button className="shop-button primary" disabled={busy} onClick={()=>void save()}><Save size={16}/>保存资料</button></footer>}
   </>}</Modal>
