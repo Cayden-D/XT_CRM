@@ -58,7 +58,7 @@ export async function catalogRoutes(app: FastifyInstance) {
     // Group counts ignore the group filter so each tab shows what it would return.
     const facets = (await db.query(`SELECT count(*) FILTER (WHERE ${groups.on_sale})::int AS on_sale,count(*) FILTER (WHERE ${groups.expired})::int AS expired,
         count(*) FILTER (WHERE ${groups.other})::int AS other FROM integration_1688_listings l WHERE ${where.join(' AND ')}`, values)).rows[0]
-    const shops = (await db.query(`SELECT c.id,c.display_name,c.status,max(l.synced_at) AS synced_at FROM integration_1688_connections c LEFT JOIN integration_1688_listings l ON l.connection_id=c.id
+    const shops = (await db.query(`SELECT c.id,c.display_name,c.status,max(l.synced_at) AS synced_at,c.listings_synced_through FROM integration_1688_connections c LEFT JOIN integration_1688_listings l ON l.connection_id=c.id
       WHERE c.tenant_id=$1 GROUP BY c.id ORDER BY c.created_at`, [request.authUser.tenantId])).rows
     return { data: rows, total: facets[q.group], page: q.page, pageSize: q.pageSize, facets, shops }
   })

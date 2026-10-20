@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 
 // AI sidebar with tools: a fake Qwen endpoint scripts the tool calls, the real tools read seeded mirror tables.
-type Body = { model: string; messages: { role: string; content: string | null; tool_call_id?: string; tool_calls?: unknown[] }[]; tools?: { function: { name: string } }[] }
+type Body = { model: string; stream?: boolean; messages: { role: string; content: string | null; tool_call_id?: string; tool_calls?: unknown[] }[]; tools?: { function: { name: string } }[] }
 const requests: Body[] = []
 let respond: (body: Body) => object = () => ({ content: 'ok' })
 const call = (name: string, args: object) => ({ id: `call-${randomUUID().slice(0, 8)}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })
@@ -13,8 +13,26 @@ const fake = createServer((request, response) => {
   request.on('end', () => {
     const body = JSON.parse(raw) as Body
     requests.push(body)
+    let message: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] }
+    try { message = respond(body) } catch { response.writeHead(500, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: { message: '模型服务异常' } })); return }
+    if (body.stream) {
+      // Streamed like DashScope: text in small pieces, each tool call split into fragments by index, usage last.
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      const send = (data: object) => response.write(`data: ${JSON.stringify({ model: body.model, ...data })}\n\n`)
+      if (message.tool_calls) send({ choices: [{ delta: { content: '我先查一下。' } }] })
+      for (const piece of (message.content ?? '').match(/.{1,3}/gs) ?? []) send({ choices: [{ delta: { content: piece } }] })
+      message.tool_calls?.forEach((c, index) => {
+        const half = Math.ceil(c.function.arguments.length / 2)
+        send({ choices: [{ delta: { tool_calls: [{ index, id: c.id, type: 'function', function: { name: c.function.name, arguments: c.function.arguments.slice(0, half) } }] } }] })
+        send({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: c.function.arguments.slice(half) } }] } }] })
+      })
+      send({ choices: [{ delta: {}, finish_reason: message.tool_calls ? 'tool_calls' : 'stop' }] })
+      send({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } })
+      response.end('data: [DONE]\n\n')
+      return
+    }
     response.writeHead(200, { 'Content-Type': 'application/json' })
-    response.end(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', ...respond(body) }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } }))
+    response.end(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', ...message }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } }))
   })
 })
 await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve))
@@ -203,7 +221,31 @@ try {
   const [viewerCust, viewerRq] = toolResults(requests[1])
   assert.equal(viewerCust.recentAgentReplies, undefined); assert.match(viewerRq.error, /无权限/)
 
-  console.log(JSON.stringify({chatInsights:'ok',tags:'ok',owner:'ok',expiry:'ok',history:'ok', toolsOffered: 'ok', contextPointers: 'ok', realData: 'ok', confirmOnce: 'ok', permissions: 'ok', isolation: 'ok', roundLimit: 'ok', reject: 'ok' }))
+  // Streaming: the same turn as server-sent events; tool rounds run between, the saved answer matches the streamed text.
+  requests.length = 0
+  script({ content: null, tool_calls: [call('get_customer', { customerId: A }), call('get_top_products', {})] }, { content: '**张老板**近期复购遮阳帘，建议推荐吸盘。' })
+  const streamed = await app.inject({ method: 'POST', url: '/api/ai/chat/stream', headers: auth(admin, ['*']), payload: { message: '分析张老板', context: { connectionId: c.id } } })
+  assert.equal(streamed.statusCode, 200); assert.match(String(streamed.headers['content-type']), /text\/event-stream/); assert.equal(streamed.headers['x-accel-buffering'], 'no')
+  const events = streamed.body.split('\n\n').filter(b => b.startsWith('event:')).map(b => ({ event: b.match(/^event: (\w+)/)![1], data: JSON.parse(b.split('\ndata: ')[1]) }))
+  assert.deepEqual([...new Set(events.map(e => e.event))], ['start', 'delta', 'tools', 'done'])
+  const afterTools = events.slice(events.findIndex(e => e.event === 'tools'))
+  assert.equal(afterTools.filter(e => e.event === 'delta').map(e => e.data.text).join(''), '**张老板**近期复购遮阳帘，建议推荐吸盘。')
+  assert.deepEqual(events.find(e => e.event === 'tools')!.data.names, ['get_customer', 'get_top_products'])
+  const done = events.at(-1)!.data
+  assert.equal(done.message.content, '**张老板**近期复购遮阳帘，建议推荐吸盘。'); assert.equal(done.conversationId, events[0].data.conversationId)
+  assert.deepEqual(done.message.tools.map((t: { name: string; ok: boolean }) => [t.name, t.ok]), [['get_customer', true], ['get_top_products', true]])
+  assert.equal(done.message.input_tokens, 20)
+  assert.ok(requests.every(r => r.stream)); assert.equal(toolResults(requests[1])[0].name, '张老板', 'reassembled tool arguments reach the tool')
+  const streamedHistory = (await app.inject({ method: 'GET', url: `/api/ai/conversations/${done.conversationId}/messages`, headers: auth(admin, ['*']) })).json().data.messages
+  assert.deepEqual(streamedHistory.map((m: { role: string }) => m.role), ['user', 'assistant'])
+  // Failures before the stream starts are plain HTTP errors; model failures mid-turn arrive as an `error` event.
+  assert.equal((await app.inject({ method: 'POST', url: '/api/ai/chat/stream', headers: auth(admin, ['*']), payload: { message: '' } })).statusCode, 400)
+  assert.equal((await app.inject({ method: 'POST', url: '/api/ai/chat/stream', headers: auth(outsider, ['*'], tenantIds[1]), payload: { message: 'x', conversationId: done.conversationId } })).statusCode, 404)
+  respond = () => { throw new Error('boom') }
+  const failed = await app.inject({ method: 'POST', url: '/api/ai/chat/stream', headers: auth(admin, ['*']), payload: { message: '再说一次', conversationId: done.conversationId } })
+  assert.match(failed.body, /event: error\ndata: \{"error":"LLM_REQUEST_FAILED"/)
+
+  console.log(JSON.stringify({stream:'ok',chatInsights:'ok',tags:'ok',owner:'ok',expiry:'ok',history:'ok', toolsOffered: 'ok', contextPointers: 'ok', realData: 'ok', confirmOnce: 'ok', permissions: 'ok', isolation: 'ok', roundLimit: 'ok', reject: 'ok' }))
 } finally {
   for (const id of tenantIds) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM ai_action_requests WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }
   await app.close(); await db.end(); await new Promise<void>(resolve => fake.close(() => resolve()))

@@ -19,6 +19,7 @@
     "test:users-admin": "tsx scripts/test-users-admin.ts",
     "test:chat-inquiry": "tsx scripts/test-chat-inquiry.ts",
     "test:1688-categories": "tsx scripts/test-1688-categories.ts",
+    "test:order-list": "tsx scripts/test-order-list.ts",
     "test:products": "tsx scripts/test-products.ts",
     "test:product-collection": "tsx scripts/test-product-collection.ts",
     "test:1688": "tsx scripts/test-1688.ts",
@@ -45,7 +46,8 @@
     "test:ai-assistant": "tsx scripts/test-ai-assistant.ts",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:1688-listing-sync": "tsx scripts/test-1688-listing-sync.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

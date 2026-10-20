@@ -89,6 +89,10 @@ export function validatePublishBody(schema: Json, body: Json): string[] {
   return [...new Set(missing)]
 }
 
+const SYNC_OVERLAP_MS = 10 * 60_000
+/** 1688 date parameter format, Beijing time: 20180717174002000+0800. */
+export const platformTime = (iso: string) => new Date(new Date(iso).getTime() + 8 * 3_600_000).toISOString().replace(/[-:T.Z]/g, '').slice(0, 17) + '+0800'
+
 async function saveListing(tenantId: string, connectionId: string, info: Json, productId?: string) {
   const offerId = String(info.productID || info.itemId || '')
   if (!/^\d+$/.test(offerId)) throw new IntegrationError('INVALID_PRODUCT', '平台商品缺少有效 ID。')
@@ -171,7 +175,7 @@ export async function integration1688Routes(app: FastifyInstance) {
   await agentImageRoutes(app)
 
   app.get('/connections', { preHandler: requirePermission('integration:read') }, async request => {
-    const rows = await db.query(`SELECT ${publicConnectionColumns} FROM integration_1688_connections WHERE tenant_id=$1 ORDER BY created_at`, [request.authUser.tenantId])
+    const rows = await db.query(`SELECT ${publicConnectionColumns},listings_synced_through,listings_full_synced_at FROM integration_1688_connections WHERE tenant_id=$1 ORDER BY created_at`, [request.authUser.tenantId])
     return { data: rows.rows, configured: Boolean(process.env.ALI1688_APP_KEY && process.env.ALI1688_APP_SECRET && process.env.ALI1688_REDIRECT_URI) }
   })
   app.post('/authorizations', { preHandler: requirePermission('integration:manage') }, async request => {
@@ -219,14 +223,40 @@ export async function integration1688Routes(app: FastifyInstance) {
     const { page } = listInput.parse(request.query)
     return { data: (await db.query('SELECT o.id,o.api_name,o.outcome,o.error_code,o.duration_ms,o.created_at,c.display_name FROM integration_1688_operations o LEFT JOIN integration_1688_connections c ON c.id=o.connection_id WHERE o.tenant_id=$1 AND o.app_purpose=\'product\' ORDER BY o.created_at DESC LIMIT 50 OFFSET $2', [request.authUser.tenantId, (page - 1) * 50])).rows }
   })
+  // 平台商品 sync, one page per request. The first page fixes the window: `full` reads every product, `incremental`
+  // only those modified since the shop's watermark (minus an overlap for clock skew). Later pages pass the window and
+  // the first page's total back; the watermark advances to the window end only when the last page is read and the
+  // total did not change meanwhile (a change can shift ID pages, so the same window is read again next time).
   app.post('/connections/:id/sync', { preHandler: requirePermission('integration:manage') }, async request => {
     const { id } = idSchema.parse(request.params)
-    const input = z.object({ pageNo: z.number().int().min(1).max(10000).default(1) }).parse(request.body || {})
-    const response = await callProductApi(id, request.authUser.tenantId, request.authUser.sub, 'alibaba.product.list.get', { pageNo: input.pageNo, pageSize: 20, orderByCondition: 'ID', orderByType: 'ASC', needDetail: true }, request.id)
+    const input = z.object({
+      pageNo: z.number().int().min(1).max(10000).default(1),
+      mode: z.enum(['full', 'incremental']).default('full'),
+      window: z.object({ from: z.string().datetime({ offset: true }).nullable(), to: z.string().datetime({ offset: true }) }).optional(),
+      total: z.number().int().min(0).optional(),
+    }).parse(request.body || {})
+    const tenantId = request.authUser.tenantId
+    const connection = (await db.query('SELECT listings_synced_through FROM integration_1688_connections WHERE id=$1 AND tenant_id=$2', [id, tenantId])).rows[0]
+    if (!connection) throw new IntegrationError('NOT_FOUND', '店铺连接不存在。', 404)
+    let window = input.window
+    if (!window || input.pageNo === 1) {
+      const since = input.mode === 'incremental' && connection.listings_synced_through ? new Date(new Date(connection.listings_synced_through).getTime() - SYNC_OVERLAP_MS) : null
+      window = { from: since?.toISOString() ?? null, to: new Date().toISOString() }
+    }
+    if (new Date(window.to).getTime() > Date.now() + 60_000 || (window.from && window.from >= window.to)) throw new IntegrationError('INVALID_WINDOW', '同步时间窗口不正确，请重新开始同步。', 400)
+    const response = await callProductApi(id, tenantId, request.authUser.sub, 'alibaba.product.list.get', {
+      pageNo: input.pageNo, pageSize: 20, orderByCondition: 'ID', orderByType: 'ASC', needDetail: true,
+      ...(window.from ? { startModifyTime: platformTime(window.from), endModifyTime: platformTime(window.to) } : {}),
+    }, request.id)
     const page = (response.result as Json)?.pageResult as Json
     if (!page || !Array.isArray(page.resultList)) throw new IntegrationError('INVALID_LIST', '平台商品列表格式不正确。')
-    for (const info of page.resultList) await saveListing(request.authUser.tenantId, id, info)
-    return { data: { count: page.resultList.length, total: Number(page.totalRecords || 0), pageNo: input.pageNo, hasMore: page.resultList.length === 20 && (!page.totalRecords || input.pageNo * 20 < Number(page.totalRecords)) } }
+    for (const info of page.resultList) await saveListing(tenantId, id, info)
+    const total = Number(page.totalRecords || 0)
+    const hasMore = page.resultList.length === 20 && (!total || input.pageNo * 20 < total)
+    const stable = input.pageNo === 1 || input.total === undefined || input.total === total
+    if (!hasMore && stable) await db.query(`UPDATE integration_1688_connections SET listings_synced_through=GREATEST(listings_synced_through,$3::timestamptz),
+      listings_full_synced_at=CASE WHEN $4 THEN now() ELSE listings_full_synced_at END,updated_at=now() WHERE id=$1 AND tenant_id=$2`, [id, tenantId, window.to, !window.from])
+    return { data: { count: page.resultList.length, total: input.pageNo === 1 ? total : input.total ?? total, pageNo: input.pageNo, hasMore, mode: window.from ? 'incremental' : 'full', window, completed: !hasMore && stable } }
   })
   app.get('/listings', { preHandler: requirePermission('integration:read') }, async request => {
     const input = listInput.parse(request.query)

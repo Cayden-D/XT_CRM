@@ -10,7 +10,7 @@ import DetailEditor from './1688DetailEditor'
 import { getAlbums } from './imageApi'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FilePlus2, ImagePlus, Link2, LoaderCircle, Package, Plus, Power, RefreshCw, Save, Search, Send, ShieldCheck, Store, Trash2, X } from 'lucide-react'
 import { getProducts, type Product, type SessionUser } from './api'
-import { getAgentSettings, runPublishingAgent, completeShopAuthorization, createPublishDraft, disableShopConnection, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopListings, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, syncShopPage, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
+import { getAgentSettings, runPublishingAgent, completeShopAuthorization, createPublishDraft, disableShopConnection, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopListings, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, syncShop, syncNotice, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
 
 const imageUrl=(value:string)=>value.startsWith('img/')?`https://cbu01.alicdn.com/${value}`:value
 const time = (value:string|null) => value ? new Date(value).toLocaleString('zh-CN') : '—'
@@ -47,7 +47,14 @@ export default function Integration1688Page({user,onCollections}:{user:SessionUs
   useEffect(()=>{void load()},[load])
   async function action(name:string,run:()=>Promise<unknown>,success:string){setBusy(name);setError('');try{await run();setNotice(success);await load()}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function authorize(){setBusy('authorize');setError('');try{const result=await startShopAuthorization();setAuthUrl(result.data.authorizationUrl);setCallbackUrl('')}catch(cause){setError(message(cause))}finally{setBusy('')}}
-  async function sync(){if(!selected)return;syncAbort.current=false;setBusy('sync');setError('');let count=0;try{let hasMore=true;for(let index=1;hasMore&&!syncAbort.current;index++){if(index>1000)throw new Error('本轮同步达到分页上限，请联系管理员继续。');const result=await syncShopPage(selected,index);count+=result.data.count;hasMore=result.data.hasMore;setNotice(`正在同步 ${count} / ${result.data.total||'—'} 件商品`)}setNotice(syncAbort.current?`同步已停止，本轮已读取 ${count} 件`:`同步完成，本轮已读取 ${count} 件`);await load()}catch(cause){setError(`${message(cause)} 本轮已读取 ${count} 件，已保存的数据可继续查看。`);await load()}finally{setBusy('')}}
+  async function sync(requested:'incremental'|'full'){
+    if(!selected)return;syncAbort.current=false;setBusy(requested==='full'?'sync-full':'sync');setError('');let count=0
+    try{
+      const result=await syncShop(selected,requested,(read,total,mode)=>{count=read;setNotice(`${mode==='incremental'?'增量同步':'全量同步'}：正在读取 ${read} / ${total} 件商品`)},()=>syncAbort.current)
+      setNotice(syncNotice(result))
+      await load()
+    }catch(cause){setError(`${message(cause)} 本轮已读取 ${count} 件，已保存的数据可继续查看。`);await load()}finally{setBusy('')}
+  }
   async function openDraft(id:string){setBusy(id);try{setDraft((await getPublishDraft(id)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function openListing(id:string){setBusy(id);try{setListing((await getShopListing(id)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   if(!canRead)return <section className="state-card"><ShieldCheck size={28}/><h2>暂无店铺访问权限</h2></section>
@@ -56,7 +63,10 @@ export default function Integration1688Page({user,onCollections}:{user:SessionUs
     {notice&&<div className="shop-feedback" role="status"><CheckCircle2 size={16}/><span>{notice}</span><button title="关闭提示" onClick={()=>setNotice('')}><X size={15}/></button></div>}
     {error&&<div className="shop-feedback error" role="alert"><AlertCircle size={16}/><span>{error}</span><button title="关闭错误" onClick={()=>setError('')}><X size={15}/></button></div>}
     <div className="shop-controlbar"><div className="shop-select"><Store size={17}/><select aria-label="目标店铺" value={selected} disabled={Boolean(busy)} onChange={e=>{setSelected(e.target.value);setPage(1)}}><option value="">选择店铺</option>{connections.map(c=><option key={c.id} value={c.id}>{c.display_name} · {statusNames[c.status]}</option>)}</select></div><div className="shop-commandbar">
-      {view==='listings'&&<><div className="shop-search"><Search size={16}/><input aria-label="搜索平台商品" value={search} placeholder="商品标题或 ID" onChange={e=>{setSearch(e.target.value);setPage(1)}}/></div>{canManage&&<button className="shop-button primary" disabled={Boolean(busy)||!selected||connections.find(c=>c.id===selected)?.status!=='connected'} onClick={()=>void sync()}><RefreshCw size={16} className={busy==='sync'?'spin':''}/>{busy==='sync'?'正在同步':'同步店铺'}</button>}{busy==='sync'&&<button className="shop-button" onClick={()=>{syncAbort.current=true}}>停止</button>}</>}
+      {view==='listings'&&<><div className="shop-search"><Search size={16}/><input aria-label="搜索平台商品" value={search} placeholder="商品标题或 ID" onChange={e=>{setSearch(e.target.value);setPage(1)}}/></div>{canManage&&(()=>{const shop=connections.find(c=>c.id===selected),off=Boolean(busy)||!selected||shop?.status!=='connected',since=shop?.listings_synced_through
+        return <><button className="shop-button primary" disabled={off} title={since?`只读取 ${time(since)} 之后修改过的商品`:'首次同步会读取全部商品'} onClick={()=>void sync('incremental')}><RefreshCw size={16} className={busy==='sync'?'spin':''}/>{busy==='sync'?'正在同步':since?'同步变动':'同步店铺'}</button>
+          {since&&<button className="shop-button" disabled={off} title={`重新读取全部商品${shop?.listings_full_synced_at?`（上次全量：${time(shop.listings_full_synced_at)}）`:''}`} onClick={()=>void sync('full')}><RefreshCw size={16} className={busy==='sync-full'?'spin':''}/>{busy==='sync-full'?'正在全量同步':'全量同步'}</button>}</>})()}
+        {busy.startsWith('sync')&&<button className="shop-button" onClick={()=>{syncAbort.current=true}}>停止</button>}</>}
       {view==='drafts'&&canPublish&&<button className="shop-button primary" disabled={!selected||Boolean(busy)} onClick={()=>setCreate(true)}><FilePlus2 size={16}/>新建草稿</button>}
       {view==='connections'&&canManage&&<button className="shop-button primary" disabled={!configured||Boolean(busy)} onClick={()=>void authorize()}><Link2 size={16}/>连接店铺</button>}
       <button className="shop-icon" title="刷新当前视图" aria-label="刷新当前视图" disabled={Boolean(busy)} onClick={()=>void load()}><RefreshCw size={17}/></button>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ExternalLink, Inbox, Link2, Package, RefreshCw, Search, SearchX, Square, X } from 'lucide-react'
 import { ApiError, type SessionUser } from './api'
-import { getCatalog, getShopListing, syncShopPage, type CatalogGroup, type CatalogItem, type CatalogShop, type CatalogSort, type PlatformListing } from './1688Api'
+import { getCatalog, getShopListing, syncShop, syncNotice, type CatalogGroup, type CatalogItem, type CatalogShop, type CatalogSort, type PlatformListing } from './1688Api'
 import { ListingViewer } from './1688Page'
 import Pagination, { useDebounced } from './Pagination'
 import { ago } from './ProductCollectionsPage'
@@ -39,22 +39,24 @@ export default function PlatformCatalog({ user, openShop }: { user: SessionUser;
   useEffect(() => { void load() }, [load])
 
   const connected = shops.filter(s => s.status === 'connected')
+  // Incremental once every shop being synced has completed a pass.
+  const incremental = connected.some(s => !shop || s.id === shop) && connected.filter(s => !shop || s.id === shop).every(s => s.listings_synced_through)
   const lastSync = shops.filter(s => !shop || s.id === shop).map(s => s.synced_at).filter(Boolean).sort().at(-1) ?? null
-  // Reads the shop's offers page by page through the product app (20 per call), as the 1688 店铺 page does.
-  async function sync() {
+  // Reads the shop's offers through the product app (20 per call), as the 1688 店铺 page does: by default only the
+  // products modified since the last completed sync; a full pass re-reads everything.
+  async function sync(requested: 'incremental' | 'full' = 'incremental') {
     const targets = shop ? connected.filter(s => s.id === shop) : connected
     if (!targets.length) { setError('没有已连接的 1688 店铺，请先在“1688 店铺”中授权。'); return }
     stop.current = false; setSyncing(true); setError(''); let count = 0
     try {
+      const notices: string[] = []
       for (const target of targets) {
-        let hasMore = true
-        for (let pageNo = 1; hasMore && !stop.current; pageNo++) {
-          if (pageNo > 1000) throw new Error('本轮同步达到分页上限。')
-          const r = await syncShopPage(target.id, pageNo); count += r.data.count; hasMore = r.data.hasMore
-          setNotice(`正在同步${targets.length > 1 ? ` ${target.display_name ?? ''}` : ''}：已读取 ${count} / ${r.data.total || '—'} 件`)
-        }
+        const before = count
+        const result = await syncShop(target.id, requested, (read, total, mode) => { count = before + read; setNotice(`${mode === 'incremental' ? '增量同步' : '全量同步'}${targets.length > 1 ? ` ${target.display_name ?? ''}` : ''}：已读取 ${read} / ${total} 件`) }, () => stop.current)
+        notices.push(`${targets.length > 1 ? `${target.display_name ?? '未命名店铺'}：` : ''}${syncNotice(result)}`)
+        if (result.stopped) break
       }
-      setNotice(stop.current ? `已停止，本轮读取 ${count} 件` : `同步完成，本轮读取 ${count} 件`)
+      setNotice(notices.join('；'))
     } catch (cause) { setError(`${message(cause)}（本轮已读取 ${count} 件，已保存的数据可继续查看）`) } finally { setSyncing(false); await load() }
   }
   async function open(item: CatalogItem) { try { setViewing((await getShopListing(item.id)).data) } catch (cause) { setError(message(cause)) } }
@@ -70,7 +72,8 @@ export default function PlatformCatalog({ user, openShop }: { user: SessionUser;
       <select className="catalog-select" value={sort} onChange={e => setSort(e.target.value as CatalogSort)} aria-label="排序">{(Object.keys(sortNames) as CatalogSort[]).map(k => <option key={k} value={k}>{sortNames[k]}</option>)}</select>
       {canManage && (syncing
         ? <button className="catalog-primary" onClick={() => { stop.current = true }}><Square size={14} />停止同步</button>
-        : <button className="catalog-primary" disabled={!connected.length} onClick={() => void sync()}><RefreshCw size={16} />同步平台商品</button>)}
+        : <><button className="catalog-primary" disabled={!connected.length} title={incremental ? '只读取上次同步后修改过的商品' : '首次同步会读取全部商品'} onClick={() => void sync()}><RefreshCw size={16} />{incremental ? '同步变动' : '同步平台商品'}</button>
+          {incremental && <button className="catalog-secondary" onClick={() => void sync('full')} title="重新读取店铺全部商品，用于核对或同步曾中断时">全量同步</button>}</>)}
     </section>
     <div className="catalog-subhead">
       <div className="catalog-tabs" role="tablist" aria-label="平台状态">{(Object.keys(groupNames) as CatalogGroup[]).filter(k => k !== 'other' || facets.other > 0).map(k =>

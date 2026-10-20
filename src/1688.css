@@ -471,3 +471,50 @@
 .detail-url { display:flex; gap:6px; flex:1; min-width:240px; }
 .detail-url input { flex:1; min-width:0; border:1px solid #cdd8d1; border-radius:5px; padding:8px 10px; font:inherit; }
 @media (hover:none) { .detail-block-tools { opacity:1; } }
+
+/* 订单 */
+.orders-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:4px 0 8px; }
+.orders-head .catalog-tabs { flex:1; min-width:0; }
+.orders-search { display:flex; align-items:center; gap:6px; height:34px; padding:0 10px; border:1px solid #cdd8d1; border-radius:17px; background:#fff; color:#71838c; width:min(280px,100%); }
+.orders-search input { flex:1; min-width:0; border:0; outline:0; font:inherit; font-size:13px; color:#18313f; background:transparent; }
+.orders-search button { border:0; background:none; color:#71838c; cursor:pointer; display:grid; place-items:center; }
+.orders-sum { margin:0 0 10px; color:#71838c; font-size:13px; }
+.orders-sum b { color:#18313f; font-variant-numeric:tabular-nums; }
+.orders-table td small { display:block; color:#8a978f; font-size:12px; margin-top:2px; }
+.orders-table.is-loading tbody { opacity:.55; }
+.orders-id { border:0; background:none; padding:0; font:500 12px 'IBM Plex Mono',monospace; color:#17664c; cursor:pointer; }
+.orders-id:hover { text-decoration:underline; }
+.orders-product { max-width:300px; }
+.orders-product span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.orders-product small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.orders-refund { color:#a54f25 !important; }
+.order-detail { display:flex; flex-direction:column; gap:18px; }
+.order-detail section h4 { display:flex; align-items:center; gap:6px; margin:0 0 8px; font-size:14px; color:#18313f; }
+.order-detail section p { margin:4px 0; font-size:13px; color:#485b4c; }
+.order-status { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:13px; color:#71838c; }
+.order-status a { margin-left:auto; display:inline-flex; align-items:center; gap:4px; color:#17664c; text-decoration:none; }
+.order-timeline { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
+.order-timeline li { border-top:3px solid #dce6df; padding-top:6px; display:flex; flex-direction:column; gap:2px; font-size:12px; color:#8a978f; }
+.order-timeline li.done { border-color:#1f8a70; color:#485b4c; }
+.order-timeline b { color:#18313f; font-weight:500; }
+.order-items { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.order-items li { display:grid; grid-template-columns:56px minmax(0,1fr) auto; gap:10px; align-items:center; }
+.order-items img, .order-noimg { width:56px; height:56px; border-radius:6px; object-fit:cover; background:#eef3f0; }
+.order-items li > div:nth-child(2) { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.order-items b { font-weight:500; font-size:13px; color:#18313f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.order-items small { color:#8a978f; font-size:12px; }
+.order-item-num { display:flex; flex-direction:column; align-items:flex-end; gap:2px; font-size:12px; color:#71838c; font-variant-numeric:tabular-nums; }
+.order-item-num b { color:#18313f; font-size:14px; }
+.order-item-num a { color:#17664c; font-size:12px; }
+.order-money dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin:0; font-size:13px; }
+.order-money dt { color:#71838c; }
+.order-money dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; color:#18313f; }
+.order-ship { list-style:none; margin:0 0 8px; padding:0; display:flex; flex-direction:column; gap:6px; }
+.order-ship li { display:flex; flex-wrap:wrap; gap:4px 10px; font-size:13px; }
+.order-ship span { font-family:'IBM Plex Mono',monospace; color:#485b4c; }
+.order-ship small { flex-basis:100%; color:#8a978f; }
+.order-receiver { display:flex; gap:6px; align-items:flex-start; padding:8px 10px; border-radius:6px; background:#f4f7f5; font-size:13px; color:#485b4c; }
+.order-receiver svg { flex:0 0 auto; margin-top:3px; color:#8a978f; }
+.order-buyer { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+.order-buyer h4 { flex-basis:100%; }
+@media(max-width:640px){ .order-timeline { grid-template-columns:repeat(3,minmax(0,1fr)); } .order-items li { grid-template-columns:48px minmax(0,1fr); } .order-item-num { grid-column:2; align-items:flex-start; } }

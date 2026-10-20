@@ -1,9 +1,9 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { config } from '../config.js'
 import { hasPermission, requireAuth } from '../auth.js'
-import { chatQwen,isQwenModel,LlmConfigurationError,LlmRequestError,QWEN_MODELS,type LlmMessage } from '../llm/qwen.js'
+import { chatQwen,isQwenModel,LlmConfigurationError,LlmRequestError,QWEN_MODELS,streamQwen,type LlmMessage,type QwenModel } from '../llm/qwen.js'
 import { beijingDate, runTool, toolsFor, type AssistantContext } from '../integrations/ai-assistant-tools.js'
 import { addFollowup, changeTags, setOwners } from './customer-ops.js'
 
@@ -42,6 +42,79 @@ async function resolveShop(tenantId:string,wanted?:string){
   return shops.find(s=>s.id===wanted)??shops[0]??null
 }
 
+type Emit=(event:string,data:unknown)=>void
+type Prepared={conversationId:string;requested:QwenModel;input:z.infer<typeof chatSchema>}
+
+/** Validates the turn and records the user's message (in a new conversation if none is given). */
+async function prepareChat(request:FastifyRequest):Promise<Prepared|{status:number;body:object}>{
+  const input=chatSchema.safeParse(request.body);if(!input.success)return{status:400,body:{error:'VALIDATION_ERROR',message:'消息格式不正确。',details:input.error.flatten()}}
+  const requested=input.data.model??config.QWEN_DEFAULT_MODEL;if(!isQwenModel(requested))return{status:400,body:{error:'UNSUPPORTED_MODEL',message:'所选模型不在允许列表中。'}}
+  const {tenantId,sub:userId}=request.authUser
+  const client=await db.connect();let conversationId=input.data.conversationId??null
+  try{
+    await client.query('BEGIN')
+    if(conversationId){
+      const exists=await client.query('SELECT id FROM ai_conversations WHERE id=$1 AND tenant_id=$2 AND user_id=$3 FOR UPDATE',[conversationId,tenantId,userId])
+      if(!exists.rows[0]){await client.query('ROLLBACK');return{status:404,body:{error:'NOT_FOUND',message:'对话不存在。'}}}
+      await client.query('UPDATE ai_conversations SET model_provider=$2,model_name=$3,updated_at=now() WHERE id=$1',[conversationId,'qwen',requested])
+    }else conversationId=(await client.query(`INSERT INTO ai_conversations(tenant_id,user_id,title,context_type,model_provider,model_name)VALUES($1,$2,$3,$4,'qwen',$5)RETURNING id`,[tenantId,userId,input.data.message.slice(0,80),input.data.context?.page??'global',requested])).rows[0].id as string
+    await client.query(`INSERT INTO ai_messages(conversation_id,role,content)VALUES($1,'user',$2)`,[conversationId,input.data.message])
+    await client.query('COMMIT')
+  }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+  return{conversationId:conversationId!,requested,input:input.data}
+}
+
+function llmFailure(request:FastifyRequest,error:unknown):{status:number;body:{error:string;message:string}}{
+  request.log.error(error)
+  if(error instanceof LlmConfigurationError)return{status:503,body:{error:'LLM_NOT_CONFIGURED',message:error.message}}
+  if(error instanceof LlmRequestError)return{status:error.status===429?429:error.status===504?504:502,body:{error:'LLM_REQUEST_FAILED',message:error.message}}
+  return{status:500,body:{error:'INTERNAL_SERVER_ERROR',message:'服务器处理请求时发生错误。'}}
+}
+
+/** Runs the tool rounds and saves the answer. With `emit`, the model is streamed and progress is pushed as it happens. */
+async function answer(request:FastifyRequest,{conversationId,requested,input}:Prepared,emit?:Emit){
+  const {tenantId,sub:userId,permissions,displayName}=request.authUser
+  const context=input.context??{}
+  const shop=await resolveShop(tenantId,context.connectionId)
+  const ctx:AssistantContext={tenantId,userId,permissions,connectionId:shop?.id??null,conversationId,proposals:[]}
+  const tools=toolsFor(permissions)
+  const today=beijingDate(0)
+  // Only pointers go into the prompt; the model pulls the actual figures through tools when a question needs them.
+  const situation=[`今天：${today}（星期${weekdays[new Date(`${today}T00:00:00+08:00`).getUTCDay()]}，北京时间）`,`当前用户：${displayName}`,
+    `当前页面：${context.pageTitle||context.page||'全局工作台'}${context.view?` / ${context.view}`:''}`,
+    shop?`当前店铺：${shop.display_name??'未命名店铺'}`:'当前没有授权的 1688 店铺',
+    context.customerId?`用户正在查看的客户：${context.customerName??'未命名'}（customerId=${context.customerId}）。用户说“这个客户/他”时指该客户。`:'',
+    tools.length?`可用工具：${tools.map(t=>t.function.name).join('、')}`:'当前账号没有可查询的业务数据权限，只能回答通用问题。'].filter(Boolean).join('\n')
+  const history=(await db.query<{role:'user'|'assistant';content:string}>(`SELECT role,content FROM ai_messages WHERE conversation_id=$1 AND role IN ('user','assistant') ORDER BY created_at DESC,id DESC LIMIT 20`,[conversationId])).rows.reverse()
+  const messages:LlmMessage[]=[{role:'system',content:`${systemPrompt}\n\n${situation}`},...history]
+  const started=Date.now(),used:{name:string;ok:boolean}[]=[];let inputTokens=0,outputTokens=0
+  const timeoutMs=Math.max(config.QWEN_TIMEOUT_MS,ASSISTANT_TIMEOUT_MS)
+  const complete=(withTools:boolean)=>emit
+    ?streamQwen({messages,model:requested,tools:withTools?tools:undefined,timeoutMs,onText:text=>emit('delta',{text})})
+    :chatQwen({messages,model:requested,tools:withTools?tools:undefined,timeoutMs})
+  let result=await complete(true)
+  for(let round=0;result.toolCalls.length;round++){
+    inputTokens+=result.inputTokens??0;outputTokens+=result.outputTokens??0
+    emit?.('tools',{names:result.toolCalls.map(c=>c.function.name)})
+    messages.push({role:'assistant',content:result.content,tool_calls:result.toolCalls})
+    for(const call of result.toolCalls){
+      const out=await runTool(ctx,call.function.name,call.function.arguments)
+      used.push({name:call.function.name,ok:out.ok})
+      messages.push({role:'tool',tool_call_id:call.id,content:out.content})
+    }
+    // After the last allowed round the model must answer with what it has.
+    result=await complete(round+1<MAX_TOOL_ROUNDS)
+  }
+  inputTokens+=result.inputTokens??0;outputTokens+=result.outputTokens??0
+  const content=result.content??'（没有生成回答）'
+  const saved=(await db.query(`INSERT INTO ai_messages(conversation_id,role,content,input_tokens,output_tokens,latency_ms,extracted_entities)VALUES($1,'assistant',$2,$3,$4,$5,$6)RETURNING id,role,content,input_tokens,output_tokens,latency_ms,created_at`,
+    [conversationId,content,inputTokens,outputTokens,Date.now()-started,JSON.stringify({tools:used,actions:ctx.proposals})])).rows[0]
+  await db.query('UPDATE ai_conversations SET updated_at=now() WHERE id=$1',[conversationId])
+  await db.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'ai.chat','ai_conversation',$3,$4,$5)`,
+    [tenantId,userId,conversationId,JSON.stringify({provider:'qwen',model:result.model,stream:Boolean(emit),inputTokens,outputTokens,tools:used.map(t=>t.name),proposals:ctx.proposals.length}),request.id])
+  return{conversationId,message:{...saved,tools:used,actions:await proposals(ctx.proposals)},model:result.model}
+}
+
 export async function aiRoutes(app:FastifyInstance){
   app.get('/models',{preHandler:requireAuth},async()=>({data:{provider:'qwen',configured:Boolean(config.DASHSCOPE_API_KEY),defaultModel:config.QWEN_DEFAULT_MODEL,models:QWEN_MODELS}}))
 
@@ -72,62 +145,25 @@ export async function aiRoutes(app:FastifyInstance){
   })
 
   app.post('/chat',{preHandler:requireAuth},async(request,reply)=>{
-    const input=chatSchema.safeParse(request.body);if(!input.success)return reply.code(400).send({error:'VALIDATION_ERROR',message:'消息格式不正确。',details:input.error.flatten()})
-    const requested=input.data.model??config.QWEN_DEFAULT_MODEL;if(!isQwenModel(requested))return reply.code(400).send({error:'UNSUPPORTED_MODEL',message:'所选模型不在允许列表中。'})
-    const {tenantId,sub:userId,permissions,displayName}=request.authUser
-    const client=await db.connect();let conversationId=input.data.conversationId??null
-    try{
-      await client.query('BEGIN')
-      if(conversationId){
-        const exists=await client.query('SELECT id FROM ai_conversations WHERE id=$1 AND tenant_id=$2 AND user_id=$3 FOR UPDATE',[conversationId,tenantId,userId])
-        if(!exists.rows[0]){await client.query('ROLLBACK');return reply.code(404).send({error:'NOT_FOUND',message:'对话不存在。'})}
-        await client.query('UPDATE ai_conversations SET model_provider=$2,model_name=$3,updated_at=now() WHERE id=$1',[conversationId,'qwen',requested])
-      }else conversationId=(await client.query(`INSERT INTO ai_conversations(tenant_id,user_id,title,context_type,model_provider,model_name)VALUES($1,$2,$3,$4,'qwen',$5)RETURNING id`,[tenantId,userId,input.data.message.slice(0,80),input.data.context?.page??'global',requested])).rows[0].id as string
-      await client.query(`INSERT INTO ai_messages(conversation_id,role,content)VALUES($1,'user',$2)`,[conversationId,input.data.message])
-      await client.query('COMMIT')
-    }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+    const prepared=await prepareChat(request);if('status' in prepared)return reply.code(prepared.status).send(prepared.body)
+    try{return{data:await answer(request,prepared)}}
+    catch(error){const failure=llmFailure(request,error);return reply.code(failure.status).send(failure.body)}
+  })
 
-    const context=input.data.context??{}
-    const shop=await resolveShop(tenantId,context.connectionId)
-    const ctx:AssistantContext={tenantId,userId,permissions,connectionId:shop?.id??null,conversationId:conversationId!,proposals:[]}
-    const tools=toolsFor(permissions)
-    const today=beijingDate(0)
-    // Only pointers go into the prompt; the model pulls the actual figures through tools when a question needs them.
-    const situation=[`今天：${today}（星期${weekdays[new Date(`${today}T00:00:00+08:00`).getUTCDay()]}，北京时间）`,`当前用户：${displayName}`,
-      `当前页面：${context.pageTitle||context.page||'全局工作台'}${context.view?` / ${context.view}`:''}`,
-      shop?`当前店铺：${shop.display_name??'未命名店铺'}`:'当前没有授权的 1688 店铺',
-      context.customerId?`用户正在查看的客户：${context.customerName??'未命名'}（customerId=${context.customerId}）。用户说“这个客户/他”时指该客户。`:'',
-      tools.length?`可用工具：${tools.map(t=>t.function.name).join('、')}`:'当前账号没有可查询的业务数据权限，只能回答通用问题。'].filter(Boolean).join('\n')
-    const history=(await db.query<{role:'user'|'assistant';content:string}>(`SELECT role,content FROM ai_messages WHERE conversation_id=$1 AND role IN ('user','assistant') ORDER BY created_at DESC,id DESC LIMIT 20`,[conversationId])).rows.reverse()
-    const messages:LlmMessage[]=[{role:'system',content:`${systemPrompt}\n\n${situation}`},...history]
-    const started=Date.now(),used:{name:string;ok:boolean}[]=[];let inputTokens=0,outputTokens=0
-    try{
-      let result=await chatQwen({messages,model:requested,tools,timeoutMs:Math.max(config.QWEN_TIMEOUT_MS,ASSISTANT_TIMEOUT_MS)})
-      for(let round=0;result.toolCalls.length;round++){
-        inputTokens+=result.inputTokens??0;outputTokens+=result.outputTokens??0
-        messages.push({role:'assistant',content:result.content,tool_calls:result.toolCalls})
-        for(const call of result.toolCalls){
-          const out=await runTool(ctx,call.function.name,call.function.arguments)
-          used.push({name:call.function.name,ok:out.ok})
-          messages.push({role:'tool',tool_call_id:call.id,content:out.content})
-        }
-        // After the last allowed round the model must answer with what it has.
-        result=await chatQwen({messages,model:requested,tools:round+1<MAX_TOOL_ROUNDS?tools:undefined,timeoutMs:Math.max(config.QWEN_TIMEOUT_MS,ASSISTANT_TIMEOUT_MS)})
-      }
-      inputTokens+=result.inputTokens??0;outputTokens+=result.outputTokens??0
-      const content=result.content??'（没有生成回答）'
-      const saved=(await db.query(`INSERT INTO ai_messages(conversation_id,role,content,input_tokens,output_tokens,latency_ms,extracted_entities)VALUES($1,'assistant',$2,$3,$4,$5,$6)RETURNING id,role,content,input_tokens,output_tokens,latency_ms,created_at`,
-        [conversationId,content,inputTokens,outputTokens,Date.now()-started,JSON.stringify({tools:used,actions:ctx.proposals})])).rows[0]
-      await db.query('UPDATE ai_conversations SET updated_at=now() WHERE id=$1',[conversationId])
-      await db.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'ai.chat','ai_conversation',$3,$4,$5)`,
-        [tenantId,userId,conversationId,JSON.stringify({provider:'qwen',model:result.model,inputTokens,outputTokens,tools:used.map(t=>t.name),proposals:ctx.proposals.length}),request.id])
-      return{data:{conversationId,message:{...saved,tools:used,actions:await proposals(ctx.proposals)},model:result.model}}
-    }catch(error){
-      request.log.error(error)
-      if(error instanceof LlmConfigurationError)return reply.code(503).send({error:'LLM_NOT_CONFIGURED',message:error.message})
-      if(error instanceof LlmRequestError){const status=error.status===429?429:error.status===504?504:502;return reply.code(status).send({error:'LLM_REQUEST_FAILED',message:error.message})}
-      throw error
-    }
+  // The same conversation turn as /chat, as server-sent events: `start` (conversation id), `tools` (data being read;
+  // text streamed before a tool round is discarded), `delta` (answer text), then `done` (the saved message) or `error`.
+  app.post('/chat/stream',{preHandler:requireAuth},async(request,reply)=>{
+    const prepared=await prepareChat(request);if('status' in prepared)return reply.code(prepared.status).send(prepared.body)
+    reply.hijack()
+    // Headers set by plugins (CORS) are carried over; nginx must not buffer the stream.
+    reply.raw.writeHead(200,{...reply.getHeaders() as Record<string,string>,'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'})
+    const emit:Emit=(event,data)=>{if(!reply.raw.destroyed)reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)}
+    // Keeps proxies from closing a connection that waits on a slow tool round.
+    const heartbeat=setInterval(()=>{if(!reply.raw.destroyed)reply.raw.write(': ping\n\n')},15_000)
+    emit('start',{conversationId:prepared.conversationId})
+    try{emit('done',await answer(request,prepared,emit))}
+    catch(error){emit('error',llmFailure(request,error).body)}
+    finally{clearInterval(heartbeat);reply.raw.end()}
   })
 
   // A proposal is executed only by the user who asked for it, once, within a day, and with the permission the write itself needs.

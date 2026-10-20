@@ -21,7 +21,7 @@ export const getAgentImages=(draftId:string)=>request<{data:AgentImagePreview[]}
 export const generateAgentImage=(draftId:string,input:{revision:number;mode:'generate'|'edit';model:string;prompt:string;sourceIndex?:number;confirmed:true})=>post<{data:AgentImagePreview}>(`/drafts/${draftId}/agent-images`,input)
 export const applyAgentImage=(draftId:string,imageId:string,input:{revision:number;albumId:string;placement:'replace'|'append';sourceIndex?:number;confirmed:true})=>post<{data:{draft:PublishDraft;photoUrl:string}}>(`/drafts/${draftId}/agent-images/${imageId}/apply`,input)
 const post = <T>(path: string, body?: object) => request<T>(`${base}${path}`, { method: 'POST', ...(body ? { body: JSON.stringify(body) } : {}) })
-export type ShopConnection = { id:string; app_key:string; ali_id:string; member_id:string|null; login_id:string|null; display_name:string; access_expires_at:string; refresh_expires_at:string|null; status:'connected'|'reauthorize'|'disabled'; member_capability:'unknown'|'available'|'unavailable'; last_tested_at:string|null; last_refreshed_at:string|null }
+export type ShopConnection = { id:string; app_key:string; ali_id:string; member_id:string|null; login_id:string|null; display_name:string; access_expires_at:string; refresh_expires_at:string|null; status:'connected'|'reauthorize'|'disabled'; member_capability:'unknown'|'available'|'unavailable'; last_tested_at:string|null; last_refreshed_at:string|null; listings_synced_through?:string|null; listings_full_synced_at?:string|null }
 export type PlatformProduct = { productID:string|number; subject:string; description?:string; image?:{images:string[]}; skuInfos?:Array<{specId:string;amountOnSale:number;price:number;attributes?:Array<{attributeDisplayName:string;attributeValue:string}>}>;saleInfo?:{amountOnSale:number;priceRanges?:Array<{price:number}>} }
 export type PlatformListing = { deletion_state?:'active'|'deleting'|'deleted'|'unknown'; id:string;connection_id:string;offer_id:string;product_id:string|null;title:string;status:string;image_url:string|null;synced_at:string;display_name?:string;sku?:string|null;snapshot?:PlatformProduct }
 export type PublishDraft = { id:string;connection_id:string;product_id:string;cat_id:string;category_path?:string[]|null;scene:string;revision:number;status:'draft'|'submitting'|'published'|'failed'|'unknown';offer_id:string|null;last_error_code:string|null;updated_at:string;name?:string;sku?:string;display_name?:string;platform_schema:Record<string,any>;data_body:{global:Record<string,unknown>;formValues:Record<string,any>} }
@@ -33,14 +33,30 @@ export const completeShopAuthorization = (callbackUrl:string) => post<{data:Shop
 export const testShopConnection = (id:string) => post(`/connections/${id}/test`)
 export const refreshShopToken = (id:string) => post(`/connections/${id}/refresh`)
 export const disableShopConnection = (id:string) => post(`/connections/${id}/disable`)
-export const syncShopPage = (id:string,pageNo:number) => post<{data:{count:number;total:number;pageNo:number;hasMore:boolean}}>(`/connections/${id}/sync`,{pageNo})
+export type SyncWindow = { from:string|null; to:string }
+/** One page of 平台商品 sync; page 1 picks the window (incremental needs an earlier completed sync, else it reads everything). */
+export const syncShopPage = (id:string,body:{pageNo:number;mode:'full'|'incremental';window?:SyncWindow;total?:number}) => post<{data:{count:number;total:number;pageNo:number;hasMore:boolean;mode:'full'|'incremental';window:SyncWindow;completed:boolean}}>(`/connections/${id}/sync`,body)
+const syncTime=(value:string)=>new Date(value).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})
+export const syncNotice=(r:{count:number;mode:'full'|'incremental';completed:boolean;since:string|null;stopped:boolean})=>r.stopped?`同步已停止，本轮已读取 ${r.count} 件`
+  :`${r.mode==='incremental'?`增量同步完成：${r.since?`${syncTime(r.since)} 之后`:''}有变动的商品 ${r.count} 件`:`全量同步完成，共读取 ${r.count} 件`}${r.completed?'':'；同步期间店铺商品数有变化，下次同步会重新检查这段时间'}`
+/** Runs a whole sync pass page by page; `incremental` reads only products modified since the last completed pass. */
+export async function syncShop(id:string,requested:'full'|'incremental',progress:(read:number,total:number,mode:'full'|'incremental')=>void,stopped:()=>boolean){
+  let hasMore=true,window:SyncWindow|undefined,total:number|undefined,completed=false,mode=requested,count=0
+  for(let pageNo=1;hasMore&&!stopped();pageNo++){
+    if(pageNo>1000)throw new Error('本轮同步达到分页上限，请联系管理员继续。')
+    const result=(await syncShopPage(id,{pageNo,mode:requested,window,total})).data
+    window=result.window;total=result.total;mode=result.mode;completed=result.completed;count+=result.count;hasMore=result.hasMore
+    progress(count,result.total,mode)
+  }
+  return {count,mode,completed,since:window?.from??null,stopped:hasMore}
+}
 export const getShopListings = (connectionId:string,page:number,search:string) => request<{data:PlatformListing[]}>(`${base}/listings?${new URLSearchParams({connectionId,page:String(page),search})}`)
 export const getShopListing = (id:string) => request<{data:PlatformListing}>(`${base}/listings/${id}`)
 export type CatalogGroup='on_sale'|'expired'|'other'
 export type CatalogSort='recent'|'sales'|'price_asc'|'price_desc'|'stock'
 /** One offer in 产品目录, as last synced from the shop, with 30-day sales from synced orders. */
 export type CatalogItem={id:string;connection_id:string;shop:string|null;offer_id:string;title:string;status:string;image_url:string|null;synced_at:string;product_id:string|null;product_sku:string|null;product_name:string|null;category:string|null;cargo_number:string|null;unit:string|null;updated_on_platform:string|null;expires_on_platform:string|null;price_min:number|null;price_max:number|null;stock:number|null;sku_count:number;sales_quantity:number;sales_amount:number;sales_orders:number}
-export type CatalogShop={id:string;display_name:string|null;status:string;synced_at:string|null}
+export type CatalogShop={id:string;display_name:string|null;status:string;synced_at:string|null;listings_synced_through:string|null}
 export const getCatalog=(params:{connectionId?:string;group:CatalogGroup;search?:string;sort:CatalogSort;page:number;pageSize:number})=>{const query=new URLSearchParams();Object.entries(params).forEach(([k,v])=>{if(v!==undefined&&v!=='')query.set(k,String(v))});return request<{data:CatalogItem[];total:number;page:number;pageSize:number;facets:Record<CatalogGroup,number>;shops:CatalogShop[]}>(`${base}/catalog?${query}`)}
 export type ComparisonValue={crm:string|null;platform:string|null;status:'equal'|'changed'|'unknown';basis?:string}
 export type ListingComparison={listing:{id:string;offerId:string;title:string;productId:string|null;bindingRevision:number;syncedAt:string};product:{id:string;sku:string;name:string;status:string;currency:string;updatedAt:string}|null;variants:Array<{id:string;label:string;attributes:Record<string,string>;unitPrice:string;stock:string|null}>;platformSkus:Array<{specId:string|null;label:string;price:number|string|null;stock:number|string|null}>;bindings:Array<{specId:string;variantId:string}>;rows:Array<{specId:string;variantId:string;crmLabel:string;platformLabel:string;missing:boolean;price:ComparisonValue;stock:ComparisonValue}>;summary:{mapped:number;unmatchedCrm:number;unmatchedPlatform:number;changedPrice:number;changedStock:number;unknown:number};fields:{title:ComparisonValue;image:ComparisonValue;basePrice:ComparisonValue}}

@@ -144,6 +144,34 @@ export const deleteCollectedProduct=(id:string)=>request<void>(`/api/product-col
 export const createCollectorKey=()=>request<{data:{id:string;name:string;key_prefix:string;key:string;created_at:string}}>('/api/product-collections/access-key',{method:'POST'})
 export const getAiModels=()=>request<{data:{provider:'qwen';configured:boolean;defaultModel:AiModel;models:AiModel[]}}>('/api/ai/models')
 export const sendAiMessage=(data:{message:string;conversationId?:string|null;model?:AiModel;context?:AiContext})=>request<{data:{conversationId:string;message:AiMessage;model:string}}>('/api/ai/chat',{method:'POST',body:JSON.stringify(data)})
+/** /api/ai/chat as a stream: answer text arrives through `onText`; resolves with the saved message. */
+export async function streamAiMessage(data:{message:string;conversationId?:string|null;model?:AiModel;context?:AiContext},on:{onStart?:(conversationId:string)=>void;onText:(text:string)=>void;onTools:(names:string[])=>void}){
+  const token=getToken()
+  const response=await fetch(`${API_BASE}/api/ai/chat/stream`,{method:'POST',body:JSON.stringify(data),headers:{'Content-Type':'application/json',Accept:'text/event-stream',...(token?{Authorization:`Bearer ${token}`}:{})}})
+  if(response.status===401){clearToken();window.dispatchEvent(new Event('crm:unauthorized'))}
+  if(!response.ok||!response.body){const body=await response.json().catch(()=>({})) as {message?:string};throw new ApiError(response.status,body.message??'AI 暂时无法响应。')}
+  const reader=response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer='',done:{conversationId:string;message:AiMessage;model:string}|null=null
+  const handle=(block:string)=>{
+    let event='message',payload=''
+    for(const line of block.split('\n')){if(line.startsWith('event:'))event=line.slice(6).trim();else if(line.startsWith('data:'))payload+=line.slice(5).trim()}
+    if(!payload)return
+    const value=JSON.parse(payload)
+    if(event==='start')on.onStart?.(value.conversationId)
+    else if(event==='delta')on.onText(value.text)
+    else if(event==='tools')on.onTools(value.names)
+    else if(event==='done')done=value
+    else if(event==='error')throw new ApiError(502,value.message??'AI 暂时无法响应。')
+  }
+  for(;;){
+    const {value,done:ended}=await reader.read();if(ended)break
+    buffer+=value
+    let end;while((end=buffer.indexOf('\n\n'))>=0){handle(buffer.slice(0,end));buffer=buffer.slice(end+2)}
+  }
+  if(buffer.trim())handle(buffer)
+  if(!done)throw new ApiError(502,'AI 回答中断，请重试。')
+  return done as {conversationId:string;message:AiMessage;model:string}
+}
 export const confirmAiAction=(id:string)=>request<{data:AiAction}>(`/api/ai/actions/${id}/confirm`,{method:'POST',body:'{}'})
 export const rejectAiAction=(id:string)=>request<{data:AiAction}>(`/api/ai/actions/${id}/reject`,{method:'POST',body:'{}'})
 export const getAiConversations=(before?:string)=>request<{data:AiConversation[];hasMore:boolean}>(`/api/ai/conversations${before?`?before=${encodeURIComponent(before)}`:''}`)

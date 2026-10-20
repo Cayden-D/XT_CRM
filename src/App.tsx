@@ -1,7 +1,7 @@
 import AgentQueueSettings from './AgentQueueSettings'
 import { useEffect, useState } from 'react'
 import {
-  Building2, Database, Headset, Images, LayoutDashboard, LogOut, Menu, MessagesSquare, Package, PackageCheck, Settings, ShieldCheck, Sparkles, Store, Users, Wand2,
+  Building2, Database, Headset, Images, LayoutDashboard, LogOut, Menu, MessagesSquare, Package, ReceiptText, PackageCheck, Settings, ShieldCheck, Sparkles, Store, Users, Wand2,
 } from 'lucide-react'
 import LoginPage from './LoginPage'
 import CustomersPage from './CustomersPage'
@@ -14,13 +14,14 @@ import PerformancePage, { type View as PerfView } from './PerformancePage'
 import CustomerOpsPage from './CustomerOpsPage'
 import UsersAdminPage from './UsersAdminPage'
 import ChatInquiryPage from './ChatInquiryPage'
+import OrdersPage from './OrdersPage'
 import { ImageEditPage, ImageSuitePage } from './ImageWorkshop'
 import { OPEN_IMAGE_TOOL, type ImageIntent } from './imageApi'
 import AiAssistant from './AiAssistant'
 import { OPEN_AI, resetAiFocus } from './aiFocus'
 import { clearToken,getCurrentUser,getToken,type SessionUser } from './api'
 
-type Page = 'dashboard' | 'customers' | 'products' | 'collections' | 'imageEdit' | 'imageSuite' | 'shop' | 'settings' | 'queue' | 'performance' | 'chats' | 'customerOps' | 'users'
+type Page = 'dashboard' | 'customers' | 'products' | 'collections' | 'imageEdit' | 'imageSuite' | 'shop' | 'settings' | 'queue' | 'performance' | 'chats' | 'orders' | 'customerOps' | 'users'
 
 const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   dashboard: { title: '经营看板', eyebrow: '成交、接待、客户与上架的实时概况' },
@@ -32,6 +33,7 @@ const pageMeta: Record<Page, { title: string; eyebrow: string }> = {
   shop: { title: '1688 店铺', eyebrow: '平台商品、发布工作台与连接设置' },
   queue: {title:'上架队列',eyebrow:'跟踪采集商品的检测、资料准备与发布进度'},
   customerOps: { title: '客户经营', eyebrow: '1688 客户档案、精细化分层、跟进与复购' },
+  orders: { title: '订单', eyebrow: '店铺订单列表与 1688 实时订单详情' },
   chats: { title: '聊天与询盘', eyebrow: '旺旺聊天记录、询盘转化与买家查找' },
   performance: { title: '客服绩效', eyebrow: '1688 绩效应用授权、指标口径与绩效方案' },
   users: { title: '账户管理', eyebrow: '开设账号、分配角色、停用与重置密码' },
@@ -48,6 +50,7 @@ const nav: Array<{ id: Page; label: string; icon: typeof LayoutDashboard; count?
   { id: 'imageSuite', label: '电商套图', icon: Images },
   { id: 'shop', label: '1688 店铺', icon: Store },
   { id: 'queue', label: '上架队列', icon: PackageCheck },
+  { id: 'orders', label: '订单', icon: ReceiptText },
   { id: 'chats', label: '聊天与询盘', icon: MessagesSquare },
   { id: 'performance', label: '客服绩效', icon: Headset },
 ]
@@ -119,7 +122,7 @@ export default function App() {
     <Sidebar page={page} setPage={next => { setSubView(undefined); setImageIntent(undefined); setPage(next) }} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
       <Topbar page={page} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
-      <div className="page-content">{page === 'dashboard' ? <DashboardPage user={session} go={go} /> : page === 'customers' ? <CustomersPage /> : page === 'products' ? <ProductsPage user={session} openShop={() => setPage('shop')} /> : page === 'collections' ? <ProductCollectionsPage user={session} /> : page === 'imageEdit' ? <ImageEditPage key={subView ?? 'imageEdit'} user={session} intent={imageIntent} /> : page === 'imageSuite' ? <ImageSuitePage key={subView ?? 'imageSuite'} user={session} intent={imageIntent} /> : page === 'shop' ? <Integration1688Page user={session} onCollections={()=>setPage('collections')}/> : page === 'queue' ? <AgentQueueSettings user={session}/> : page === 'performance' ? <PerformancePage key={subView ?? 'performance'} user={session} initialView={subView as PerfView | undefined}/> : page === 'chats' ? <ChatInquiryPage user={session} /> : page === 'users' && canManageUsers(session) ? <UsersAdminPage user={session} /> : page === 'customerOps' ? <CustomerOpsPage key={subView ?? 'customerOps'} user={session} initialView={subView as 'list' | 'pool' | 'due' | undefined} openOffline={()=>setPage('customers')}/> : <AgentSettingsPage user={session}/>}</div>
+      <div className="page-content">{page === 'dashboard' ? <DashboardPage user={session} go={go} /> : page === 'customers' ? <CustomersPage /> : page === 'products' ? <ProductsPage user={session} openShop={() => setPage('shop')} /> : page === 'collections' ? <ProductCollectionsPage user={session} /> : page === 'imageEdit' ? <ImageEditPage key={subView ?? 'imageEdit'} user={session} intent={imageIntent} /> : page === 'imageSuite' ? <ImageSuitePage key={subView ?? 'imageSuite'} user={session} intent={imageIntent} /> : page === 'shop' ? <Integration1688Page user={session} onCollections={()=>setPage('collections')}/> : page === 'queue' ? <AgentQueueSettings user={session}/> : page === 'performance' ? <PerformancePage key={subView ?? 'performance'} user={session} initialView={subView as PerfView | undefined}/> : page === 'chats' ? <ChatInquiryPage user={session} /> : page === 'orders' ? <OrdersPage user={session} /> : page === 'users' && canManageUsers(session) ? <UsersAdminPage user={session} /> : page === 'customerOps' ? <CustomerOpsPage key={subView ?? 'customerOps'} user={session} initialView={subView as 'list' | 'pool' | 'due' | undefined} openOffline={()=>setPage('customers')}/> : <AgentSettingsPage user={session}/>}</div>
     </main>
     <button className={`ai-fab ${aiOpen ? 'hidden' : ''}`} onClick={() => openAI()}><Sparkles size={20} /><span>问销途 AI</span></button>
     <AiAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={page} pageTitle={pageMeta[page].title} />

@@ -21,6 +21,7 @@ import { customerOpsRoutes } from './routes/customer-ops.js'
 import { dashboardRoutes } from './routes/dashboard.js'
 import { imageWorkshopRoutes } from './routes/image-workshop.js'
 import { chatInquiryRoutes } from './routes/1688-chat-inquiry.js'
+import { orderListRoutes } from './routes/1688-order-list.js'
 
 export async function buildApp() {
   const app = Fastify({
@@ -69,6 +70,7 @@ export async function buildApp() {
   await app.register(performanceAnalysisRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performanceKeywordRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(chatInquiryRoutes, { prefix: '/api/integrations/1688/performance' })
+  await app.register(orderListRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performancePayrollRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(customerOpsRoutes, { prefix: '/api/customer-ops' })
   await app.register(dashboardRoutes, { prefix: '/api/dashboard' })

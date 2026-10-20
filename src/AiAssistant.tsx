@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Bot, CalendarClock, Check, ChevronLeft, Command, Database, History, LoaderCircle, Mic, Plus, Send, Sparkles, Tag, Trash2, UserRoundCog, X } from 'lucide-react'
-import { ApiError, confirmAiAction, deleteAiConversation, getAiConversation, getAiConversations, getAiModels, rejectAiAction, sendAiMessage, type AiAction, type AiConversation, type AiMessage, type AiModel } from './api'
+import { ApiError, confirmAiAction, deleteAiConversation, getAiConversation, getAiConversations, getAiModels, rejectAiAction, streamAiMessage, type AiAction, type AiConversation, type AiMessage, type AiModel } from './api'
 import { DATA_CHANGED, useAiFocus } from './aiFocus'
 
 const toolNames: Record<string, string> = {
@@ -84,19 +84,28 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
   const [model, setModel] = useState<AiModel>('qwen3.8-flash'), [models, setModels] = useState<AiModel[]>(['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus'])
   const [configured, setConfigured] = useState(true), [sending, setSending] = useState(false), [error, setError] = useState('')
   const [view, setView] = useState<'chat' | 'history'>('chat'), [history, setHistory] = useState<AiConversation[]>([]), [hasMore, setHasMore] = useState(false), [loadingHistory, setLoadingHistory] = useState(false)
+  // The answer being streamed: its text so far, and the data the model is reading meanwhile.
+  const [draft, setDraft] = useState(''), [reading, setReading] = useState<string[]>([])
   const focus = useAiFocus(), chatRef = useRef<HTMLDivElement>(null)
   useEffect(() => { if (initialPrompt) setValue(initialPrompt) }, [initialPrompt])
   useEffect(() => { getAiModels().then(result => { setModel(result.data.defaultModel); setModels(result.data.models); setConfigured(result.data.configured) }).catch(() => {}) }, [])
   useEffect(() => { chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' }) }, [messages, sending])
+  // While text streams in, follow it only if the reader is already at the bottom.
+  useEffect(() => { const el = chatRef.current; if (el && draft && el.scrollHeight - el.scrollTop - el.clientHeight < 80) el.scrollTop = el.scrollHeight }, [draft])
   async function send(text = value) {
     const message = text.trim(); if (!message || sending) return
     setValue(''); setError(''); setView('chat')
     setMessages(current => [...current, { id: `pending-${Date.now()}`, role: 'user', content: message, input_tokens: null, output_tokens: null, latency_ms: null, created_at: new Date().toISOString() }])
-    setSending(true)
+    setSending(true); setDraft(''); setReading([])
     try {
-      const result = await sendAiMessage({ message, conversationId, model, context: { page, pageTitle, ...focus } })
-      setConversationId(result.data.conversationId); setMessages(current => [...current, result.data.message])
-    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'AI 暂时无法响应。') } finally { setSending(false) }
+      const result = await streamAiMessage({ message, conversationId, model, context: { page, pageTitle, ...focus } }, {
+        onStart: setConversationId,
+        onText: text => setDraft(current => current + text),
+        // Text before a tool round is only the model announcing the lookup; the answer starts after it.
+        onTools: names => { setDraft(''); setReading(current => [...new Set([...current, ...names])]) },
+      })
+      setConversationId(result.conversationId); setMessages(current => [...current, result.message])
+    } catch (cause) { setError(cause instanceof ApiError ? cause.message : 'AI 暂时无法响应。') } finally { setSending(false); setDraft(''); setReading([]) }
   }
   const updateAction = (next: AiAction) => setMessages(current => current.map(m => m.actions?.some(a => a.id === next.id) ? { ...m, actions: m.actions.map(a => a.id === next.id ? next : a) } : m))
   const reset = () => { setMessages([]); setConversationId(null); setError(''); setView('chat') }
@@ -150,7 +159,10 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
         {message.actions?.map(action => <ActionCard key={action.id} action={action} onChange={updateAction} />)}
         {message.role === 'assistant' && <small>{message.tools?.length ? <span className="ai-tools"><Database size={10} />已查询：{[...new Set(message.tools.map(t => toolNames[t.name] ?? t.name))].join('、')}</span> : null}{message.latency_ms != null && `${(message.latency_ms / 1000).toFixed(1)} 秒 · ${model}`}</small>}
       </div></div>)}
-      {sending && <div className="chat-message assistant"><div className="bot-dot"><LoaderCircle className="spin" size={14} /></div><div><p>正在查询数据并思考…</p></div></div>}
+      {sending && <div className="chat-message assistant"><div className="bot-dot">{draft ? <Sparkles size={14} /> : <LoaderCircle className="spin" size={14} />}</div><div>
+        {draft ? <Markdown text={draft} /> : <p>{reading.length ? `正在查询：${reading.map(n => toolNames[n] ?? n).join('、')}…` : '正在思考…'}</p>}
+        {draft && <small><span className="ai-streaming"><LoaderCircle className="spin" size={10} />生成中</span>{reading.length > 0 && <span className="ai-tools"><Database size={10} />已查询：{reading.map(n => toolNames[n] ?? n).join('、')}</span>}</small>}
+      </div></div>}
       {error && <div className="ai-error">{error}</div>}
     </div>}
     <div className="composer"><div className="model-row"><span>模型</span><select value={model} onChange={e => setModel(e.target.value as AiModel)}>{models.map(item => <option key={item}>{item}</option>)}</select></div>

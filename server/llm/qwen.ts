@@ -34,3 +34,49 @@ export async function chatQwen(input:{messages:LlmMessage[];model?:QwenModel;tem
     return{content,toolCalls,model:body.model||model,inputTokens:body.usage?.prompt_tokens??null,outputTokens:body.usage?.completion_tokens??null,finishReason:body.choices?.[0]?.finish_reason??null}
   }catch(error){if(error instanceof LlmRequestError||error instanceof LlmConfigurationError)throw error;if(error instanceof Error&&error.name==='AbortError')throw new LlmRequestError('千问响应超时，请稍后重试。',504);throw new LlmRequestError(error instanceof Error?error.message:'无法连接千问服务。',502)}finally{clearTimeout(timeout)}
 }
+
+/**
+ * The same completion as chatQwen, streamed: `onText` receives the answer as it is generated. Tool calls arrive in
+ * fragments (keyed by index) and are reassembled; the resolved result has the same shape as chatQwen's. Thinking is
+ * off as in non-streamed calls: streamed Qwen3 models otherwise reason first (~6 s live) before writing the answer.
+ */
+export async function streamQwen(input:{messages:LlmMessage[];model?:QwenModel;temperature?:number;maxTokens?:number;tools?:LlmTool[];timeoutMs?:number;onText:(text:string)=>void}):Promise<LlmChatResult>{
+  if(!config.DASHSCOPE_API_KEY)throw new LlmConfigurationError('尚未配置 DASHSCOPE_API_KEY。')
+  const model=input.model??config.QWEN_DEFAULT_MODEL
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),input.timeoutMs??config.QWEN_TIMEOUT_MS)
+  try{
+    const response=await fetch(`${config.DASHSCOPE_BASE_URL.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${config.DASHSCOPE_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages:input.messages,temperature:input.temperature??0.4,max_tokens:input.maxTokens??2000,stream:true,stream_options:{include_usage:true},enable_thinking:false,...(input.tools?.length?{tools:input.tools,tool_choice:'auto',parallel_tool_calls:true}:{})}),signal:controller.signal})
+    if(!response.ok||!response.body){const body=await response.json().catch(()=>({})) as {message?:string;error?:{message?:string}};throw new LlmRequestError(body.error?.message||body.message||`千问接口返回 HTTP ${response.status}`,response.status,body.error)}
+    type Chunk={model?:string;error?:{message?:string};usage?:{prompt_tokens?:number;completion_tokens?:number}|null;choices?:Array<{delta?:{content?:string|null;tool_calls?:Array<{index?:number;id?:string;function?:{name?:string;arguments?:string}}>};finish_reason?:string|null}>}
+    let content='',buffer='',finishReason=null as string|null,answeredModel:string=model
+    const usage={input:null as number|null,output:null as number|null}
+    const calls:LlmToolCall[]=[]
+    const handle=(line:string)=>{
+      if(!line.startsWith('data:'))return
+      const data=line.slice(5).trim();if(!data||data==='[DONE]')return
+      const chunk=JSON.parse(data) as Chunk
+      if(chunk.error)throw new LlmRequestError(chunk.error.message||'千问接口返回错误。',502,chunk.error)
+      if(chunk.model)answeredModel=chunk.model
+      if(chunk.usage){usage.input=chunk.usage.prompt_tokens??null;usage.output=chunk.usage.completion_tokens??null}
+      for(const choice of chunk.choices??[]){
+        if(choice.finish_reason)finishReason=choice.finish_reason
+        const text=choice.delta?.content;if(text){content+=text;input.onText(text)}
+        for(const part of choice.delta?.tool_calls??[]){
+          const call=calls[part.index??0]??=({id:'',type:'function',function:{name:'',arguments:''}})
+          if(part.id)call.id=part.id
+          if(part.function?.name)call.function.name+=part.function.name
+          if(part.function?.arguments)call.function.arguments+=part.function.arguments
+        }
+      }
+    }
+    const decoder=new TextDecoder()
+    for await(const bytes of response.body as unknown as AsyncIterable<Uint8Array>){
+      buffer+=decoder.decode(bytes,{stream:true})
+      let end;while((end=buffer.indexOf('\n'))>=0){handle(buffer.slice(0,end).trim());buffer=buffer.slice(end+1)}
+    }
+    handle(buffer.trim())
+    const toolCalls=calls.filter(c=>c?.function.name)
+    if(!content.trim()&&!toolCalls.length)throw new LlmRequestError('千问接口没有返回可用内容。',502)
+    return{content:content.trim()||null,toolCalls,model:answeredModel,inputTokens:usage.input,outputTokens:usage.output,finishReason}
+  }catch(error){if(error instanceof LlmRequestError||error instanceof LlmConfigurationError)throw error;if(error instanceof Error&&error.name==='AbortError')throw new LlmRequestError('千问响应超时，请稍后重试。',504);throw new LlmRequestError(error instanceof Error?error.message:'无法连接千问服务。',502)}finally{clearTimeout(timeout)}
+}

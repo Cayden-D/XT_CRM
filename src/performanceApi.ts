@@ -130,3 +130,24 @@ export type BuyerLookup = { id:string; buyer_tail:string; first_chat_at:string|n
 export const getInquiry = (connectionId:string, from:string, to:string) => request<{data:InquirySummary}>(`${base}/inquiry?${new URLSearchParams({ connectionId, from, to })}`)
 export const lookupBuyer = (connectionId:string, loginId:string) => post<{data:BuyerLookup|null}>('/buyers/lookup', { connectionId, loginId })
 export const wangwangLinks = (buyerId:string) => post<{data:{ web:string; client:string }}>(`/buyers/${buyerId}/wangwang`, {})
+
+// 订单
+export type OrderGroup = 'unpaid'|'toship'|'shipped'|'done'|'closed'|'refund'
+export type OrderRow = { order_id:string; status:string; status_group:OrderGroup|'other'; total_amount:number; product_amount:number; shipping_fee:number; refund_amount:number
+  placed_at:string; paid_at:string|null; items:{ name:string; sku?:string; price:number; amount:number; quantity:number; productId?:string }[]; seller_memo:string|null; seller_flag:number|null
+  buyer_rate_status:number|null; buyer_id:string|null; buyer_tail:string|null; agents:{ login_id:string; is_main:boolean; user_name:string|null; share:number }[]|null }
+export type OrderDetail = {
+  order:{ id:string; status:string; trade_type:string|null; created_at:string|null; paid_at:string|null; delivered_at:string|null; received_at:string|null; completed_at:string|null
+    total_amount:number; product_amount:number; shipping_fee:number; discount:number; coupon:number; refund:number; pay_channels:string[]; close_reason:string|null
+    buyer_memo:string|null; seller_memo:string|null; remark:string|null; credit:{ status:string|null; amount:number; unpaid:number }|null; seller_flag:number|null }
+  buyer:{ login:string|null; company:string|null; level:string|null; buyer_id:string|null }
+  receiver:{ name:string|null; mobile:string|null; phone:string|null; region:string|null; address:string|null; zip:string|null }
+  items:{ name:string|null; image:string|null; sku:string|null; quantity:number; unit:string|null; price:number; amount:number; refund:number; status:string|null; cargo_number:string|null; product_id:string|null; snapshot_url:string|null }[]
+  shipments:{ company:string|null; bill_no:string|null; status:string|null; delivered_at:string|null; no_logistics:string|null }[]
+  rate:{ buyer:number|null; seller:number|null }; invoice:{ type:string|null; title:string|null }|null; masked:string[]
+}
+export const getOrderList = (params:{connectionId:string;from:string;to:string;group?:OrderGroup;search?:string;page:number;pageSize:number}) => {
+  const q = new URLSearchParams(); Object.entries(params).forEach(([k,v]) => { if (v !== undefined && v !== '') q.set(k, String(v)) })
+  return request<{data:OrderRow[];total:number;counts:Partial<Record<OrderGroup|'all'|'other',number>>;amount:number}>(`${base}/order-list?${q}`)
+}
+export const getOrderDetail = (connectionId:string, orderId:string) => request<{data:OrderDetail}>(`${base}/order-list/${orderId}?connectionId=${connectionId}`)
