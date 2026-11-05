@@ -36,12 +36,26 @@ const mask = (text: string) => text
   .replace(QQ, (m, id: string) => m.replace(id, '******'))
   .replace(/[0-9]{6,}/g, '######')
 
+/** 1688 offer ids linked in the text. Must run on the original text: masking removes the id. */
+function linkedOfferIds(raw: string) {
+  const ids = new Set<string>()
+  for (const link of raw.match(LINK) ?? []) {
+    try {
+      const url = new URL(link)
+      if (!/(^|\.)1688\.com$/i.test(url.hostname)) continue
+      const id = url.pathname.match(/\/offer\/(\d{6,20})(?!\d)/)?.[1] ?? url.searchParams.get('offerId')
+      if (id && /^\d{6,20}$/.test(id)) ids.add(id)
+    } catch { /* not a usable link */ }
+  }
+  return [...ids]
+}
+
 export function analyzeAgentText(content: unknown, messageTypes: string[]) {
   const raw = typeof content === 'string' ? content.trim() : ''
   const flags = new Set<ChatFlag>()
   // "其他消息" carries no text (pictures, product cards, bots); a bare picture link is an image as well.
-  if (!raw) { if (messageTypes.includes('其他消息')) flags.add('image'); return { text: null, chars: 0, flags: [...flags] } }
-  if (IMAGE_URL.test(raw)) { flags.add('image'); return { text: '[图片]', chars: 0, flags: [...flags] } }
+  if (!raw) { if (messageTypes.includes('其他消息')) flags.add('image'); return { text: null, chars: 0, flags: [...flags], offerIds: [] as string[] } }
+  if (IMAGE_URL.test(raw)) { flags.add('image'); return { text: '[图片]', chars: 0, flags: [...flags], offerIds: [] as string[] } }
   // Numbers inside links (CDN paths, video ids) are not contact details.
   const plain = raw.replace(LINK, ' ')
   if (plain.match(PHONE) || MASKED_PHONE.test(plain)) flags.add(ADDRESS.test(plain) ? 'address' : 'phone')
@@ -53,5 +67,5 @@ export function analyzeAgentText(content: unknown, messageTypes: string[]) {
   // Real characters: links and punctuation do not count towards reply length.
   const chars = [...raw.replace(LINK, '').replace(/[\s\p{P}\p{S}]/gu, '')].length
   if (chars > 0 && chars <= 3 && !/https?:\/\//i.test(raw)) flags.add('short')
-  return { text: mask(raw).slice(0, 500), chars, flags: [...flags] }
+  return { text: mask(raw).slice(0, 500), chars, flags: [...flags], offerIds: linkedOfferIds(raw) }
 }
