@@ -111,7 +111,7 @@ export type KeywordPreset = { category:string; hint:string; words:string[] }
 export type KeywordHit = { word:string; category:string; buyer_hits:number; agent_hits:number; sessions:number; buyers:number; last_hit:string }
 export type KeywordRecent = { uuid:string; sent_at:string; direction:0|1; word:string; category:string; session_id:string; buyer_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_name:string|null }
 export const getKeywords = (connectionId:string) => request<{data:PerfKeyword[];presets:KeywordPreset[]}>(`${base}/keywords?${new URLSearchParams({connectionId})}`)
-export const addKeywords = (connectionId:string,words:{word:string;category:string}[]) => post<{data:{added:string[];skipped:string[];failed:{word:string;message:string}[];keywords:PerfKeyword[]}}>('/keywords',{connectionId,words})
+export const addKeywords = (connectionId:string,words:{word:string;category:string;offerId?:string}[]) => post<{data:{added:string[];skipped:string[];failed:{word:string;message:string}[];keywords:PerfKeyword[]}}>('/keywords',{connectionId,words})
 export const deleteKeyword = (id:string) => request<{data:PerfKeyword[]}>(`${base}/keywords/${id}`,{method:'DELETE'})
 export const setKeywordCategory = (id:string,category:string) => request<{data:PerfKeyword[]}>(`${base}/keywords/${id}`,{method:'PATCH',body:JSON.stringify({category})})
 export const reconcileKeywords = (connectionId:string) => post<{data:{platform:number;imported:number;missing:string[];keywords:PerfKeyword[]}}>('/keywords/reconcile',{connectionId})

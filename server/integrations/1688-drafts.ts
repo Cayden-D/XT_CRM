@@ -3,6 +3,7 @@ import { fillPublishTemplate } from './1688-publish-template.js'
 import { db } from '../db.js'
 import { callProductApi, IntegrationError, parseBusinessData } from './1688.js'
 import { collectedCategoryDefaults } from './1688-collected-attributes.js'
+import { fillFromProductData, loadProductData } from './product-attributes.js'
 
 type Json=Record<string,any>
 export async function createDraftFromProduct(input:{tenantId:string;actorId:string;requestId:string;connectionId:string;product:Json;catId:string;scene:'cbu'|'popular'|'industry'|'processing';reuse?:boolean}){
@@ -27,7 +28,9 @@ export async function createDraftFromProduct(input:{tenantId:string;actorId:stri
       // Leave ambiguous mappings for explicit review; publishing checks coverage.
     }
   }
-  const body={global:schema.global,formValues:await fillPublishTemplate(tenantId,schema,formValues)}
+  // Confirmed product data comes before the shop-wide template, which only fills what is still empty.
+  const withProduct=fillFromProductData(schema,formValues,await loadProductData(tenantId,product.id))
+  const body={global:schema.global,formValues:await fillPublishTemplate(tenantId,schema,withProduct)}
   const row=(await db.query('INSERT INTO integration_1688_publish_drafts(tenant_id,connection_id,product_id,cat_id,scene,platform_schema,data_body,created_by)VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(connection_id,product_id) DO NOTHING RETURNING *',[tenantId,connectionId,product.id,catId,scene,JSON.stringify(schema),JSON.stringify(body),actorId])).rows[0]
   if(!row)throw new IntegrationError('DRAFT_EXISTS','该产品在这个店铺已有发布草稿，请打开原草稿。',409)
   return row

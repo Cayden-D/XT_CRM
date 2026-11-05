@@ -3,6 +3,7 @@ import { AgentsView, ComparisonView, HourlyView } from './PerformanceReports'
 import { ChatAnalysisView, OrdersView, QualityView } from './PerformanceAnalysis'
 import { KeywordsView } from './PerformanceKeywords'
 import { FavoritesView, KpiView, PayrollView } from './PerformancePayroll'
+import { AgentCoachingView } from './AgentCoaching'
 import './1688.css'
 import ConnectionDelete from './ConnectionDelete'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Link2, LoaderCircle, Save, ShieldCheck, Store, X } from 'lucide-react'
@@ -19,9 +20,9 @@ const time = (value:string|null) => value ? new Date(value).toLocaleString('zh-C
 const message = (cause:unknown) => cause instanceof Error ? cause.message : '操作未完成，请稍后重试。'
 const permission = (user:SessionUser,name:string) => (user.permissions||[]).some(value => value==='*'||value===name||value===`${name.split(':')[0]}:*`)
 const statusNames:Record<string,string> = { connected:'已连接',reauthorize:'需重新授权',disabled:'已停用',available:'可用',unavailable:'不可用',unknown:'未验证',success:'成功',failed:'失败',main:'主账号',sub:'子账号' }
-export type View='comparison'|'kpi'|'favorites'|'hourly'|'chats'|'quality'|'keywords'|'orders'|'payroll'|'agents'|'connections'|'settings'|'operations'
+export type View='coaching'|'comparison'|'kpi'|'favorites'|'hourly'|'chats'|'quality'|'keywords'|'orders'|'payroll'|'agents'|'connections'|'settings'|'operations'
 type Preset='today'|'yesterday'|'7d'|'30d'
-const reportViews:View[]=['comparison','kpi','favorites','hourly','chats','quality','keywords','orders','payroll','agents']
+const reportViews:View[]=['coaching','comparison','kpi','favorites','hourly','chats','quality','keywords','orders','payroll','agents']
 const datedViews:View[]=['comparison','kpi','favorites','hourly','chats','orders']
 const presets:[Preset,string][]=[['today','今天'],['yesterday','昨天'],['7d','近 7 天'],['30d','近 30 天']]
 const beijingDate=(offsetDays=0)=>new Date(Date.now()+8*3_600_000+offsetDays*86_400_000).toISOString().slice(0,10)
@@ -85,7 +86,8 @@ export default function PerformancePage({user,view}:{user:SessionUser;view:View}
       {datedViews.includes(view)&&<DateRange presets={presets} preset={preset} range={range} onPreset={id=>{setPreset(id);setRange(presetRange(id))}} onCustom={next=>{setPreset('custom');setRange(next)}}/>}
     </div>}
     {reportViews.includes(view)&&!loading&&!shop&&<NeedShop text="还没有授权绩效应用"/>}
-    {reportViews.includes(view)&&!loading&&shop&&(view==='comparison'?<ComparisonView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='hourly'?<HourlyView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='kpi'?<KpiView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='favorites'?<FavoritesView connectionId={shop} from={range.from} to={range.to} setError={setError} setNotice={setNotice}/>:view==='payroll'?<PayrollView connectionId={shop} canManage={canPayroll} setError={setError} setNotice={setNotice}/>:view==='chats'?<ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='quality'?<QualityView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='keywords'?<KeywordsView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='orders'?<OrdersView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:<AgentsView connectionId={shop} canManage={canManage} canPayroll={canPayroll} setError={setError} setNotice={setNotice}/>)}
+    {view==='coaching'&&!loading&&shop&&<AgentCoachingView user={user} connectionId={shop} setError={setError}/>}
+    {reportViews.includes(view)&&view!=='coaching'&&!loading&&shop&&(view==='comparison'?<ComparisonView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='hourly'?<HourlyView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='kpi'?<KpiView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='favorites'?<FavoritesView connectionId={shop} from={range.from} to={range.to} setError={setError} setNotice={setNotice}/>:view==='payroll'?<PayrollView connectionId={shop} canManage={canPayroll} setError={setError} setNotice={setNotice}/>:view==='chats'?<ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='quality'?<QualityView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='keywords'?<KeywordsView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='orders'?<OrdersView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:<AgentsView connectionId={shop} canManage={canManage} canPayroll={canPayroll} setError={setError} setNotice={setNotice}/>)}
     {view==='connections'&&<div className="shop-controlbar"><span/><div className="shop-commandbar">
       {canManage&&<button className="shop-button primary" disabled={!configured||Boolean(busy)} onClick={()=>void authorize()}><Link2 size={16}/>授权绩效应用</button>}
     </div></div>}

@@ -1,0 +1,50 @@
+.attr-section { margin:0 24px 22px; padding:17px; border:1px solid #dae1ea; border-radius:10px; background:#fff; }
+.attr-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+.attr-head h3 { margin:0; font-size:13px; }
+.attr-actions { display:flex; gap:7px; flex-wrap:wrap; }
+.attr-actions button, .attr-actions select { height:32px; padding:0 10px; border:1px solid #c3d8f1; border-radius:6px; background:#eff6ff; color:#2b5ba6; display:flex; align-items:center; gap:5px; font-size:12px; cursor:pointer; }
+.attr-note { margin:0 0 10px; color:#6b7886; font-size:12px; line-height:1.6; }
+.attr-measure { border:0; border-top:1px solid #eef0f4; margin:0; padding:12px 0; min-width:0; }
+.attr-measure legend { padding:0; font-size:12px; font-weight:600; color:#314356; float:left; width:100%; }
+.attr-measure p { clear:both; margin:4px 0 9px; color:#7f8c9b; font-size:12px; }
+.attr-measure > div { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:8px; }
+.attr-measure label span, .attr-row label > span, .attr-def-form label span { display:block; margin-bottom:4px; color:#6b7886; font-size:12px; }
+.attr-measure input, .attr-row input:not([type=checkbox]), .attr-def-form input, .attr-def-form select { width:100%; height:36px; border:1px solid #d9dfe7; border-radius:6px; padding:0 8px; color:#314356; background:#fff; min-width:0; }
+.attr-measure label.invalid input { border-color:#c9423a; }
+.attr-row { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1.6fr) 70px minmax(0,.9fr) 34px; gap:7px; align-items:end; padding:10px 0; border-top:1px solid #eef0f4; }
+.attr-row > button { height:36px; border:1px solid #e3e7ec; border-radius:6px; background:#fff; color:#7f8c9b; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.attr-row.pending { background:#fff9ec; }
+.attr-confirm { grid-column:1 / -1; display:flex; align-items:center; gap:6px; font-size:12px; color:#8a6516; }
+.attr-suggest { margin-top:12px; padding:11px 12px; border-radius:8px; background:#f5f8fc; display:grid; gap:7px; font-size:12px; }
+.attr-suggest > span { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.attr-suggest small { color:#7f8c9b; }
+.attr-suggest button { display:inline-flex; align-items:center; gap:3px; border:1px solid #c3d8f1; border-radius:5px; background:#fff; color:#2b5ba6; padding:3px 7px; cursor:pointer; font-size:12px; }
+.attr-dialog { position:relative; z-index:1; width:min(640px,calc(100vw - 32px)); max-height:calc(100vh - 48px); overflow:auto; margin:24px auto; padding:20px; background:#fff; border-radius:12px; }
+.attr-dialog header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.attr-dialog h2 { margin:0; font-size:16px; }
+.attr-dialog header button { border:0; background:none; cursor:pointer; color:#6b7886; }
+.attr-def-form { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 70px minmax(0,1fr) auto; gap:7px; align-items:end; margin-bottom:12px; }
+.attr-def-form button, .attr-steps button, .attr-file, .attr-check button { height:36px; padding:0 12px; border:1px solid #c3d8f1; border-radius:6px; background:#eff6ff; color:#2b5ba6; display:inline-flex; align-items:center; gap:5px; font-size:12px; cursor:pointer; }
+.attr-check button.primary { background:#3a7add; border-color:#3a7add; color:#fff; }
+.attr-def-list > div { display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid #eef0f4; font-size:13px; flex-wrap:wrap; }
+.attr-def-list > div.off { opacity:.55; }
+.attr-def-list span { color:#7f8c9b; font-size:12px; flex:1; min-width:120px; }
+.attr-def-list button { border:1px solid #d9dfe7; border-radius:5px; background:#fff; padding:4px 9px; cursor:pointer; font-size:12px; }
+.attr-steps { margin:0 0 12px; padding-left:18px; font-size:13px; line-height:1.7; display:grid; gap:8px; }
+.attr-file input { display:none; }
+.attr-check { padding:12px; background:#f5f8fc; border-radius:8px; font-size:13px; }
+.attr-check label.attr-change { display:flex; flex-direction:row; gap:7px; align-items:center; margin-bottom:5px; font-weight:400; }
+.attr-check label.attr-change input { width:auto; min-height:0; flex:none; }
+.attr-check p { margin:0 0 7px; }
+.attr-check ul { margin:0; padding-left:18px; }
+.goods-missing { display:inline-block; width:fit-content; margin-top:6px; padding:1px 6px; border-radius:4px; background:#fff3dc; color:#8a6516; font-size:12px; }
+.catalog-tools { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
+.catalog-tools button { height:36px; padding:0 11px; border:1px solid #d9dfe7; border-radius:7px; background:#fff; color:#314356; font-size:13px; cursor:pointer; }
+.catalog-tools label { display:flex; align-items:center; gap:5px; font-size:13px; color:#314356; }
+@media (max-width:640px) {
+  .attr-section { margin:0 16px 18px; padding:13px; }
+  .attr-row { grid-template-columns:1fr 1fr; }
+  .attr-row label:nth-child(2) { grid-column:1 / -1; }
+  .attr-row > button { grid-column:1 / -1; }
+  .attr-def-form { grid-template-columns:1fr 1fr; }
+}

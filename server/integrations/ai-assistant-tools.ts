@@ -4,6 +4,7 @@ import { db } from '../db.js'
 import type { LlmTool } from '../llm/qwen.js'
 import { agentMetrics } from './1688-performance-reports.js'
 import { keywordHits, replyQuality } from './chat-insights.js'
+import { LOSS_NAMES, finalLossSql, reviewFactsCte, type LossCode } from './chat-review.js'
 import { buildDashboard } from '../routes/dashboard.js'
 import { customerDetail, customersOf, listQuery, queryCustomers } from '../routes/customer-ops.js'
 
@@ -199,6 +200,21 @@ const tools = [
         words: pick(h.words).map(w => ({ word: w.word, category: w.category, buyerMentions: w.buyer_hits, agentMentions: w.agent_hits, sessions: w.sessions, buyers: w.buyers, lastHit: w.last_hit })),
         recent: pick(h.recent).slice(0, 20).map(r => ({ at: r.sent_at, word: r.word, category: r.category, by: r.direction === 1 ? '买家' : '客服', agent: String(r.login_id).split(':').pop(), customerId: r.buyer_id, customer: r.buyer_name ?? `买家尾号 ${r.buyer_tail}` })),
       }
+    },
+  }),
+  tool({
+    name: 'get_inquiry_review_summary',
+    description: '询盘复盘汇总：已过归属窗口的未下单询盘的流失原因分布（只含主管确认和时间规则能证明的结论）、各客服已确认的问题数、尚未复盘的数量。平台隐藏买家文字，这些结论是推断，不能当作买家原话。',
+    allowed: p => can(p, 'performance:review', 'performance:review_read'),
+    args: periodArgs,
+    parameters: { type: 'object', properties: periodParams },
+    run: async (ctx, args) => {
+      const { from, to } = period(args), params = [ctx.tenantId, needShop(ctx), from, to, null]
+      const reasons = (await db.query(`WITH ${reviewFactsCte} SELECT coalesce(${finalLossSql('r', 'f')},'unknown') AS code,count(*)::int AS sessions
+        FROM review_rules f LEFT JOIN chat_reviews r ON r.session_id=f.id WHERE f.category='no_order' AND f.matured AND coalesce(r.status,'')<>'dismissed' GROUP BY 1 ORDER BY 2 DESC`, params)).rows
+      const agents = (await db.query(`SELECT a.login_id,count(*)::int AS confirmed,sum(jsonb_array_length(coalesce(r.final_findings,r.ai_findings)))::int AS findings FROM chat_reviews r JOIN perf_agents a ON a.id=r.agent_id
+        WHERE r.tenant_id=$1 AND a.connection_id=$2 AND r.chat_date BETWEEN $3::date AND $4::date AND r.status IN ('confirmed','corrected') GROUP BY 1 ORDER BY 3 DESC LIMIT 30`, params.slice(0, 4))).rows
+      return { from, to, notes: '“证据不足”是最常见的正确结论；买家文字不可见，不要转述为买家说过的话；未确认的 AI 推断不在其中', reasons: reasons.map(r => ({ reason: LOSS_NAMES[r.code as LossCode] ?? r.code, sessions: r.sessions })), agents: agents.map(a => ({ agent: String(a.login_id).split(':').pop(), confirmedReviews: a.confirmed, confirmedFindings: a.findings })) }
     },
   }),
   tool({

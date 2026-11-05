@@ -20,6 +20,7 @@ export const sections: Section[] = [
   { id: 'chats', label: '聊天', icon: MessagesSquare, tabs: [
     { id: 'records', label: '聊天记录', can: perf },
     { id: 'inquiry', label: '询盘分析', can: perf },
+    { id: 'review', label: '询盘复盘', can: u => has(u, 'performance:review', 'performance:review_read') },
   ] },
   { id: 'orders', label: '订单', icon: ReceiptText, tabs: [{ id: 'all', label: '订单', can: perf }] },
   { id: 'products', label: '商品', icon: Package, tabs: [
@@ -35,6 +36,7 @@ export const sections: Section[] = [
   ] },
   { id: 'performance', label: '绩效', icon: Headset, tabs: [
     { id: 'comparison', label: '客服对比', can: perf },
+    { id: 'coaching', label: '业务员复盘', can: perf },
     { id: 'kpi', label: '综合排行', can: perf },
     { id: 'quality', label: '回复质量', can: perf },
     { id: 'payroll', label: '工资', can: u => has(u, 'payroll:read') },

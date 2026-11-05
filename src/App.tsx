@@ -60,7 +60,7 @@ function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route
   switch (section.id) {
     case 'home': return <DashboardPage user={user} />
     case 'customers': return tab.id === 'offline' ? <CustomersPage /> : <CustomerOpsPage user={user} view={tab.id === 'segments' ? 'settings' : tab.id as 'list' | 'pool' | 'due'} />
-    case 'chats': return <ChatInquiryPage user={user} tab={tab.id === 'inquiry' ? 'inquiry' : 'chats'} />
+    case 'chats': return <ChatInquiryPage user={user} tab={tab.id === 'inquiry' || tab.id === 'review' ? tab.id : 'chats'} />
     case 'orders': return <OrdersPage user={user} />
     case 'products':
       if (tab.id === 'listed') return <div className="commerce-page"><PlatformCatalog user={user} /></div>

@@ -8,6 +8,7 @@ import { requirePermission } from '../auth.js'
 import { IntegrationError } from '../integrations/1688.js'
 import { inspectPublishingImages, prepareAgentFields, publishingImages } from '../integrations/1688-agent.js'
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
+import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
 import { validatePublishBody } from './1688.js'
 
@@ -87,7 +88,7 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
         return original?{...variant,attributes:{...variant.attributes,...collectedSkuAttributes(source,original)}}:variant
       })
       const defaults=collectedCategoryDefaults(draft.platform_schema,source)
-      const current=await fillPublishTemplate(tenant,draft.platform_schema,draft.data_body.formValues)
+      const current=await fillPublishTemplate(tenant,draft.platform_schema,fillFromProductData(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,product.id)))
       const catProp={...(current.catProp||{})}
       for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
       const formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)

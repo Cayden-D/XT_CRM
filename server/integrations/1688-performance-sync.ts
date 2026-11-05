@@ -221,12 +221,18 @@ async function syncSession(run: Run, session: Session) {
       // Agent text is analysed and masked here; buyer text is masked by the platform and not kept.
       const direction = Number(log.direction), msgTypes = types(log.messageTypes)
       const agentText = direction === 0 ? analyzeAgentText(log.content, msgTypes) : null
-      const inserted = await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,length,message_types,keywords,text_masked,char_count,flags)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-        ON CONFLICT(connection_id,uuid) DO UPDATE SET text_masked=excluded.text_masked,char_count=excluded.char_count,flags=excluded.flags
-          WHERE perf_chat_messages.char_count IS NULL AND excluded.char_count IS NOT NULL RETURNING (xmax=0) AS inserted`,
+      // Re-reading fills what an earlier sync could not capture; captured text stays as stored, so purged text does not return.
+      const inserted = await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,length,message_types,keywords,text_masked,char_count,flags,linked_offer_ids)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        ON CONFLICT(connection_id,uuid) DO UPDATE SET
+          text_masked=CASE WHEN perf_chat_messages.char_count IS NULL THEN excluded.text_masked ELSE perf_chat_messages.text_masked END,
+          flags=CASE WHEN perf_chat_messages.char_count IS NULL THEN excluded.flags ELSE perf_chat_messages.flags END,
+          char_count=coalesce(perf_chat_messages.char_count,excluded.char_count),
+          linked_offer_ids=excluded.linked_offer_ids
+          WHERE (perf_chat_messages.char_count IS NULL AND excluded.char_count IS NOT NULL)
+            OR (perf_chat_messages.linked_offer_ids='{}' AND excluded.linked_offer_ids<>'{}') RETURNING (xmax=0) AS inserted`,
         [run.tenant_id, run.connection_id, session.id, log.uuid, direction, sentAt, Math.max(0, Number.parseInt(String(log.length ?? 0), 10) || 0), msgTypes,
           JSON.stringify(Array.isArray(log.words) ? log.words.filter((w: Json) => w && typeof w.word === 'string').map((w: Json) => ({ word: w.word, count: Number(w.count) || 0 })) : []),
-          agentText?.text ?? null, agentText ? agentText.chars : null, agentText?.flags ?? []])
+          agentText?.text ?? null, agentText ? agentText.chars : null, agentText?.flags ?? [], agentText?.offerIds ?? []])
       const fresh = inserted.rows.filter(r => r.inserted).length
       saved += fresh
       run.stats.messages = (run.stats.messages || 0) + fresh

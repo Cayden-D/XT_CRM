@@ -7,9 +7,10 @@ import { agentLabel } from './PerformanceReports'
 import { getChatDetail, getInquiry, getKeywordSessions, getPerformanceConnections, lookupBuyer, type BuyerLookup, type ChatDetail, type InquirySummary, type KeywordSession, type PerformanceConnection } from './performanceApi'
 import { navigate } from './navigation'
 import { DateRange, NeedShop, Note, ShopPicker } from './ui'
+import { InquiryLossPanels, InquiryReviewView } from './InquiryReview'
 import './1688.css'
 
-type Tab = 'chats' | 'inquiry'
+type Tab = 'chats' | 'inquiry' | 'review'
 type Preset = 'today' | 'yesterday' | '7d' | '30d'
 const presets: [Preset, string][] = [['today', '今天'], ['yesterday', '昨天'], ['7d', '近 7 天'], ['30d', '近 30 天']]
 const beijingDate = (offset = 0) => new Date(Date.now() + 8 * 3_600_000 + offset * 86_400_000).toISOString().slice(0, 10)
@@ -24,7 +25,7 @@ export default function ChatInquiryPage({ user, tab }: { user: SessionUser; tab:
   const [shops, setShops] = useState<PerformanceConnection[]>([]), [shop, setShop] = useState(''), [loading, setLoading] = useState(true)
   const [preset, setPreset] = useState<Preset | 'custom'>('7d'), [range, setRange] = useState(() => rangeOf('7d'))
   const [error, setError] = useState('')
-  useAiFocusPart({ connectionId: shop || undefined, view: tab === 'chats' ? 'chats' : 'inquiry' })
+  useAiFocusPart({ connectionId: shop || undefined, view: tab === 'chats' ? 'chats' : tab === 'review' ? 'inquiry-review' : 'inquiry' })
   const canRead = can(user, 'performance:read') || can(user, 'performance:read_own')
   useEffect(() => {
     if (!canRead) { setLoading(false); return }
@@ -39,7 +40,7 @@ export default function ChatInquiryPage({ user, tab }: { user: SessionUser; tab:
         <DateRange presets={presets} preset={preset} range={range} onPreset={id => { setPreset(id); setRange(rangeOf(id)) }} onCustom={next => { setPreset('custom'); setRange(next) }} />
       </div>
       {tab === 'chats' && <BuyerFinder connectionId={shop} setError={setError} />}
-      {tab === 'chats' ? <ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError} /> : <InquiryView connectionId={shop} from={range.from} to={range.to} setError={setError} />}
+      {tab === 'chats' ? <ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError} /> : tab === 'review' ? <InquiryReviewView user={user} connectionId={shop} from={range.from} to={range.to} setError={setError} /> : <><InquiryView connectionId={shop} from={range.from} to={range.to} setError={setError} /><InquiryLossPanels user={user} connectionId={shop} from={range.from} to={range.to} setError={setError} /></>}
     </>}
   </div>
 }

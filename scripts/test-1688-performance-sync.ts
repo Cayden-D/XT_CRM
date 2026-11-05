@@ -21,7 +21,7 @@ const messages:Record<string,Msg[]>={
     {uuid:'m1',self:'shop:a',direction:1,time:at(D,'10:00:00'),types:['正常消息']},
     {uuid:'m2',self:'shop:a',direction:1,time:at(D,'10:00:30'),types:['正常消息']},
     {uuid:'m3',self:'shop:a',direction:0,time:at(D,'10:01:00'),types:['自动回复消息']},
-    {uuid:'m4',self:'shop:a',direction:0,time:at(D,'10:02:00'),types:['正常消息'],text:'亲，这款现货，48 小时内发货'},
+    {uuid:'m4',self:'shop:a',direction:0,time:at(D,'10:02:00'),types:['正常消息'],text:'亲，这款现货，48 小时内发货 https://detail.1688.com/offer/712345678901.html'},
     {uuid:'m10',self:'shop',direction:1,time:at(D,'10:04:00'),types:['正常消息']},
     {uuid:'m9',self:'shop',direction:0,time:at(D,'10:05:00'),types:['正常消息'],text:'听不明白'},
     {uuid:'m11',self:'shop',direction:0,time:at(D,'10:06:00'),types:['客服转交消息']},
@@ -127,6 +127,8 @@ try{
   assert.deepEqual([texts.m9.flags,texts.n2.flags,texts.n2.char_count,texts.m4.flags],[['curt'],['short'],2,[]])
   assert.deepEqual([texts.m1.text_masked,texts.m1.char_count,texts.m3.text_masked],[null,null,'x'],'buyer text is not stored; auto replies keep their (masked) text')
   assert.equal((await db.query("SELECT count(*)::int AS n FROM perf_chat_messages WHERE connection_id=$1 AND text_masked ~ '1[3-9][0-9]{9}|abc_12345'",[connection.id])).rows[0].n,0)
+  const offerRow=(await db.query("SELECT text_masked,linked_offer_ids FROM perf_chat_messages WHERE connection_id=$1 AND uuid='m4'",[connection.id])).rows[0]
+  assert.deepEqual(offerRow,{text_masked:'亲，这款现货，48 小时内发货 https://detail.1688.com/offer/######.html',linked_offer_ids:['712345678901']},'offer id kept separately, stored text stays masked')
   const quality=(await request('GET',`${base}/quality?connectionId=${connection.id}&from=${D}&to=${D}`)).json().data
   const qa=Object.fromEntries(quality.agents.map((a:{login_id:string})=>[a.login_id,a]))
   assert.deepEqual([qa['shop:a'].messages,qa['shop:a'].offsite,qa['shop:a'].short_replies,qa['shop:a'].curt,qa.shop.curt],[3,1,1,0,1],'auto replies are not counted as manual messages')
@@ -318,11 +320,14 @@ try{
   // Messages synced before text capture get their text when the session is read again; text older than 90 days is dropped.
   const m6Session=(await db.query("SELECT session_id FROM perf_chat_messages WHERE connection_id=$1 AND uuid='m6'",[connection.id])).rows[0].session_id
   await db.query("UPDATE perf_chat_messages SET text_masked=NULL,char_count=NULL,flags='{}' WHERE connection_id=$1 AND uuid='m6'",[connection.id])
+  // A message whose text was captured (and later purged) before offer ids existed: the id returns, the purged text does not.
+  await db.query("UPDATE perf_chat_messages SET text_masked=NULL,linked_offer_ids='{}' WHERE connection_id=$1 AND uuid='m4'",[connection.id])
   await db.query("UPDATE perf_chat_sessions SET needs_sync=true,message_cursor=NULL WHERE id=$1",[m6Session])
   const oldText=(await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,text_masked,char_count,flags) VALUES($1,$2,$3,'old-1',0,now()-interval '91 days','很久以前的回复',6,'{phone}') RETURNING id`,[tenantId,connection.id,m6Session])).rows[0].id
   await request('POST',`${base}/connections/${connection.id}/sync`,{});const refill=await sync();assert.equal(refill.status,'succeeded',JSON.stringify(refill))
   assert.deepEqual((await db.query("SELECT flags FROM perf_chat_messages WHERE connection_id=$1 AND uuid='m6'",[connection.id])).rows[0].flags.sort(),['phone','wechat'],'text filled in on re-read')
   assert.equal(refill.stats.messages??0,0,'refilling text does not count as new messages')
+  assert.deepEqual((await db.query("SELECT text_masked,linked_offer_ids FROM perf_chat_messages WHERE connection_id=$1 AND uuid='m4'",[connection.id])).rows[0],{text_masked:null,linked_offer_ids:['712345678901']},'offer id filled in on re-read, purged text stays purged')
   assert.deepEqual((await db.query('SELECT text_masked,flags FROM perf_chat_messages WHERE id=$1',[oldText])).rows[0],{text_masked:null,flags:['phone']},'text purged after 90 days, flags kept')
   await db.query('DELETE FROM perf_chat_messages WHERE id=$1',[oldText])
 
