@@ -36,7 +36,7 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
   <section className="catalog-head">
    <div className="catalog-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索商品名称或 1688 商品 ID" aria-label="搜索采集商品"/>{search&&<button onClick={()=>setSearch('')} aria-label="清除搜索"><X size={14}/></button>}</div>
    <select className="catalog-select" value={source} onChange={e=>setSource(e.target.value as typeof source)} aria-label="来源"><option value="">全部来源</option><option value="1688">1688</option><option value="alibaba">Alibaba</option></select>
-   <button className="catalog-primary" onClick={()=>setCollectorSetup(true)}><KeyRound size={16}/>配置采集器</button>
+   <button className="catalog-secondary catalog-end" onClick={()=>setCollectorSetup(true)}><KeyRound size={16}/>配置采集器</button>
   </section>
   <div className="catalog-tabs" role="tablist" aria-label="处理阶段">{([['','全部',facets.all],...(Object.keys(stageNames) as CollectionStage[]).map(k=>[k,stageNames[k],facets[k]])] as [CollectionStage|'',string,number][]).map(([key,label,count])=>
    <button key={key||'all'} role="tab" aria-selected={stage===key} className={`${stage===key?'active':''} ${key==='attention'&&count>0?'warn':''}`} onClick={()=>setStage(key)}>{label}<span>{count}</span></button>)}</div>
@@ -44,7 +44,7 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
   {!error&&!loaded&&<section className="card-grid" aria-busy="true">{Array.from({length:8},(_,i)=><div key={i} className="card-skeleton"><div/><span/><span/><span/></div>)}</section>}
   {!error&&loaded&&!collections.length&&(filtered
    ?<section className="state-card compact"><SearchX size={26}/><h2>没有符合条件的采集商品</h2><p>换个关键词，或清除筛选条件。</p><button onClick={()=>{setSearch('');setStage('');setSource('')}}>清除筛选</button></section>
-   :<section className="state-card"><Inbox size={28}/><h2>采集第一件 1688 商品</h2><p>安装商品采集器并配置专用密钥，在商品详情页直接保存完整商品，也可以从列表页批量采集。</p><button onClick={()=>setCollectorSetup(true)}><KeyRound size={15}/>配置采集器</button></section>)}
+   :<section className="state-card"><Inbox size={28}/><h2>采集第一件 1688 商品</h2><button onClick={()=>setCollectorSetup(true)}><KeyRound size={15}/>配置采集器</button></section>)}
   {!error&&loaded&&collections.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{collections.map(item=><article key={item.id} className="goods-card">
    <button className="goods-media" onClick={()=>void openCollection(item)} aria-label={`查看 ${item.title}`}><Database size={28}/>{item.main_image_url&&<img src={item.main_image_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>}
     <span className="goods-source">{item.source==='1688'?'1688':'Alibaba'}</span><span className={`goods-stage stage-${item.stage}`}>{collectionStatus(item)}</span></button>
@@ -59,7 +59,7 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
   </article>)}</section>}
   {!error&&loaded&&<Pagination page={page} pageSize={pageSize} total={total} onPage={changePage} onPageSize={setPageSize} unit="件"/>}
   {collectionDetail&&<><CollectionPreview detail={collectionDetail} user={user} onClose={()=>setCollectionDetail(null)}/><div className="collection-promote-actions">{canCreate&&!collectionDetail.product.product_id&&!['queued','processing','unknown'].includes(collectionDetail.product.queue_status||'')&&<button className="shop-button" onClick={()=>{setPromoting(collectionDetail);setCollectionDetail(null)}}>审核并创建正式产品</button>}{collectionDetail.product.source==='1688'&&!collectionDetail.product.product_id&&!collectionDetail.product.queue_status&&<button className="shop-button primary" onClick={()=>void enqueue(collectionDetail)}><Bot size={16}/>加入 Agent 队列</button>}</div></>}
-  {promoting&&<CollectionPromotion detail={promoting} close={()=>setPromoting(null)} saved={()=>{setPromoting(null);setNotice('正式产品已创建，可进入 1688 店铺新建发布草稿');void load()}}/>}
+  {promoting&&<CollectionPromotion detail={promoting} close={()=>setPromoting(null)} saved={()=>{setPromoting(null);setNotice('正式产品已创建，可在「发布草稿」中上架');void load()}}/>}
   {collectorSetup&&<CollectorSetup onClose={()=>setCollectorSetup(false)} onNotice={setNotice}/>}
   {deletingCollection&&<Confirm title="删除这条采集记录？" text={`“${deletingCollection.title}”及其 SKU 快照将被永久删除。`} action="删除记录" close={()=>setDeletingCollection(null)} confirm={()=>void removeCollection(deletingCollection)}/>}
  </div>

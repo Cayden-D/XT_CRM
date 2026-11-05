@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Note } from './ui'
 import { LoaderCircle, RefreshCw, Store } from 'lucide-react'
 import { getAssignableUsers, type AssignableUser } from './api'
 import {
@@ -70,7 +71,7 @@ export function ComparisonView({connectionId,from,to,setError}:{connectionId:str
     <div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>客服</th><th>总接待</th><th>有效接待</th><th>询单</th><th>新客询盘</th><th>售后咨询</th><th>下单人数</th><th>付款人数</th><th>转化率</th><th>绩效订单</th><th>绩效销售额</th><th>退款</th><th>平均首响</th><th>平均响应</th><th>未回复</th><th>转接</th></tr></thead>
       <tbody>{ranked.map(row=><tr key={row.agent_id}><td><strong>{agentLabel(row)}</strong>{!row.present&&<small>已不在子账号列表</small>}</td><td>{row.reception}</td><td>{row.effective_reception}</td><td>{row.inquiry}</td><td>{row.new_customer_inquiry}</td><td>{row.after_sales}</td><td>{row.ordered_buyers}</td><td>{row.paid_buyers}</td><td>{percent(row.paid_buyers,row.inquiry)}</td>
         <td>{Number.isInteger(row.orders)?row.orders:row.orders.toFixed(2)}</td><td>{yuan(row.paid_amount)}</td><td>{row.refund_amount?yuan(row.refund_amount):'—'}</td><td>{seconds(row.first_response_seconds)}</td><td>{seconds(row.avg_response_seconds)}</td><td>{row.unanswered}</td><td>{row.transfers}</td></tr>)}</tbody></table></div>
-    <p className="shop-note">绩效订单和销售额按下单日期统计，归属方案：{attributionSchemeNames[scheme]}（分成方案按份额计）。询单为非售后的接待；售后咨询指该买家此前 90 天内有已付款订单；下单/付款人数指询单后在归属窗口内下单/付款的买家。新客判断仅基于已同步的订单历史。</p>
+    <Note>绩效订单和销售额按下单日期统计，归属方案：{attributionSchemeNames[scheme]}（分成方案按份额计）。询单为非售后的接待；售后咨询指该买家此前 90 天内有已付款订单；下单/付款人数指询单后在归属窗口内下单/付款的买家。新客判断仅基于已同步的订单历史。</Note>
   </section>
 }
 
@@ -90,7 +91,7 @@ export function HourlyView({connectionId,from,to,setError}:{connectionId:string;
       <tbody>{active.map(agent=><tr key={agent.id}><td><strong>{agentLabel(agent)}</strong></td>{data.buckets.map(b=>{const value=cell.get(`${agent.id}:${b.key}`)||0;const share=value/max
         return <td key={b.key} title={`${agentLabel(agent)} ${b.label}：${value} 人`} style={value?{background:`color-mix(in srgb, #2763b8 ${Math.round(10+share*80)}%, #ffffff)`,color:share>0.5?'#fff':'#1d2f44'}:undefined}>{value||<span className="perf-zero">0</span>}</td>})}</tr>)}
         <tr className="perf-total"><td><strong>合计</strong></td>{data.buckets.map(b=><td key={b.key}>{column(b.key)}</td>)}</tr></tbody></table></div>
-    <p className="shop-note">按买家消息开始的时间（北京时间）统计，每格为该时段接待的买家人数（按日去重）；00:00–09:00 合并为一列。颜色越深人数越多。</p>
+    <Note>按买家消息开始的时间（北京时间）统计，每格为该时段接待的买家人数（按日去重）；00:00–09:00 合并为一列。颜色越深人数越多。</Note>
   </section>
 }
 
@@ -123,7 +124,7 @@ export function AgentsView({connectionId,canManage,canPayroll,setError,setNotice
       <label>本次同步<select value={scope} disabled={Boolean(busy)||running} onChange={e=>setScope(e.target.value==='all'?'all':Number(e.target.value) as SyncScope)}>{(Object.keys(scopeNames) as (keyof typeof scopeNames)[]).map(k=><option key={k} value={k}>{scopeNames[k]}</option>)}</select></label>
       <button className="shop-button primary" disabled={Boolean(busy)||running} onClick={()=>void sync()}><RefreshCw size={16} className={running?'spin':''}/>{running?'同步中…':'立即同步'}</button>
       {status&&<label>历史数据范围<select value={status.history_days} disabled={Boolean(busy)} onChange={e=>void changeHistory(Number(e.target.value) as HistoryDays)}>{([7,30,60,90] as HistoryDays[]).map(d=><option key={d} value={d}>近 {d} 天</option>)}</select></label>}
-      <span className="shop-note">“今天 / 近 7 天 / 近 30 天”只拉取该时间段的订单、退款和会话，调用少、完成快；“全部”还会按历史数据范围由近及远补齐历史。后台每 15 分钟自动执行“全部”（近 7 天无会话的客服账号每 2 小时查一次）；平台限流或中断后在之后的同步中继续（平台只保留近 90 天聊天）。</span></div>}
+      <Note>“今天 / 近 7 天 / 近 30 天”只拉取该时间段的订单、退款和会话，调用少、完成快；“全部”还会按历史数据范围由近及远补齐历史。后台每 15 分钟自动执行“全部”（近 7 天无会话的客服账号每 2 小时查一次）；平台限流或中断后在之后的同步中继续（平台只保留近 90 天聊天）。</Note></div>}
     {status&&<p className="perf-sync-status">历史数据范围：近 {status.history_days} 天（{status.history_from} 起）· 订单补齐至 {day(status.orders_synced_from)} · 会话补齐至 {day(status.chats_synced_from)}{status.pending_sessions>0?` · ${status.pending_sessions.toLocaleString('zh-CN')} 个会话待拉取消息`:' · 会话消息已全部拉取'}{status.skipped_sessions>0&&` · 范围外 ${status.skipped_sessions.toLocaleString('zh-CN')} 个不再拉取`} · 今日已调用 {status.calls_today.toLocaleString('zh-CN')} 次{status.calls_today>=status.daily_call_limit&&'（已达每日上限，自动同步明天 0 点后继续）'}</p>}
     <div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>平台账号</th><th>类型</th><th>平台状态</th><th>绑定系统用户</th><th>会话同步至</th></tr></thead>
       <tbody>{agents.map(agent=><tr key={agent.id}><td><strong>{agent.login_id}</strong>{!agent.present&&<small>已不在子账号列表</small>}</td><td>{agent.is_main?'主账号':'子账号'}</td><td>{agent.platform_status||'—'}</td>
@@ -146,7 +147,7 @@ function FlagRulesPanel({connectionId,agents,canEdit,setError,setNotice}:{connec
   if(!data)return null
   const used=new Map(data.usage.map(u=>[u.flag,u.orders]))
   return <><h3 className="perf-chart-title">订单插旗归属（方案5）</h3>
-    <p className="shop-note">客服在 1688 订单备注里写“@客服名”（子账号冒号后的名字）时优先归给该客服；没有 @ 时按下面的旗帜对应客服。编号与颜色以 1688 订单页为准，可参考近 90 天各旗帜的订单数。近 90 天备注含 @ 的订单 {data.memoMentions} 单，方案5 已归属 {data.creditedOrders} 单。</p>
+    <Note>客服在 1688 订单备注里写“@客服名”（子账号冒号后的名字）时优先归给该客服；没有 @ 时按下面的旗帜对应客服。编号与颜色以 1688 订单页为准，可参考近 90 天各旗帜的订单数。近 90 天备注含 @ 的订单 {data.memoMentions} 单，方案5 已归属 {data.creditedOrders} 单。</Note>
     <div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>旗帜编号</th><th>近 90 天订单</th><th>归属客服</th></tr></thead>
       <tbody>{[1,2,3,4,5].map(flag=><tr key={flag}><td>旗帜 {flag}</td><td>{used.get(flag)??0}</td>
         <td>{canEdit?<select aria-label={`旗帜 ${flag} 归属客服`} value={draft[flag]||''} disabled={busy} onChange={e=>setDraft(d=>({...d,[flag]:e.target.value}))}><option value="">不归属</option>

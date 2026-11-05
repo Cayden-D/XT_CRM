@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { Note } from './ui'
 import { ChevronLeft, ChevronRight, LoaderCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
 import { agentLabel } from './PerformanceReports'
 import wangwangIcon from './assets/wangwang.png'
@@ -83,7 +84,7 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
         <td className="perf-row-actions"><WangwangButton buyerId={row.buyer_id} setError={setError}/><button className="shop-icon" title="查看消息记录" aria-label={`查看 ${row.chat_date} 会话`} onClick={()=>void open(row)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>
       {!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的会话</p></div>}</div>}
     <Pager page={page} setPage={setPage} more={rows.length===50} loading={loading}/>
-    <p className="shop-note">分类按会话首轮买家消息后的归属窗口内是否下单、付款判断；售后指此前 90 天内有已付款订单。平台不提供买家消息原文，只显示时间与字数；客服消息显示遮盖了联系方式的文本（保留 90 天，文本采集上线前的消息没有文本）。</p>
+    <Note>分类按会话首轮买家消息后的归属窗口内是否下单、付款判断；售后指此前 90 天内有已付款订单。平台不提供买家消息原文，只显示时间与字数；客服消息显示遮盖了联系方式的文本（保留 90 天，文本采集上线前的消息没有文本）。</Note>
     {detail&&<Drawer title={`${agentLabel(detail.row)} · ${detail.row.chat_date} · 买家 …${detail.row.buyer_tail}`} close={()=>setDetail(null)}>
       <div className="perf-drawer-actions"><WangwangButton buyerId={detail.row.buyer_id} setError={setError} label="旺旺联系买家"/>
         {detail.row.orders_after?.length?<span className="perf-drawer-orders">相关订单：{detail.row.orders_after.map(id=><button key={id} className="perf-order-link" onClick={()=>setOrder(id)}>{id}</button>)}</span>:null}</div>
@@ -117,7 +118,7 @@ export function OrdersView({connectionId,from,to,setError}:{connectionId:string;
         <td>{o.credits.length?o.credits.map(c=><div key={c.agent_id} className="perf-credit"><strong>{agentLabel(c)}</strong>{c.share<1&&<span>{Math.round(c.share*100)}%</span>}<small>{creditBasisNames[c.basis]}{c.basis_at?` ${dateTime(c.basis_at)}`:''}</small></div>):<span className="perf-muted">无咨询记录</span>}</td></tr>)}</tbody></table>
       {!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的订单</p></div>}</div>}
     <Pager page={page} setPage={setPage} more={rows.length===50} loading={loading}/>
-    <p className="shop-note">归属依据为买家在归属窗口内收到的最后一条人工回复；“无咨询记录”表示下单前窗口内没有聊天（直接下单或聊天早于已同步范围）。切换方案仅用于对比，默认方案在“指标口径”中由财务设置。</p>
+    <Note>归属依据为买家在归属窗口内收到的最后一条人工回复；“无咨询记录”表示下单前窗口内没有聊天（直接下单或聊天早于已同步范围）。切换方案仅用于对比，默认方案在“指标口径”中由财务设置。</Note>
   </section>
 }
 
@@ -154,7 +155,7 @@ export function QualityView({connectionId,from,to,setError}:{connectionId:string
       :<p className="shop-note">本期没有发现客服发送联系方式、外部链接或站外付款用语。</p>}
     {data.curt.length>0&&<><h3 className="perf-chart-title">生硬用语（供复盘参考）</h3><ul className="perf-quote-list">{data.curt.slice(0,12).map(c=><li key={c.uuid}><time>{dateTime(c.sent_at)}</time><b>{c.login_id.split(':').pop()}</b><q>{c.text_masked}</q>
       <button className="shop-icon" title="查看会话" aria-label="查看会话" onClick={()=>void open(c.session_id,c.uuid,`${c.login_id.split(':').pop()} · 会话记录`)}><MessageSquareText size={15}/></button></li>)}</ul></>}
-    <p className="shop-note">检测规则：手机号、带“微信 / VX / QQ”的账号、“加微信”“微信同号”等邀请、“微信转账 / 私下交易 / 不走平台”等用语、1688 / 淘宝 / 阿里系以外的链接。手机号、微信号、QQ 号及 6 位以上数字在保存前已遮盖，文本保留 90 天。生硬用语与极短回复只作复盘提示，不计入绩效。</p>
+    <Note>检测规则：手机号、带“微信 / VX / QQ”的账号、“加微信”“微信同号”等邀请、“微信转账 / 私下交易 / 不走平台”等用语、1688 / 淘宝 / 阿里系以外的链接。手机号、微信号、QQ 号及 6 位以上数字在保存前已遮盖，文本保留 90 天。生硬用语与极短回复只作复盘提示，不计入绩效。</Note>
     {detail&&<Drawer title={detail.title} close={()=>setDetail(null)}><Timeline data={detail.data} focus={detail.focus}/></Drawer>}
   </section>
 }

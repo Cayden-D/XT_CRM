@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Note } from './ui'
 import {
   AlertCircle, Bot, Check, Download, ImagePlus, ImageUp, Images, LoaderCircle, Maximize2, Package, Pencil, RefreshCw, RotateCcw, Search, ShieldAlert, Sparkles, Trash2, Undo2, Upload, Wand2, X,
 } from 'lucide-react'
@@ -198,7 +199,7 @@ export function ImageEditPage({user, intent}:{user:SessionUser;intent?:ImageInte
       {operation === 'resize' && <div className="iw-field">目标尺寸<div className="iw-chips">{resizePresets.map(([k, l]) => <button key={k} className={preset === k ? 'on' : ''} onClick={() => setPreset(k)}>{l}</button>)}<button className={preset === 'custom' ? 'on' : ''} onClick={() => setPreset('custom')}>自定义</button></div>
         {preset === 'custom' && <div className="iw-size"><input type="number" min={100} max={4000} aria-label="宽" value={custom.width} onChange={e => setCustom({ ...custom, width:Number(e.target.value) })}/>×<input type="number" min={100} max={4000} aria-label="高" value={custom.height} onChange={e => setCustom({ ...custom, height:Number(e.target.value) })}/>px</div>}
         <div className="iw-chips"><button className={fit === 'pad' ? 'on' : ''} onClick={() => setFit('pad')}>完整保留，空白处补白</button><button className={fit === 'crop' ? 'on' : ''} onClick={() => setFit('crop')}>铺满画面，智能裁切</button></div></div>}
-      <p className="iw-note"><ShieldAlert size={14}/><span>{RIGHTS_NOTE}</span></p>
+      <Note label="图片使用规则">{RIGHTS_NOTE}</Note>
       {aiMissing && <p className="iw-error"><AlertCircle size={14}/>服务器未配置百炼 API Key，白底图和换背景暂不可用。</p>}
       {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
       <button className="catalog-primary iw-submit" disabled={!editable || busy || !picked[0] || Boolean(aiMissing) || (operation === 'background' && scene.trim().length < 2)} onClick={() => void submit()}>
@@ -241,7 +242,7 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
         <label className="iw-field">比例<select value={size} onChange={e => setSize(e.target.value as '1:1'|'3:4')}><option value="1:1">1:1 主图</option><option value="3:4">3:4 竖版</option></select></label>
         <label className="iw-field">分辨率<select value={resolution} onChange={e => setResolution(e.target.value as '1k'|'2k')}><option value="1k">1K</option><option value="2k">2K</option></select></label>
       </div>
-      <p className="iw-note"><ShieldAlert size={14}/><span>{RIGHTS_NOTE}</span></p>
+      <Note label="图片使用规则">{RIGHTS_NOTE}</Note>
       {services && !services.apimart && <p className="iw-error"><AlertCircle size={14}/>服务器未配置 APIMART_API_KEY，电商套图暂不可用。</p>}
       {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
       <button className="catalog-primary iw-submit" disabled={!editable || busy || !picked.length || !types.length || (!product && title.trim().length < 2) || services?.apimart === false} onClick={() => void submit()}>
@@ -286,7 +287,7 @@ export function ProductImagesPanel({productId, title, user}:{productId:string;ti
   </section>
 }
 
-/** 系统设置: the agent switch that replaces flagged main pictures of newly collected products. */
+/** 设置 → 自动上架: the agent switch that replaces flagged main pictures of newly collected products. */
 export function ImageAutomationSettings({editable}:{editable:boolean}) {
   const [settings, setSettings] = useState<ImageSettings|null>(null), [services, setServices] = useState<ImageServices|null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [agreed, setAgreed] = useState(false)
   useEffect(() => { getImageSettings().then(r => { setSettings(r.data); setServices(r.services) }).catch(cause => setError(message(cause))) }, [])
@@ -298,7 +299,7 @@ export function ImageAutomationSettings({editable}:{editable:boolean}) {
   }
   return <section className="iw-settings">
     <h3><Wand2 size={18}/>AI 图片自动处理</h3>
-    <p className="shop-note">开启后，Agent 会检查新采集商品的主图；发现明确的他人水印或知名品牌 Logo 时，<b>不修改原图</b>，而是只用该商品其余干净的图片作参考，为被标记的位置生成新图（GPT-Image-2.5），生成后再次检测。结果在采集商品详情的「商品图片」里，人工确认后使用。</p>
+    <Note>开启后，Agent 会检查新采集商品的主图；发现明确的他人水印或知名品牌 Logo 时，<b>不修改原图</b>，而是只用该商品其余干净的图片作参考，为被标记的位置生成新图（GPT-Image-2.5），生成后再次检测。结果在采集商品详情的「商品图片」里，人工确认后使用。</Note>
     {settings && <div className="iw-settings-grid">
       <label className="agent-switch"><input type="checkbox" role="switch" checked={settings.auto_replace} disabled={!editable || busy || (!settings.auto_replace && services?.apimart === false)} onChange={e => { if (e.target.checked) setConfirming(true); else void save({ autoReplace:false }) }}/><span>{settings.auto_replace ? '已开启' : '已关闭'}</span></label>
       <label>套图模型<select value={settings.suite_model} disabled={!editable || busy} onChange={e => void save({ suiteModel:e.target.value })}><option value="gpt-image-2.5-flare">Flare · 更快</option><option value="gpt-image-2.5-sunburst">Sunburst · 细节更准</option></select></label>

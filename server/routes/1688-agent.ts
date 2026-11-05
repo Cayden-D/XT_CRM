@@ -71,7 +71,7 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
     if(!draft)throw new IntegrationError('NOT_FOUND','发布草稿不存在。',404)
     if(draft.revision!==revision||!['draft','failed'].includes(draft.status))throw new IntegrationError('DRAFT_CONFLICT','草稿已变化或不能发布。',409)
     const settings=(await db.query('SELECT * FROM integration_1688_agent_settings WHERE connection_id=$1 AND tenant_id=$2',[draft.connection_id,tenant])).rows[0]
-    if(!settings?.enabled)throw new IntegrationError('AGENT_DISABLED','请先在系统设置开启该店铺 Agent 上品模式。',409)
+    if(!settings?.enabled)throw new IntegrationError('AGENT_DISABLED','请先在“设置 → 自动上架”开启该店铺 Agent 上品。',409)
     const product=(await db.query("SELECT * FROM products WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL",[draft.product_id,tenant])).rows[0]
     if(!product)throw new IntegrationError('PRODUCT_INACTIVE','请选择已启用的正式产品。',409)
     const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[draft.product_id,tenant])).rows

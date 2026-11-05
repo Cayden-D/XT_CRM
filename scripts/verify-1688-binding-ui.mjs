@@ -37,8 +37,8 @@ try{
     }
     return fulfill(path.endsWith('/listings')?{data:[listing],total:1}:{data:listing})
   })
-  await page.goto('http://127.0.0.1:5173/')
-  await page.getByRole('button',{name:'1688 店铺',exact:true}).click()
+  await page.route('**/api/integrations/1688/catalog**',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:[listing],total:1,page:1,pageSize:24,facets:{on_sale:1,expired:0,other:0},shops:[{id:connection.id,display_name:'测试店铺',status:'connected',synced_at:null,listings_synced_through:null}]})}))
+  await page.goto('http://127.0.0.1:5173/#/products/listed')
   await page.getByRole('button',{name:'查看 关联界面测试商品',exact:true}).click()
   const panel=page.getByRole('region',{name:'CRM 关联与差异'})
   await page.getByRole('button',{name:'关联正式产品',exact:true}).click()

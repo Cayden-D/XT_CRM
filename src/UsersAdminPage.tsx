@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, Check, Copy, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, UserPlus, X } from 'lucide-react'
+import { Note } from './ui'
+import { AlertCircle, Check, Copy, KeyRound, LoaderCircle, RefreshCw, UserPlus, X } from 'lucide-react'
 import { request, type SessionUser } from './api'
 import './1688.css'
 
@@ -35,7 +36,7 @@ export default function UsersAdminPage({user}:{user:SessionUser}) {
   const isSuper = (a:Account) => a.roles.some(r => r.code === 'super_admin')
   const active = accounts.filter(a => a.status === 'active').length
   return <div className="shop-page users-admin">
-    <div className="shop-page-heading"><div><h2><ShieldCheck size={22}/>账户管理</h2><p>{accounts.length} 个账号 · {active} 个启用中。只有超级管理员可以开设和管理账号。</p></div>
+    <div className="shop-page-heading"><div><p>{accounts.length} 个账号 · {active} 个启用中</p></div>
       <button className="shop-button primary" onClick={() => setCreating(true)}><UserPlus size={16}/>开设账号</button>
       <button className="shop-icon" title="刷新" aria-label="刷新" disabled={loading} onClick={() => void load()}><RefreshCw size={17}/></button></div>
     {error && <p className="shop-alert error" role="alert"><AlertCircle size={16}/>{error}</p>}
@@ -53,7 +54,7 @@ export default function UsersAdminPage({user}:{user:SessionUser}) {
           <td>{when(a.last_login_at)}</td><td>{when(a.created_at)}</td>
           <td>{(!locked || self) && <button className="shop-button" disabled={Boolean(busy)} onClick={() => setResetting(a)}>{busy === a.id ? <LoaderCircle size={14} className="spin"/> : <KeyRound size={14}/>}重置密码</button>}</td>
         </tr> })}</tbody></table></div>}
-    <p className="shop-note">「管理员」可以使用全部业务功能（看板、客户、产品与采集、1688 店铺、客服绩效与工资、系统设置），但不能开设或管理账号。停用、重置密码、调整角色会让该账号已登录的会话立即失效。</p>
+    <Note label="角色说明">「管理员」可以使用全部业务功能（首页、客户、商品、绩效与工资、设置），但不能开设或管理账号。停用、重置密码、调整角色会让该账号已登录的会话立即失效。</Note>
     {creating && <CreateDialog roles={roles} close={() => setCreating(false)} created={(account, password) => { setCreating(false); setAccounts(list => [...list, account]); setIssued({ title:'账号已开设', email:account.email, password }) }}/>}
     {resetting && <ResetDialog account={resetting} self={resetting.id === me} close={() => setResetting(null)} done={password => { const a = resetting; setResetting(null); if (a.id === me) { window.dispatchEvent(new Event('crm:unauthorized')); return } setIssued({ title:'密码已重置', email:a.email, password }) }}/>}
     {issued && <Issued {...issued} close={() => setIssued(null)}/>}

@@ -1,8 +1,7 @@
 import { useCallback,useEffect,useState,type FormEvent } from 'react'
-import { AlertCircle,Box,ChevronRight,Inbox,Layers3,LoaderCircle,PackagePlus,Pencil,Plus,RefreshCw,Search,SearchX,Store,Trash2,X } from 'lucide-react'
+import { AlertCircle,Box,Inbox,Pencil,Plus,RefreshCw,Search,SearchX,Trash2,X } from 'lucide-react'
 import Pagination,{ useDebounced } from './Pagination'
-import { ApiError,createProduct,deleteProduct,getProductPage,updateProduct,type Product,type ProductFacets,type ProductInput,type SessionUser } from './api'
-import PlatformCatalog from './PlatformCatalog'
+import { ApiError,createProduct,deleteProduct,getProductPage,updateProduct,type Product,type ProductFacets,type ProductInput } from './api'
 
 const money=(value:string|number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:2}).format(Number(value))
 const statusNames={active:'在售',draft:'草稿',inactive:'停用'} as const
@@ -15,23 +14,8 @@ function blurb(product:Product){
 }
 const productEmpty:ProductInput={sku:'',name:'',category:'',description:'',specifications:{},basePrice:0,status:'active',prices:[]}
 
-type CatalogView = 'platform' | 'library'
-/** 产品目录: the shop's live 1688 offers by default; the internal product data used to build listing drafts is the second tab. */
-export default function ProductsPage({user,openShop}:{user:SessionUser;openShop?:()=>void}){
- const canPlatform=(user.permissions||[]).some(p=>p==='*'||p==='integration:read'||p==='integration:*')
- const [view,setView]=useState<CatalogView>(()=>{try{const saved=localStorage.getItem('crm:catalog-view');return canPlatform&&saved!=='library'?'platform':'library'}catch{return canPlatform?'platform':'library'}})
- const choose=(next:CatalogView)=>{setView(next);try{localStorage.setItem('crm:catalog-view',next)}catch{/* per-viewer convenience only */}}
- return <div className="commerce-page">
-  {canPlatform&&<div className="catalog-views" role="tablist" aria-label="产品目录视图">
-   <button role="tab" aria-selected={view==='platform'} className={view==='platform'?'active':''} onClick={()=>choose('platform')}><Store size={15}/>平台在售商品</button>
-   <button role="tab" aria-selected={view==='library'} className={view==='library'?'active':''} onClick={()=>choose('library')}><Layers3 size={15}/>产品资料<small>用于生成上架草稿</small></button>
-  </div>}
-  {view==='platform'&&canPlatform?<PlatformCatalog user={user} openShop={openShop}/>:<ProductLibrary/>}
- </div>
-}
-
 /** Internal product data (created from 1688 collection or by hand): specifications and tier prices used when publishing. */
-function ProductLibrary(){
+export default function ProductLibrary(){
  const [products,setProducts]=useState<Product[]>([]),[facets,setFacets]=useState<ProductFacets>({all:0,active:0,draft:0,inactive:0}),[categories,setCategories]=useState<string[]>([]),[total,setTotal]=useState(0),[loaded,setLoaded]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[search,setSearch]=useState(''),[productForm,setProductForm]=useState<Product|null|undefined>(undefined),[deletingProduct,setDeletingProduct]=useState<Product|null>(null)
  const [status,setStatus]=useState<''|Product['status']>(''),[category,setCategory]=useState(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(24)
  const query=useDebounced(search.trim())
@@ -42,7 +26,7 @@ function ProductLibrary(){
  const filtered=Boolean(query||status||category)
  const changePage=(next:number)=>{setPage(next);document.querySelector('.catalog-head')?.scrollIntoView({behavior:'smooth',block:'start'})}
  async function removeProduct(item:Product){try{await deleteProduct(item.id);setNotice('产品已停用并移出目录');await load()}catch(cause){setError(cause instanceof Error?cause.message:'删除产品失败。')}finally{setDeletingProduct(null)}}
- return <>
+ return <div className="commerce-page">
   {notice&&<div className="inline-notice">{notice}<button onClick={()=>setNotice('')}><X size={14}/></button></div>}
   <section className="catalog-head">
    <div className="catalog-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索 SKU 或产品名称" aria-label="搜索产品"/>{search&&<button onClick={()=>setSearch('')} aria-label="清除搜索"><X size={14}/></button>}</div>
@@ -55,7 +39,7 @@ function ProductLibrary(){
   {!error&&!loaded&&<section className="card-grid" aria-busy="true">{Array.from({length:8},(_,i)=><div key={i} className="card-skeleton"><div/><span/><span/><span/></div>)}</section>}
   {!error&&loaded&&!products.length&&(filtered
    ?<section className="state-card compact"><SearchX size={26}/><h2>没有符合条件的产品</h2><p>换个关键词，或清除筛选条件。</p><button onClick={()=>{setSearch('');setStatus('');setCategory('')}}>清除筛选</button></section>
-   :<section className="state-card"><Inbox size={28}/><h2>建立第一件产品</h2><p>维护产品规格与人民币阶梯价；从 1688 采集上架的商品也会出现在这里。</p><button onClick={()=>setProductForm(null)}><Plus size={15}/> 新建产品</button></section>)}
+   :<section className="state-card"><Inbox size={28}/><h2>建立第一件产品</h2><button onClick={()=>setProductForm(null)}><Plus size={15}/> 新建产品</button></section>)}
   {!error&&loaded&&products.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{products.map(product=>{const text=blurb(product);return <article key={product.id} className="goods-card">
    <button className="goods-media" onClick={()=>setProductForm(product)} aria-label={`编辑 ${product.name}`}><Box size={28}/>{product.images?.[0]&&<img src={product.images[0]} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>}
     {product.category&&<span className="goods-source">{product.category}</span>}<span className={`goods-stage product-${product.status}`}>{statusNames[product.status]}</span></button>
@@ -70,8 +54,8 @@ function ProductLibrary(){
   </article>})}</section>}
   {!error&&loaded&&<Pagination page={page} pageSize={pageSize} total={total} onPage={changePage} onPageSize={setPageSize} unit="件"/>}
   {productForm!==undefined&&<ProductDrawer product={productForm} onClose={()=>setProductForm(undefined)} onSaved={async message=>{setProductForm(undefined);setNotice(message);await load()}}/>}
-  {deletingProduct&&<Confirm title="删除这个产品？" text={`“${deletingProduct.name}”将从可售产品目录中移除。`} action="删除产品" close={()=>setDeletingProduct(null)} confirm={()=>void removeProduct(deletingProduct)}/>}
- </>
+  {deletingProduct&&<Confirm title="删除这个产品？" text={`“${deletingProduct.name}”将被移除。`} action="删除产品" close={()=>setDeletingProduct(null)} confirm={()=>void removeProduct(deletingProduct)}/>}
+ </div>
 }
 
 function Confirm({title,text,action,close,confirm}:{title:string;text:string;action:string;close:()=>void;confirm:()=>void}){return <div className="dialog-layer"><button className="drawer-scrim" onClick={close}/><section className="confirm-dialog"><div className="confirm-icon"><Trash2 size={20}/></div><h2>{title}</h2><p>{text}</p><div><button onClick={close}>取消</button><button className="danger" onClick={confirm}>{action}</button></div></section></div>}
@@ -83,5 +67,5 @@ function ProductDrawer({product,onClose,onSaved}:{product:Product|null;onClose:(
  function addPrice(){setForm(current=>({...current,prices:[...current.prices,{minQuantity:1,unitPrice:current.basePrice,customerLevel:null}]}))}
  function setPrice(index:number,key:string,value:unknown){setForm(current=>({...current,prices:current.prices.map((price,i)=>i===index?{...price,[key]:value}:price)}))}
  async function submit(event:FormEvent){event.preventDefault();setSaving(true);setError('');try{const specifications=Object.fromEntries(specText.split('\n').map(line=>line.split(':')).filter(parts=>parts.length>=2&&parts[0].trim()).map(parts=>[parts[0].trim(),parts.slice(1).join(':').trim()]));const data={...form,specifications};if(product)await updateProduct(product.id,data);else await createProduct(data);await onSaved(product?'产品已更新':'产品已创建')}catch(cause){setError(cause instanceof Error?cause.message:'保存产品失败。')}finally{setSaving(false)}}
- return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose}/><aside className="record-drawer product-drawer"><header><div><p className="kicker">国内产品目录</p><h2>{product?product.name:'新建产品'}</h2></div><button onClick={onClose}><X size={20}/></button></header><form onSubmit={submit}><div className="form-grid"><label><span>SKU *</span><input value={form.sku} onChange={e=>set('sku',e.target.value)} required/></label><label><span>产品名称 *</span><input value={form.name} onChange={e=>set('name',e.target.value)} required/></label><label><span>分类</span><input value={form.category??''} onChange={e=>set('category',e.target.value)}/></label><label><span>状态</span><select value={form.status} onChange={e=>set('status',e.target.value)}><option value="active">在售</option><option value="draft">草稿</option><option value="inactive">停用</option></select></label><label><span>标准价（元）</span><input type="number" min="0" step="0.01" value={form.basePrice} onChange={e=>set('basePrice',Number(e.target.value))}/></label><label><span>计价币种</span><input value="人民币 CNY" disabled/></label><label className="full"><span>产品描述</span><textarea value={form.description??''} onChange={e=>set('description',e.target.value)}/></label><label className="full"><span>规格参数（每行“名称: 内容”）</span><textarea value={specText} onChange={e=>setSpecText(e.target.value)} placeholder={'型号: C23\n包装: 12 件/箱'}/></label></div><section className="price-tiers"><div><div><p className="kicker">阶梯价</p><h3>数量与客户分级价格</h3></div><button type="button" onClick={addPrice}><Plus size={14}/>添加价格</button></div>{!form.prices.length?<p className="tier-empty">未设置阶梯价，按标准价计算。</p>:form.prices.map((price,index)=><article key={index}><label><span>起订量</span><input type="number" min="0.0001" step="0.0001" value={price.minQuantity} onChange={e=>setPrice(index,'minQuantity',Number(e.target.value))}/></label><label><span>单价（元）</span><input type="number" min="0" step="0.01" value={price.unitPrice} onChange={e=>setPrice(index,'unitPrice',Number(e.target.value))}/></label><select aria-label="客户等级" value={price.customerLevel??''} onChange={e=>setPrice(index,'customerLevel',e.target.value||null)}><option value="">全部等级</option>{['A','B','C','D'].map(v=><option key={v}>{v}</option>)}</select><button type="button" onClick={()=>setForm(current=>({...current,prices:current.prices.filter((_,i)=>i!==index)}))}><Trash2 size={14}/></button></article>)}</section>{error&&<div className="form-error">{error}</div>}<footer><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={saving}>{saving?'保存中…':product?'保存产品':'创建产品'}</button></footer></form></aside></div>
+ return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose}/><aside className="record-drawer product-drawer"><header><div><h2>{product?product.name:'新建产品'}</h2></div><button onClick={onClose}><X size={20}/></button></header><form onSubmit={submit}><div className="form-grid"><label><span>SKU *</span><input value={form.sku} onChange={e=>set('sku',e.target.value)} required/></label><label><span>产品名称 *</span><input value={form.name} onChange={e=>set('name',e.target.value)} required/></label><label><span>分类</span><input value={form.category??''} onChange={e=>set('category',e.target.value)}/></label><label><span>状态</span><select value={form.status} onChange={e=>set('status',e.target.value)}><option value="active">在售</option><option value="draft">草稿</option><option value="inactive">停用</option></select></label><label><span>标准价（元）</span><input type="number" min="0" step="0.01" value={form.basePrice} onChange={e=>set('basePrice',Number(e.target.value))}/></label><label><span>计价币种</span><input value="人民币 CNY" disabled/></label><label className="full"><span>产品描述</span><textarea value={form.description??''} onChange={e=>set('description',e.target.value)}/></label><label className="full"><span>规格参数（每行“名称: 内容”）</span><textarea value={specText} onChange={e=>setSpecText(e.target.value)} placeholder={'型号: C23\n包装: 12 件/箱'}/></label></div><section className="price-tiers"><div><div><p className="kicker">阶梯价</p><h3>数量与客户分级价格</h3></div><button type="button" onClick={addPrice}><Plus size={14}/>添加价格</button></div>{!form.prices.length?<p className="tier-empty">未设置阶梯价，按标准价计算。</p>:form.prices.map((price,index)=><article key={index}><label><span>起订量</span><input type="number" min="0.0001" step="0.0001" value={price.minQuantity} onChange={e=>setPrice(index,'minQuantity',Number(e.target.value))}/></label><label><span>单价（元）</span><input type="number" min="0" step="0.01" value={price.unitPrice} onChange={e=>setPrice(index,'unitPrice',Number(e.target.value))}/></label><select aria-label="客户等级" value={price.customerLevel??''} onChange={e=>setPrice(index,'customerLevel',e.target.value||null)}><option value="">全部等级</option>{['A','B','C','D'].map(v=><option key={v}>{v}</option>)}</select><button type="button" onClick={()=>setForm(current=>({...current,prices:current.prices.filter((_,i)=>i!==index)}))}><Trash2 size={14}/></button></article>)}</section>{error&&<div className="form-error">{error}</div>}<footer><button type="button" onClick={onClose}>取消</button><button className="primary" disabled={saving}>{saving?'保存中…':product?'保存产品':'创建产品'}</button></footer></form></aside></div>
 }

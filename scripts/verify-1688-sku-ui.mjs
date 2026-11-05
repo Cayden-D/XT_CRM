@@ -24,6 +24,8 @@ try{
   await page.route('**/api/integrations/1688/drafts**',async route=>{
     const req=route.request(),path=new URL(req.url()).pathname,payload=req.method()==='GET'?{}:req.postDataJSON()
     const fulfill=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)})
+    if(path.endsWith('/agent-job'))return fulfill({data:null})
+    if(path.endsWith('/agent-images'))return fulfill({data:[]})
     if(path.endsWith('/publish')){platformWrites++;return fulfill({error:'BLOCKED'},418)}
     if(path.endsWith('/variants'))return fulfill({data:[{id:'v-1',label:'红 L',attributes:{来源颜色:'红色',来源尺码:'L'},unit_price:23,stock:9,image_url:null}]})
     if(path.endsWith('/map-variants')){assert.equal(payload.confirmed,true);assert.deepEqual(payload.mapping,{'p-1':'来源颜色','p-2':'来源尺码'});mappingCalls++;draft={...draft,revision:draft.revision+1,data_body:{...draft.data_body,formValues:{...draft.data_body.formValues,skuTable:[{sku_props:properties,sku_price:23,sku_amountOnSale:9,sku_status:1}],saleProp:{'p-1':[{value:10,text:'红色'}],'p-2':[{value:-1,text:'L',custom:true}]}}}};return fulfill({data:draft,missing:[]})}
@@ -32,9 +34,7 @@ try{
     if(path.endsWith('/drafts'))return fulfill({data:[draft]})
     return fulfill({data:draft,missing:[]})
   })
-  await page.goto('http://127.0.0.1:5173/')
-  await page.getByRole('button',{name:'1688 店铺',exact:true}).click()
-  await page.getByRole('button',{name:'发布工作台',exact:true}).click()
+  await page.goto('http://127.0.0.1:5173/#/products/drafts')
   await page.getByRole('button',{name:'查看草稿 SKU 界面测试产品',exact:true}).click()
   await page.getByLabel('SKU 单价 1',{exact:true}).waitFor()
   assert.equal(await page.getByLabel('SKU 单价 1',{exact:true}).inputValue(),'12')

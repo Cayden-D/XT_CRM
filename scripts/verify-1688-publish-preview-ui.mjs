@@ -23,9 +23,7 @@ try{
   else if(path.endsWith(`/drafts/${id}`))data={data:draft,missing:[]}
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto('http://127.0.0.1:5173/')
- await page.getByRole('button',{name:'1688 店铺',exact:true}).click()
- await page.getByRole('button',{name:'发布工作台',exact:true}).click()
+ await page.goto('http://127.0.0.1:5173/#/products/drafts')
  await page.getByRole('button',{name:'查看草稿 预览测试商品',exact:true}).click()
  for(const viewport of [{width:1440,height:900},{width:390,height:844}]){
   await page.setViewportSize(viewport);await page.waitForTimeout(350)

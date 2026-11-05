@@ -23,8 +23,8 @@ try{
   }
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto('http://127.0.0.1:5173/')
- await page.getByRole('button',{name:'上架队列',exact:true}).click()
+ await page.goto('http://127.0.0.1:5173/#/products/queue')
+ assert.equal(await page.getByRole('navigation',{name:'商品'}).getByRole('button',{name:'上架队列',exact:true}).getAttribute('aria-current'),'page')
  await page.getByText('共 45 条',{exact:true}).waitFor()
  assert.equal(await page.locator('.queue-table tbody tr').count(),20)
  const heights=await page.locator('.queue-table tbody tr').evaluateAll(rows=>rows.map(r=>r.getBoundingClientRect().height));assert.ok(heights.every(h=>h<110))

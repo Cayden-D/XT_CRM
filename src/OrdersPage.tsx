@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, LoaderCircle, ReceiptText, Search, ShieldCheck, Store, X } from 'lucide-react'
+import { AlertCircle, LoaderCircle, ReceiptText, Search, ShieldCheck, X } from 'lucide-react'
 import type { SessionUser } from './api'
 import Pagination, { useDebounced } from './Pagination'
 import { useAiFocusPart } from './aiFocus'
@@ -7,6 +7,7 @@ import { WangwangButton } from './PerformanceAnalysis'
 import { agentLabel } from './PerformanceReports'
 import { getOrderList, getPerformanceConnections, type OrderGroup, type OrderRow, type PerformanceConnection } from './performanceApi'
 import OrderDrawer, { statusNames } from './OrderDrawer'
+import { DateRange, NeedShop, Note, ShopPicker } from './ui'
 import './1688.css'
 
 type Preset = 'today' | '7d' | '30d' | '90d'
@@ -44,22 +45,20 @@ export default function OrdersPage({ user }: { user: SessionUser }) {
     return () => { live = false }
   }, [shop, range, group, query, page, pageSize])
   useEffect(load, [load])
-  if (!canRead) return <section className="state-card"><ShieldCheck size={28} /><h2>暂无订单查看权限</h2><p>需要客服绩效的查看权限。</p></section>
-  if (ready && !shop) return <div className="shop-empty"><Store size={28} /><p>请先在「客服绩效 → 绩效应用授权」中授权店铺，订单由绩效应用同步。</p></div>
+  if (!canRead) return <section className="state-card"><ShieldCheck size={28} /><h2>暂无订单查看权限</h2></section>
+  if (ready && !shop) return <NeedShop text="还没有授权绩效应用" />
   return <div className="shop-workspace performance-page orders-page">
     {error && <div className="shop-feedback error" role="alert"><AlertCircle size={16} /><span>{error}</span><button title="关闭错误" onClick={() => setError('')}><X size={15} /></button></div>}
     <div className="shop-controlbar perf-filters">
-      <div className="shop-select"><Store size={17} /><select aria-label="店铺" value={shop} onChange={e => setShop(e.target.value)}>{shops.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}</select></div>
-      <div className="perf-range"><nav className="perf-metric-tabs" aria-label="下单日期">{presets.map(([id, label]) => <button key={id} aria-pressed={preset === id} className={preset === id ? 'active' : ''} onClick={() => { setPreset(id); setRange(rangeOf(id)) }}>{label}</button>)}</nav>
-        <input type="date" aria-label="开始日期" value={range.from} max={range.to} onChange={e => { if (e.target.value) { setPreset('custom'); setRange({ ...range, from: e.target.value }) } }} /><span>至</span>
-        <input type="date" aria-label="结束日期" value={range.to} min={range.from} max={beijingDate()} onChange={e => { if (e.target.value) { setPreset('custom'); setRange({ ...range, to: e.target.value }) } }} /></div>
+      <ShopPicker shops={shops} value={shop} onChange={setShop} />
+      <DateRange presets={presets} preset={preset} range={range} onPreset={id => { setPreset(id); setRange(rangeOf(id)) }} onCustom={next => { setPreset('custom'); setRange(next) }} />
     </div>
     <div className="orders-head">
       <nav className="catalog-tabs" aria-label="订单状态">{groups.map(([id, label]) => { const n = id ? counts[id] ?? 0 : counts.all ?? 0
         return <button key={id || 'all'} role="tab" aria-selected={group === id} className={`${group === id ? 'active' : ''} ${id === 'toship' && n > 0 ? 'warn' : ''}`} onClick={() => setGroup(id)}>{label}<span>{n}</span></button> })}</nav>
       <label className="orders-search"><Search size={15} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="订单号、商品名或备注" aria-label="搜索订单" />{search && <button onClick={() => setSearch('')} aria-label="清除搜索"><X size={13} /></button>}</label>
     </div>
-    <p className="orders-sum">{range.from} 至 {range.to} 下单 <b>{counts.all ?? 0}</b> 笔，订单金额 <b>{yuan(amount)}</b>{counts.refund ? <>，其中 {counts.refund} 笔有退款</> : null}</p>
+    <p className="orders-sum"><b>{counts.all ?? 0}</b> 笔 · 订单金额 <b>{yuan(amount)}</b></p>
     <div className="shop-table-scroll"><table className={`shop-table perf-table orders-table ${loading ? 'is-loading' : ''}`}><thead><tr><th>下单时间</th><th>订单号</th><th>商品</th><th>买家</th><th>实付金额</th><th>状态</th><th>归属客服</th><th /></tr></thead>
       <tbody>{rows.map(o => { const first = o.items[0], qty = o.items.reduce((s, i) => s + (i.quantity || 0), 0)
         return <tr key={o.order_id}>
@@ -75,7 +74,7 @@ export default function OrdersPage({ user }: { user: SessionUser }) {
       {!loading && !rows.length && <div className="shop-empty"><ReceiptText size={28} /><p>{query || group ? '没有符合条件的订单' : '所选日期内没有订单'}</p></div>}
       {loading && !rows.length && <div className="shop-empty"><LoaderCircle size={26} className="spin" /></div>}</div>
     <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage} onPageSize={setPageSize} sizes={[20, 50, 100]} unit="笔" />
-    <p className="shop-note">订单由绩效应用每 15 分钟同步（最近 90 天）。点「详情」时实时调用 1688「加密场景订单详情（卖家视角）」接口，买家与收货信息由平台脱敏，系统不保存。</p>
+    <Note>订单每 15 分钟同步（最近 90 天）。详情实时读取 1688，买家与收货信息由平台脱敏，系统不保存。</Note>
     {open && <OrderDrawer connectionId={shop} orderId={open.order_id} close={() => setOpen(null)} setError={setError} />}
   </div>
 }

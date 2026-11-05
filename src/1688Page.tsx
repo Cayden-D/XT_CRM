@@ -9,9 +9,9 @@ import AgentPanel from './1688AgentPanel'
 import DetailEditor from './1688DetailEditor'
 import { getAlbums } from './imageApi'
 import ConnectionDelete from './ConnectionDelete'
-import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FilePlus2, ImagePlus, Link2, LoaderCircle, Package, Plus, Power, RefreshCw, Save, Search, Send, ShieldCheck, Store, Trash2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FilePlus2, ImagePlus, Link2, LoaderCircle, Package, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Store, Trash2, X } from 'lucide-react'
 import { getProducts, type Product, type SessionUser } from './api'
-import { getAgentSettings, runPublishingAgent, completeShopAuthorization, createPublishDraft, deleteShopConnection, disableShopConnection, getShopConnectionUsage, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopListings, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, syncShop, syncNotice, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
+import { getAgentSettings, runPublishingAgent, completeShopAuthorization, createPublishDraft, deleteShopConnection, disableShopConnection, getShopConnectionUsage, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
 
 const imageUrl=(value:string)=>value.startsWith('img/')?`https://cbu01.alicdn.com/${value}`:value
 const time = (value:string|null) => value ? new Date(value).toLocaleString('zh-CN') : '—'
@@ -24,15 +24,14 @@ function Modal({title,children,close,wide=false}:{title:string;children:ReactNod
   return <div className="dialog-layer shop-dialog"><button className="drawer-scrim" onClick={close} aria-label="关闭对话框"/><section role="dialog" aria-modal="true" aria-label={title} className={wide?'shop-modal wide':'shop-modal'}><header><h2>{title}</h2><button title="关闭" onClick={close}><X size={18}/></button></header>{children}</section></div>
 }
 
-export default function Integration1688Page({user,onCollections}:{user:SessionUser;onCollections:()=>void}) {
-  const [view,setView]=useState<'connections'|'listings'|'drafts'|'operations'>('listings')
+/** The product app's panels: publish drafts (商品), connections and call log (设置). */
+export default function ShopPanel({user,view}:{user:SessionUser;view:'connections'|'drafts'|'operations'}) {
   const [connections,setConnections]=useState<ShopConnection[]>([]),[selected,setSelected]=useState(''),[configured,setConfigured]=useState(false)
-  const [listings,setListings]=useState<PlatformListing[]>([]),[drafts,setDrafts]=useState<PublishDraft[]>([]),[operations,setOperations]=useState<IntegrationOperation[]>([])
-  const [search,setSearch]=useState(''),[page,setPage]=useState(1),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('')
-  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<ShopConnection|null>(null),[remove,setRemove]=useState<ShopConnection|null>(null),[create,setCreate]=useState(false),[draft,setDraft]=useState<PublishDraft|null>(null),[listing,setListing]=useState<PlatformListing|null>(null)
+  const [drafts,setDrafts]=useState<PublishDraft[]>([]),[operations,setOperations]=useState<IntegrationOperation[]>([])
+  const [page,setPage]=useState(1),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('')
+  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<ShopConnection|null>(null),[remove,setRemove]=useState<ShopConnection|null>(null),[create,setCreate]=useState(false),[draft,setDraft]=useState<PublishDraft|null>(null)
   const canManage=permission(user,'integration:manage'),canPublish=permission(user,'integration:publish'),canRead=permission(user,'integration:read')
-  const syncAbort=useRef(false)
-  useEffect(()=>()=>{syncAbort.current=true},[])
+  useEffect(()=>{setPage(1)},[view])
   const load=useCallback(async()=>{
     if(!canRead){setLoading(false);return}
     setLoading(true);setError('')
@@ -40,45 +39,34 @@ export default function Integration1688Page({user,onCollections}:{user:SessionUs
       const shop=await getShopConnections();setConnections(shop.data);setConfigured(shop.configured)
       const id=shop.data.some(c=>c.id===selected)?selected:shop.data[0]?.id||''
       if(id!==selected){setSelected(id);return}
-      if(view==='listings')setListings(id?(await getShopListings(id,page,search)).data:[])
       if(view==='drafts')setDrafts((await getPublishDrafts()).data)
       if(view==='operations')setOperations((await getShopOperations(page)).data)
     } catch(cause){setError(message(cause))} finally {setLoading(false)}
-  },[canRead,selected,view,page,search])
+  },[canRead,selected,view,page])
   useEffect(()=>{void load()},[load])
   async function action(name:string,run:()=>Promise<unknown>,success:string){setBusy(name);setError('');try{await run();setNotice(success);await load()}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function authorize(){setBusy('authorize');setError('');try{const result=await startShopAuthorization();setAuthUrl(result.data.authorizationUrl);setCallbackUrl('')}catch(cause){setError(message(cause))}finally{setBusy('')}}
-  async function sync(requested:'incremental'|'full'){
-    if(!selected)return;syncAbort.current=false;setBusy(requested==='full'?'sync-full':'sync');setError('');let count=0
-    try{
-      const result=await syncShop(selected,requested,(read,total,mode)=>{count=read;setNotice(`${mode==='incremental'?'增量同步':'全量同步'}：正在读取 ${read} / ${total} 件商品`)},()=>syncAbort.current)
-      setNotice(syncNotice(result))
-      await load()
-    }catch(cause){setError(`${message(cause)} 本轮已读取 ${count} 件，已保存的数据可继续查看。`);await load()}finally{setBusy('')}
-  }
   async function openDraft(id:string){setBusy(id);try{setDraft((await getPublishDraft(id)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
-  async function openListing(id:string){setBusy(id);try{setListing((await getShopListing(id)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   if(!canRead)return <section className="state-card"><ShieldCheck size={28}/><h2>暂无店铺访问权限</h2></section>
   return <div className="shop-workspace">
-    <div className="shop-toolbar"><nav className="shop-tabs" aria-label="1688 店铺视图">{([['listings','平台商品'],['drafts','发布工作台'],['connections','连接设置'],['operations','同步记录']] as const).map(([id,label])=><button key={id} aria-current={view===id?'page':undefined} className={view===id?'active':''} onClick={()=>{setView(id);setPage(1)}}>{label}</button>)}</nav><button className="shop-button" onClick={onCollections}><Package size={16}/>采集商品</button></div>
     {notice&&<div className="shop-feedback" role="status"><CheckCircle2 size={16}/><span>{notice}</span><button title="关闭提示" onClick={()=>setNotice('')}><X size={15}/></button></div>}
     {error&&<div className="shop-feedback error" role="alert"><AlertCircle size={16}/><span>{error}</span><button title="关闭错误" onClick={()=>setError('')}><X size={15}/></button></div>}
-    <div className="shop-controlbar"><div className="shop-select"><Store size={17}/><select aria-label="目标店铺" value={selected} disabled={Boolean(busy)} onChange={e=>{setSelected(e.target.value);setPage(1)}}><option value="">选择店铺</option>{connections.map(c=><option key={c.id} value={c.id}>{c.display_name} · {statusNames[c.status]}</option>)}</select></div><div className="shop-commandbar">
-      {view==='listings'&&<><div className="shop-search"><Search size={16}/><input aria-label="搜索平台商品" value={search} placeholder="商品标题或 ID" onChange={e=>{setSearch(e.target.value);setPage(1)}}/></div>{canManage&&(()=>{const shop=connections.find(c=>c.id===selected),off=Boolean(busy)||!selected||shop?.status!=='connected',since=shop?.listings_synced_through
-        return <><button className="shop-button primary" disabled={off} title={since?`只读取 ${time(since)} 之后修改过的商品`:'首次同步会读取全部商品'} onClick={()=>void sync('incremental')}><RefreshCw size={16} className={busy==='sync'?'spin':''}/>{busy==='sync'?'正在同步':since?'同步变动':'同步店铺'}</button>
-          {since&&<button className="shop-button" disabled={off} title={`重新读取全部商品${shop?.listings_full_synced_at?`（上次全量：${time(shop.listings_full_synced_at)}）`:''}`} onClick={()=>void sync('full')}><RefreshCw size={16} className={busy==='sync-full'?'spin':''}/>{busy==='sync-full'?'正在全量同步':'全量同步'}</button>}</>})()}
-        {busy.startsWith('sync')&&<button className="shop-button" onClick={()=>{syncAbort.current=true}}>停止</button>}</>}
-      {view==='drafts'&&canPublish&&<button className="shop-button primary" disabled={!selected||Boolean(busy)} onClick={()=>setCreate(true)}><FilePlus2 size={16}/>新建草稿</button>}
-      {view==='connections'&&canManage&&<button className="shop-button primary" disabled={!configured||Boolean(busy)} onClick={()=>void authorize()}><Link2 size={16}/>连接店铺</button>}
-      <button className="shop-icon" title="刷新当前视图" aria-label="刷新当前视图" disabled={Boolean(busy)} onClick={()=>void load()}><RefreshCw size={17}/></button>
-    </div></div>
+    {view!=='operations'&&<div className="shop-controlbar">
+      {view==='drafts'&&connections.length>1?<div className="shop-select"><Store size={16}/><select aria-label="目标店铺" value={selected} disabled={Boolean(busy)} onChange={e=>setSelected(e.target.value)}>{connections.map(c=><option key={c.id} value={c.id}>{c.display_name} · {statusNames[c.status]}</option>)}</select></div>:<span/>}
+      <div className="shop-commandbar">
+        {view==='drafts'&&canPublish&&<button className="shop-button primary" disabled={!selected||Boolean(busy)} onClick={()=>setCreate(true)}><FilePlus2 size={16}/>新建草稿</button>}
+        {view==='connections'&&canManage&&<button className="shop-button primary" disabled={!configured||Boolean(busy)} onClick={()=>void authorize()}><Link2 size={16}/>授权商品应用</button>}
+      </div>
+    </div>}
     {loading?<div className="shop-empty"><LoaderCircle size={26} className="spin"/><p>正在读取店铺数据…</p></div>:<>
-      {view==='connections'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>店铺 / 账号</th><th>连接状态</th><th>账号接口</th><th>访问令牌有效期</th><th>刷新令牌有效期</th><th>操作</th></tr></thead><tbody>{connections.map(c=><tr key={c.id}><td><strong>{c.display_name}</strong><small>{c.member_id||c.login_id}</small></td><td><Status value={c.status}/></td><td><Status value={c.member_capability}/></td><td>{time(c.access_expires_at)}</td><td>{time(c.refresh_expires_at)}</td><td><div className="shop-row-actions">{canManage&&<><button title="验证账号接口" aria-label={`验证 ${c.display_name}`} disabled={Boolean(busy)||c.status!=='connected'} onClick={()=>void action(c.id,()=>testShopConnection(c.id),'账号信息验证成功')}><ShieldCheck size={17}/></button><button title="刷新访问令牌" aria-label={`刷新 ${c.display_name} 令牌`} disabled={Boolean(busy)||c.status!=='connected'} onClick={()=>void action(c.id,()=>refreshShopToken(c.id),'访问令牌已刷新')}><RefreshCw size={17}/></button><button title="停用连接" aria-label={`停用 ${c.display_name}`} disabled={Boolean(busy)||c.status==='disabled'} onClick={()=>setDisable(c)}><Power size={17}/></button><button title={c.status==='disabled'?'删除连接':'先停用，再删除'} aria-label={`删除 ${c.display_name}`} disabled={Boolean(busy)||c.status!=='disabled'} onClick={()=>setRemove(c)}><Trash2 size={17}/></button></>}</div></td></tr>)}</tbody></table>{!connections.length&&<Empty text={configured?'尚未连接店铺':'服务器尚未配置 1688 应用'}/>}</div>}
-      {view==='listings'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>商品</th><th>平台 ID</th><th>CRM SKU</th><th>平台状态</th><th>同步时间</th><th/></tr></thead><tbody>{listings.map(item=><tr key={item.id}><td><div className="shop-product-cell">{item.image_url?<img src={imageUrl(item.image_url)} alt="" referrerPolicy="no-referrer"/>:<div className="shop-thumbnail"><Package size={20}/></div>}<strong>{item.title}</strong></div></td><td>{item.offer_id}</td><td>{item.sku||'未关联'}</td><td><Status value={item.status}/></td><td>{time(item.synced_at)}</td><td><button className="shop-icon" title="查看平台商品" aria-label={`查看 ${item.title}`} disabled={Boolean(busy)} onClick={()=>void openListing(item.id)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>{!listings.length&&<Empty text={selected?'当前没有已同步商品':'请先连接店铺'}/>}</div>}
-      {view==='drafts'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>正式产品</th><th>目标店铺</th><th>类目</th><th>状态</th><th>平台商品 ID</th><th/></tr></thead><tbody>{drafts.map(item=><tr key={item.id}><td><strong>{item.name}</strong><small>{item.sku}</small></td><td>{item.display_name}</td><td>{item.cat_id}</td><td><Status value={item.status}/>{item.last_error_code&&<small>{item.last_error_code}</small>}</td><td>{item.offer_id||'—'}</td><td><button className="shop-icon" title="编辑发布草稿" aria-label={`查看草稿 ${item.name}`} disabled={Boolean(busy)} onClick={()=>void openDraft(item.id)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>{!drafts.length&&<Empty text="暂无发布草稿"/>}</div>}
+      {view==='connections'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>店铺</th><th>状态</th><th>授权到期</th><th/></tr></thead><tbody>{connections.map(c=><tr key={c.id}><td><strong>{c.display_name}</strong><small>{c.member_id||c.login_id}</small></td><td><Status value={c.status}/></td><td>{time(c.refresh_expires_at)}</td><td><div className="shop-row-actions conn-actions">{canManage&&(c.status==='disabled'?<button title="删除这个连接" aria-label={`删除 ${c.display_name}`} disabled={Boolean(busy)} onClick={()=>setRemove(c)}>删除</button>:<>
+        {c.status==='connected'&&<button title="验证账号接口是否可用" aria-label={`验证 ${c.display_name}`} disabled={Boolean(busy)} onClick={()=>void action(c.id,()=>testShopConnection(c.id),'账号信息验证成功')}>验证</button>}
+        {c.status==='connected'&&<button title="刷新访问令牌" aria-label={`刷新 ${c.display_name} 令牌`} disabled={Boolean(busy)} onClick={()=>void action(c.id,()=>refreshShopToken(c.id),'访问令牌已刷新')}>刷新</button>}
+        <button title="停止同步和发布；停用后可删除" aria-label={`停用 ${c.display_name}`} disabled={Boolean(busy)} onClick={()=>setDisable(c)}>停用</button></>)}</div></td></tr>)}</tbody></table>{!connections.length&&<Empty text={configured?'还没有授权':'服务器尚未配置商品应用'}/>}</div>}
+      {view==='drafts'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>商品</th><th>店铺</th><th>状态</th><th/></tr></thead><tbody>{drafts.map(item=><tr key={item.id}><td><strong>{item.name}</strong><small>{item.sku}</small></td><td>{item.display_name}</td><td><Status value={item.status}/>{item.last_error_code&&<small>{item.last_error_code}</small>}</td><td><button className="shop-icon" title="编辑发布草稿" aria-label={`查看草稿 ${item.name}`} disabled={Boolean(busy)} onClick={()=>void openDraft(item.id)}><ChevronRight size={17}/></button></td></tr>)}</tbody></table>{!drafts.length&&<Empty text="还没有草稿"/>}</div>}
       {view==='operations'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>时间</th><th>店铺</th><th>接口 / 操作</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead><tbody>{operations.map(item=><tr key={item.id}><td>{time(item.created_at)}</td><td>{item.display_name||'—'}</td><td><code>{item.api_name}</code></td><td><Status value={item.outcome}/></td><td>{item.error_code||'—'}</td><td>{item.duration_ms} ms</td></tr>)}</tbody></table>{!operations.length&&<Empty text="暂无调用记录"/>}</div>}
     </>}
-    {(view==='listings'||view==='operations')&&<div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1||Boolean(busy)} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} 页</span><button className="shop-icon" title="下一页" disabled={loading||Boolean(busy)||(view==='listings'?listings.length<20:operations.length<50)} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>}
+    {view==='operations'&&<div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1||Boolean(busy)} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} 页</span><button className="shop-icon" title="下一页" disabled={loading||Boolean(busy)||operations.length<50} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>}
     {authUrl&&<Modal title="连接 1688 店铺" close={()=>setAuthUrl('')}><div className="shop-modal-body"><a className="shop-button primary" href={authUrl} target="_blank" rel="noreferrer">前往 1688 授权 <ExternalLink size={16}/></a><label>完整回跳地址<input value={callbackUrl} onChange={e=>setCallbackUrl(e.target.value)} autoComplete="off" placeholder="https://…?code=…&state=…"/></label><p className="shop-note">授权码有效期 2 分钟</p></div><footer><button className="shop-button" onClick={()=>setAuthUrl('')}>取消</button><button className="shop-button primary" disabled={!callbackUrl||Boolean(busy)} onClick={()=>void action('complete',async()=>{await completeShopAuthorization(callbackUrl);setAuthUrl('');setCallbackUrl('')},'店铺授权完成')}><CheckCircle2 size={16}/>完成连接</button></footer></Modal>}
     {remove&&<ConnectionDelete name={remove.display_name} account={remove.member_id||remove.login_id} close={()=>setRemove(null)} done={()=>{setRemove(null);setNotice('店铺连接已删除');void load()}} remove={()=>deleteShopConnection(remove.id)}
       impact={async()=>{const u=(await getShopConnectionUsage(remove.id)).data;return{blocked:u.published?`这个店铺有 ${u.published} 个通过本系统发布过的商品，发布记录需要保留，不能删除；保持停用即可。`:null,
@@ -86,7 +74,6 @@ export default function Integration1688Page({user,onCollections}:{user:SessionUs
     {disable&&<Modal title="停用店铺连接" close={()=>setDisable(null)}><div className="shop-modal-body"><p>{disable.display_name} 将停止发布与同步，历史记录保留。</p></div><footer><button className="shop-button" onClick={()=>setDisable(null)}>取消</button><button className="shop-button danger" disabled={Boolean(busy)} onClick={()=>void action('disable',async()=>{await disableShopConnection(disable.id);setDisable(null)},'连接已停用')}>停用连接</button></footer></Modal>}
     {create&&<CreateDraft connectionId={selected} close={()=>setCreate(false)} saved={item=>{setCreate(false);setDraft(item);void load()}}/>}
     {draft&&<DraftEditor initial={draft} targetName={connections.find(c=>c.id===draft.connection_id)?.display_name||'未知店铺'} canPublish={canPublish} close={()=>setDraft(null)} saved={()=>void load()}/>}
-    {listing&&<ListingViewer initial={listing} canManage={canManage} canPublish={canPublish} close={()=>setListing(null)} saved={()=>void load()}/>}
   </div>
 }
 

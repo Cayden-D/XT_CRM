@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import './1688.css'
-import { AlertCircle, Sparkles, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, MessageSquareText, Paperclip, PenLine, Plus, Save, Search, ShieldCheck, Store, Tag as TagIcon, Trash2, X } from 'lucide-react'
+import { AlertCircle, Sparkles, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, MessageSquareText, Paperclip, PenLine, Plus, Save, ListFilter, Search, ShieldCheck, Store, Tag as TagIcon, Trash2, X } from 'lucide-react'
 import { getAccounts, type Account, type SessionUser } from './api'
 import { DATA_CHANGED, openAi, useAiFocusPart } from './aiFocus'
 import OrderDrawer from './OrderDrawer'
+import { Note, ShopPicker } from './ui'
 import { Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
 import { getChatDetail, type ChatDetail } from './performanceApi'
 import {
@@ -36,16 +37,16 @@ function FilterRow({title,options,value,onChange,single}:{title:string;options:[
   </div></div>
 }
 
-export default function CustomerOpsPage({user,openOffline,initialView='list'}:{user:SessionUser;openOffline:()=>void;initialView?:'list'|'pool'|'due'}) {
+export default function CustomerOpsPage({user,view}:{user:SessionUser;view:View}) {
   const canRead=permission(user,'customer_ops:read'),canUpdate=permission(user,'customer_ops:update'),canManage=permission(user,'customer_ops:manage')
   // Order detail, chat messages and Wangwang go through the performance app, so they need its read access.
   const canChat=permission(user,'performance:read')||permission(user,'performance:read_own')
-  const [options,setOptions]=useState<Options|null>(null),[shop,setShop]=useState(''),[view,setView]=useState<View>(initialView)
+  const [options,setOptions]=useState<Options|null>(null),[shop,setShop]=useState('')
   const [filters,setFilters]=useState<Filters>({}),[search,setSearch]=useState(''),[page,setPage]=useState(1)
-  const [rows,setRows]=useState<Customer[]>([]),[total,setTotal]=useState(0),[online,setOnline]=useState(0),[loading,setLoading]=useState(true)
+  const [rows,setRows]=useState<Customer[]>([]),[total,setTotal]=useState(0),[loading,setLoading]=useState(true)
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[selected,setSelected]=useState<string[]>([])
   useAiFocusPart({ connectionId: shop || undefined, view })
-  const [detail,setDetail]=useState<string|null>(null),[followupFor,setFollowupFor]=useState<Customer|null>(null),[showFilters,setShowFilters]=useState(()=>typeof window==='undefined'||window.innerWidth>640)
+  const [detail,setDetail]=useState<string|null>(null),[followupFor,setFollowupFor]=useState<Customer|null>(null),[showFilters,setShowFilters]=useState(false)
   const [customFollowups,setCustomFollowups]=useState(''),[customIdle,setCustomIdle]=useState('')
   const loadOptions=useCallback(async()=>{try{const r=await getOptions();setOptions(r.data);setShop(s=>s||r.data.shops.find(x=>x.status==='connected')?.id||r.data.shops[0]?.id||'')}catch(cause){setError(message(cause))}},[])
   useEffect(()=>{if(canRead)void loadOptions()},[canRead,loadOptions])
@@ -55,30 +56,30 @@ export default function CustomerOpsPage({user,openOffline,initialView='list'}:{u
   const effective=useMemo<Filters>(()=>view==='pool'?{search:filters.search,page,pool:filters.pool??'any',sort:'unpaid_at'}:view==='due'?{search:filters.search,page,due:'yes',sort:'next_follow_up'}:{...filters,page},[filters,page,view])
   const load=useCallback(async()=>{
     if(!shop||view==='settings')return
-    setLoading(true);try{const r=await getCustomers(shop,effective);setRows(r.data);setTotal(r.total);setOnline(r.online);setSelected([])}catch(cause){setError(message(cause))}finally{setLoading(false)}
+    setLoading(true);try{const r=await getCustomers(shop,effective);setRows(r.data);setTotal(r.total);setSelected([])}catch(cause){setError(message(cause))}finally{setLoading(false)}
   },[shop,effective,view])
+  useEffect(()=>{setPage(1);setShowFilters(false)},[view])
   useEffect(()=>{void load()},[load])
   useEffect(()=>{const reload=()=>void load();window.addEventListener(DATA_CHANGED,reload);return()=>window.removeEventListener(DATA_CHANGED,reload)},[load])
+  const activeFilters=[filters.purchaseType,filters.customerType,filters.memberIdentity,filters.channel,filters.level,filters.priceTier,filters.tagId,filters.cycle].filter(v=>v?.length).length+[filters.minFollowups,filters.overdue,filters.idleDays].filter(v=>v!=null).length
   const set=(patch:Partial<Filters>)=>{setFilters(f=>({...f,...patch}));setPage(1)}
   async function bulk(tagId:string,action:'add'|'remove'){try{const r=await bulkTag(selected,tagId,action);setNotice(`${action==='add'?'已添加':'已移除'}标签（${r.data.changed} 位客户）`);await Promise.all([load(),loadOptions()])}catch(cause){setError(message(cause))}}
   if(!canRead)return <section className="state-card"><ShieldCheck size={28}/><h2>暂无客户经营访问权限</h2></section>
   if(!options)return <div className="shop-empty"><LoaderCircle size={26} className="spin"/><p>正在读取…</p></div>
   const tagName=new Map(options.tags.map(t=>[t.id,t.name]))
   return <div className="shop-workspace co-page">
-    <div className="shop-toolbar"><nav className="shop-tabs" aria-label="客户经营视图">{([['list','客户列表'],['pool','未成交客户'],['due','待跟进'],['settings','分层与标签']] as [View,string][]).map(([id,text])=><button key={id} aria-current={view===id?'page':undefined} className={view===id?'active':''} onClick={()=>{setView(id);setPage(1)}}>{text}</button>)}</nav></div>
     {notice&&<div className="shop-feedback" role="status"><CheckCircle2 size={16}/><span>{notice}</span><button title="关闭提示" onClick={()=>setNotice('')}><X size={15}/></button></div>}
     {error&&<div className="shop-feedback error" role="alert"><AlertCircle size={16}/><span>{error}</span><button title="关闭错误" onClick={()=>setError('')}><X size={15}/></button></div>}
     {view==='settings'?<SettingsView canManage={canManage} canUpdate={canUpdate} tags={options.tags} reload={loadOptions} setError={setError} setNotice={setNotice}/>:<>
       <div className="shop-controlbar">
-        <div className="co-channel"><button className="active">线上客户 {online}</button><button onClick={openOffline}>线下客户 {options.offlineCustomers}</button></div>
+        <form className="shop-search co-search" onSubmit={e=>{e.preventDefault();set({search:search.trim()||undefined})}}><Search size={16}/><input aria-label="搜索客户" placeholder="名称 / 旺旺 / 电话 / 订单号" value={search} onChange={e=>{setSearch(e.target.value);if(!e.target.value)set({search:undefined})}}/></form>
         <div className="shop-commandbar">
-          <div className="shop-select"><Store size={17}/><select aria-label="店铺" value={shop} onChange={e=>{setShop(e.target.value);setPage(1)}}>{!options.shops.length&&<option value="">暂无授权店铺</option>}{options.shops.map(s=><option key={s.id} value={s.id}>{s.display_name}</option>)}</select></div>
-          <form className="shop-search" onSubmit={e=>{e.preventDefault();set({search:search.trim()||undefined})}}><Search size={16}/><input aria-label="搜索客户" placeholder="名称 / 旺旺 / 电话 / 订单号 / 买家尾号" value={search} onChange={e=>{setSearch(e.target.value);if(!e.target.value)set({search:undefined})}}/></form>
+          <ShopPicker shops={options.shops} value={shop} onChange={id=>{setShop(id);setPage(1)}}/>
+          {view==='list'&&<button className={`shop-button ${activeFilters?'co-filter-on':''}`} aria-expanded={showFilters} onClick={()=>setShowFilters(v=>!v)}><ListFilter size={15}/>筛选{activeFilters>0&&<b>{activeFilters}</b>}</button>}
         </div>
       </div>
-      {view==='list'&&<section className="perf-chart-card co-filters" aria-label="客户筛选">
-        <button className="co-filter-toggle" onClick={()=>setShowFilters(v=>!v)} aria-expanded={showFilters}>{showFilters?'收起筛选':'展开筛选'}</button>
-        {showFilters&&<>
+      {view==='list'&&showFilters&&<section className="perf-chart-card co-filters" aria-label="客户筛选">
+        <>
           <FilterRow title="购买类型" options={[['distribution','分销'],['procurement','采购']]} value={filters.purchaseType??[]} onChange={v=>set({purchaseType:v})}/>
           <FilterRow title="客户类型" options={Object.entries(typeNames)} value={filters.customerType??[]} onChange={v=>set({customerType:v})}/>
           <FilterRow title="会员身份" options={options.memberIdentities.map(x=>[x,x])} value={filters.memberIdentity??[]} onChange={v=>set({memberIdentity:v})}/>
@@ -93,7 +94,7 @@ export default function CustomerOpsPage({user,openOffline,initialView='list'}:{u
             {([[undefined,'不限'],['no','未超期'],['yes','已超期']] as [Filters['overdue'],string][]).map(([v,text])=><button key={text} aria-pressed={filters.overdue===v&&!filters.idleDays} className={filters.overdue===v&&!filters.idleDays?'active':''} onClick={()=>set({overdue:v,idleDays:undefined})}>{text}</button>)}
             <input aria-label="自定义超期未购天数" type="number" min={1} placeholder="超过 N 天未购" value={customIdle} onChange={e=>setCustomIdle(e.target.value)} onBlur={()=>{const n=Number(customIdle);set({idleDays:Number.isInteger(n)&&n>0?n:undefined,overdue:undefined})}}/></div></div>
           <FilterRow title="购买周期" options={[['1-2','平均 1–2 天买一次'],['3-7','平均 3–7 天'],['8-30','平均 8–30 天'],['30+','平均 30 天以上']]} value={filters.cycle??[]} onChange={v=>set({cycle:v})}/>
-        </>}
+        </>
       </section>}
       {view==='pool'&&<nav className="perf-metric-tabs" aria-label="未成交类型">{([['any','全部'],['unpaid','下单未付款'],['no_order','咨询未下单']] as const).map(([id,text])=><button key={id} aria-pressed={(filters.pool??'any')===id} className={(filters.pool??'any')===id?'active':''} onClick={()=>set({pool:id})}>{text}</button>)}</nav>}
       <div className="co-listbar"><span>共 {total} 位客户</span>
@@ -118,7 +119,7 @@ export default function CustomerOpsPage({user,openOffline,initialView='list'}:{u
           <td><div className="co-actions"><button className="shop-button" onClick={()=>setDetail(r.id)}>资料</button>{canUpdate&&<button className="shop-button" onClick={()=>setFollowupFor(r)}><PenLine size={14}/>写跟进</button>}</div></td>
         </tr>)}</tbody></table>{!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的客户</p></div>}</div>}
       <div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} / {Math.max(1,Math.ceil(total/50))} 页</span><button className="shop-icon" title="下一页" disabled={loading||page*50>=total} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>
-      <p className="shop-note">购买数据来自已同步的 1688 订单（按订单修改时间同步，未补齐的历史订单不计入）；平台不提供买家姓名和联系方式，名称、电话等需在“资料”中手动维护。</p>
+      <Note>购买数据来自已同步的 1688 订单（按订单修改时间同步，未补齐的历史订单不计入）；平台不提供买家姓名和联系方式，名称、电话等需在“资料”中手动维护。</Note>
     </>}
     {followupFor&&<FollowupModal customer={followupFor} close={()=>setFollowupFor(null)} saved={()=>{setFollowupFor(null);setNotice('跟进已记录');void load()}} setError={setError}/>}
     {detail&&<DetailDrawer id={detail} options={options} canUpdate={canUpdate} canChat={canChat} close={()=>setDetail(null)} changed={()=>{void load();void loadOptions()}} setError={setError} setNotice={setNotice}/>}
@@ -207,7 +208,7 @@ function SettingsView({canManage,canUpdate,tags,reload,setError,setNotice}:{canM
     <div className="perf-chart-card"><h3 className="perf-chart-title">分层规则</h3>
       <div className="shop-form-columns co-form">{input('level_platinum','白金客户：累计交易金额 ≥（元）')}{input('level_vip','VIP 客户：累计交易金额 ≥（元）')}{input('price_mid','一般价值：客单价 ≥（元）')}{input('price_high','高价值：客单价 ≥（元）')}{input('loyal_orders','忠诚客户：购买次数 ≥')}{input('default_cycle_days','只买过一次的客户，超期判断周期（天）')}</div>
       <label className="perf-toggle"><input type="checkbox" checked={overdueFollowup} disabled={!canManage} onChange={e=>setOverdueFollowup(e.target.checked)}/>超期未购的客户自动进入“待跟进”（写跟进或约定下次跟进时间后移出）</label>
-      <p className="shop-note">低于白金门槛为普通客户；客单价低于一般价值门槛为低价值；购买 1 次为新客户，2 次及以上为老客户。修改后立即生效。</p>
+      <Note>低于白金门槛为普通客户；客单价低于一般价值门槛为低价值；购买 1 次为新客户，2 次及以上为老客户。修改后立即生效。</Note>
       {canManage&&<button className="shop-button primary" disabled={busy} onClick={()=>void save()}><Save size={16}/>保存分层规则</button>}</div>
     <div className="perf-chart-card"><h3 className="perf-chart-title">通用标签</h3>
       <div className="co-chips">{tags.map(t=><span key={t.id} className="co-tag-item">{t.name}<small>{t.customers}</small>{canManage&&<button className="shop-icon" title={`删除标签 ${t.name}`} aria-label={`删除标签 ${t.name}`} onClick={()=>void deleteTag(t.id).then(()=>{setNotice('标签已删除');return reload()}).catch(cause=>setError(message(cause)))}><Trash2 size={14}/></button>}</span>)}{!tags.length&&<span className="perf-muted">暂无标签</span>}</div>
@@ -250,7 +251,7 @@ function AttachmentsPanel({buyerId,canUpdate,changed,setError,setNotice}:{buyerI
       {!items.length&&<p className="shop-note">暂无附件。</p>}
       {canUpdate&&<label className="shop-button co-attach-upload"><Paperclip size={15}/>{busy?'正在处理…':'上传图片或文件'}
         <input type="file" multiple hidden disabled={busy} accept={Object.keys(attachmentMimes).map(e=>`.${e}`).join(',')} onChange={e=>{void upload(e.target.files);e.target.value=''}}/></label>}
-      <p className="shop-note">图片支持 JPG/PNG/GIF/WebP，单张 ≤ 2MB；文件支持 PDF/Word/Excel/TXT/CSV，单个 ≤ 1MB；各最多 10 个。附件私有存储，链接 10 分钟内有效。</p>
+      <Note>图片支持 JPG/PNG/GIF/WebP，单张 ≤ 2MB；文件支持 PDF/Word/Excel/TXT/CSV，单个 ≤ 1MB；各最多 10 个。附件私有存储，链接 10 分钟内有效。</Note>
     </>}
   </>
 }

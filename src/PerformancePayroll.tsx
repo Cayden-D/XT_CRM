@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Note } from './ui'
 import { Download, Heart, Lock, LoaderCircle, RefreshCw, Save, Store, Trash2, X } from 'lucide-react'
 import { download } from './api'
 import { agentLabel } from './PerformanceReports'
@@ -38,7 +39,7 @@ export function KpiView({connectionId,from,to,canManage,setError,setNotice}:{con
   return <section className="perf-report" aria-label="综合能力排行">
     <div className="perf-chart-card">
       <div className="perf-chart-head"><h3 className="perf-chart-title">综合能力指数</h3>{canManage&&!editing&&<button className="shop-button" onClick={edit}>调整指标与权重</button>}</div>
-      <p className="shop-note">{scheme.items.map(i=>`${labels[i.metric]} ${Math.round(i.weight/totalWeight*100)}%`).join(' · ')}。每项按同期最优者计 100 分（越低越好的指标取最小值为满分），再按权重加权。</p>
+      <Note label="计分方式">{scheme.items.map(i=>`${labels[i.metric]} ${Math.round(i.weight/totalWeight*100)}%`).join(' · ')}。每项按同期最优者计 100 分（越低越好的指标取最小值为满分），再按权重加权。</Note>
       {editing&&<div className="perf-kpi-editor">{scheme.metrics.map(m=><label key={m.key}><span>{m.label}{m.higherIsBetter?'':'（越低越好）'}</span><input type="number" min={0} max={100} step={1} placeholder="不计入" value={draft[m.key]??''} onChange={e=>setDraft({...draft,[m.key]:e.target.value})}/></label>)}
         <div className="perf-editor-actions"><button className="shop-button" onClick={()=>setEditing(false)}>取消</button><button className="shop-button primary" disabled={busy} onClick={()=>void save()}><Save size={16}/>保存</button></div></div>}
       {rows.length?<ol className="perf-bars perf-rank">{rows.map(r=><li key={r.agent_id} title={`${agentLabel(r)}：${r.score} 分`}>
@@ -75,7 +76,6 @@ export function FavoritesView({connectionId,from,to,setError,setNotice}:{connect
     </div>
     <div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>客服</th>{chosen.map(k=><th key={k}>{columns.find(c=>c.key===k)?.label}</th>)}</tr></thead>
       <tbody>{visible.map(r=><tr key={r.agent_id}><td><strong>{agentLabel(r)}</strong></td>{chosen.map(k=><td key={k}>{cell(r,k)}</td>)}</tr>)}</tbody></table>{!visible.length&&<div className="shop-empty"><Store size={28}/><p>所选日期内暂无数据</p></div>}</div>
-    <p className="shop-note">关注的指标按账号保存；导出的 CSV 可直接用 Excel 打开。</p>
   </section>
 }
 
@@ -128,7 +128,7 @@ export function PayrollView({connectionId,canManage,setError,setNotice}:{connect
         <button className="shop-button primary" disabled={Boolean(busy)}>添加</button></form>}
       {current.adjustments?.length?<ul className="perf-adjust-list">{current.adjustments.map(j=><li key={j.id}><strong>{agentLabel({...j,user_name:null})}</strong><span className={j.amount<0?'negative':''}>{j.amount>0?'+':''}{yuan(j.amount)}</span><span>{j.reason}</span><small>{j.created_by_name} · {dateTime(j.created_at)}</small>
         {canManage&&draft&&<button className="shop-icon" title="删除奖惩" aria-label={`删除 ${j.reason}`} disabled={Boolean(busy)} onClick={()=>void run('remove',()=>removePayrollAdjustment(current.id,j.id,current.revision),'已删除')}><Trash2 size={15}/></button>}</li>)}</ul>:<p className="shop-note">暂无奖惩记录。</p>}
-      <p className="shop-note">工资 = 基本工资 + 提成 + KPI 名次奖金 + 奖惩。提成按（当月付款的绩效订单金额 − 当月退款成功金额）计算：按客服比例，或按店铺阶梯（超额/全额累进），可设置最低为 0；退款按原订单的归属份额扣减；KPI 按当月综合能力排行。锁定后不再变化，规则调整只影响未锁定的工资单。</p>
+      <Note>工资 = 基本工资 + 提成 + KPI 名次奖金 + 奖惩。提成按（当月付款的绩效订单金额 − 当月退款成功金额）计算：按客服比例，或按店铺阶梯（超额/全额累进），可设置最低为 0；退款按原订单的归属份额扣减；KPI 按当月综合能力排行。锁定后不再变化，规则调整只影响未锁定的工资单。</Note>
     </>}
     {rulesOpen&&<PayRulesEditor connectionId={connectionId} agents={agents} close={()=>setRulesOpen(false)} saved={()=>{setRulesOpen(false);setNotice('工资规则已保存，重新计算草稿后生效')}} setError={setError}/>}
     {confirmLock&&current&&<Drawer title={`锁定 ${current.month.slice(0,7)} 工资单`} close={()=>setConfirmLock(false)}><p>锁定后工资单不能再重新计算或修改奖惩，合计 {yuan(total)}。</p>

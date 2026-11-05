@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { AlertCircle, Check, LoaderCircle, MessageSquareText, Plus, RefreshCw, Tags, X } from 'lucide-react'
+import { Note } from './ui'
+import { Check, LoaderCircle, MessageSquareText, Plus, RefreshCw, Tags, X } from 'lucide-react'
 import { Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
 import {
   addKeywords, deleteKeyword, getChatDetail, getKeywordHits, getKeywords, reconcileKeywords, setKeywordCategory,
@@ -43,7 +44,7 @@ export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}
   const grouped=categories.map(c=>({category:c,items:keywords.filter(k=>k.category===c)})).filter(g=>g.items.length)
   const firstAdded=keywords.length?keywords.map(k=>k.created_at).sort()[0]:null
   return <section className="perf-report perf-keywords" aria-label="关键词">
-    <p className="shop-note perf-kw-intro"><AlertCircle size={15}/><span>买家消息正文被 1688 隐藏，关键词是了解买家在问什么的唯一途径：平台在消息发送时按词库标记命中，<b>新加的词只对之后的新消息生效</b>，历史消息不会补标。词库保存在 1688，对该店铺所有客服账号生效。</span></p>
+    <Note>买家消息正文被 1688 隐藏，关键词是了解买家在问什么的唯一途径：平台在消息发送时按词库标记命中，<b>新加的词只对之后的新消息生效</b>，历史消息不会补标。词库保存在 1688，对该店铺所有客服账号生效。</Note>
     <div className="perf-kw-grid">
       <div className="perf-kw-card">
         <header><h3><Tags size={17}/>当前词库 <span>{keywords.filter(k=>k.on_platform).length}</span></h3>{canManage&&<button className="shop-button" disabled={Boolean(busy)} onClick={()=>void reconcile()}>{busy==='sync'?<LoaderCircle size={15} className="spin"/>:<RefreshCw size={15}/>}与平台核对</button>}</header>

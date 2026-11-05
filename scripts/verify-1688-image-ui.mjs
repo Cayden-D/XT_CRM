@@ -37,9 +37,7 @@ try{
     if(req.method()!=='GET'){platformWrites++;return fulfill({error:'BLOCKED'},418)}
     return route.continue()
   })
-  await page.goto('http://127.0.0.1:5173/')
-  await page.getByRole('button',{name:'1688 店铺',exact:true}).click()
-  await page.getByRole('button',{name:'发布工作台',exact:true}).click()
+  await page.goto('http://127.0.0.1:5173/#/products/drafts')
   await page.getByRole('button',{name:`查看草稿 ${product.name}`,exact:true}).click()
   await page.getByRole('button',{name:'AI 图片工作台',exact:true}).click()
   const studio=page.getByRole('dialog',{name:'AI 图片工作台'})
