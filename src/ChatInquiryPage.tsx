@@ -5,9 +5,10 @@ import { useAiFocusPart } from './aiFocus'
 import { ChatAnalysisView, Drawer, Timeline, WangwangButton } from './PerformanceAnalysis'
 import { agentLabel } from './PerformanceReports'
 import { getChatDetail, getInquiry, getKeywordSessions, getPerformanceConnections, lookupBuyer, type BuyerLookup, type ChatDetail, type InquirySummary, type KeywordSession, type PerformanceConnection } from './performanceApi'
+import { canSeeReviews, InquiryLossPanels, InquiryReviewView } from './InquiryReview'
 import './1688.css'
 
-type Tab = 'chats' | 'inquiry'
+type Tab = 'chats' | 'inquiry' | 'review'
 type Preset = 'today' | 'yesterday' | '7d' | '30d'
 const presets: [Preset, string][] = [['today', '今天'], ['yesterday', '昨天'], ['7d', '近 7 天'], ['30d', '近 30 天']]
 const beijingDate = (offset = 0) => new Date(Date.now() + 8 * 3_600_000 + offset * 86_400_000).toISOString().slice(0, 10)
@@ -23,7 +24,7 @@ export default function ChatInquiryPage({ user, initialTab = 'chats' }: { user: 
   const [shops, setShops] = useState<PerformanceConnection[]>([]), [shop, setShop] = useState(''), [loading, setLoading] = useState(true)
   const [preset, setPreset] = useState<Preset | 'custom'>('7d'), [range, setRange] = useState(() => rangeOf('7d'))
   const [error, setError] = useState('')
-  useAiFocusPart({ connectionId: shop || undefined, view: tab === 'chats' ? 'chats' : 'inquiry' })
+  useAiFocusPart({ connectionId: shop || undefined, view: tab === 'chats' ? 'chats' : tab === 'review' ? 'inquiry-review' : 'inquiry' })
   const canRead = can(user, 'performance:read') || can(user, 'performance:read_own')
   useEffect(() => {
     if (!canRead) { setLoading(false); return }
@@ -31,7 +32,7 @@ export default function ChatInquiryPage({ user, initialTab = 'chats' }: { user: 
   }, [canRead])
   if (!canRead) return <section className="state-card"><ShieldCheck size={28} /><h2>暂无聊天记录访问权限</h2><p>需要客服绩效的查看权限。</p></section>
   return <div className="shop-workspace performance-page chat-inquiry">
-    <div className="shop-toolbar"><nav className="shop-tabs" aria-label="聊天与询盘">{([['chats', '聊天记录'], ['inquiry', '询盘分析']] as [Tab, string][]).map(([id, label]) =>
+    <div className="shop-toolbar"><nav className="shop-tabs" aria-label="聊天与询盘">{([['chats', '聊天记录'], ['inquiry', '询盘分析'], ...(canSeeReviews(user) ? [['review', '询盘复盘']] : [])] as [Tab, string][]).map(([id, label]) =>
       <button key={id} aria-current={tab === id ? 'page' : undefined} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</nav></div>
     {error && <div className="shop-feedback error" role="alert"><AlertCircle size={16} /><span>{error}</span><button title="关闭错误" onClick={() => setError('')}><X size={15} /></button></div>}
     {loading ? <div className="shop-empty"><LoaderCircle size={26} className="spin" /></div> : !shop ? <div className="shop-empty"><Store size={28} /><p>请先在「客服绩效 → 绩效应用授权」中授权店铺</p></div> : <>
@@ -42,7 +43,7 @@ export default function ChatInquiryPage({ user, initialTab = 'chats' }: { user: 
           <input type="date" aria-label="结束日期" value={range.to} min={range.from} max={beijingDate()} onChange={e => { if (e.target.value) { setPreset('custom'); setRange({ ...range, to: e.target.value }) } }} /></div>
       </div>
       <BuyerFinder connectionId={shop} setError={setError} />
-      {tab === 'chats' ? <ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError} /> : <InquiryView connectionId={shop} from={range.from} to={range.to} setError={setError} />}
+      {tab === 'chats' ? <ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError} /> : tab === 'review' ? <InquiryReviewView user={user} connectionId={shop} from={range.from} to={range.to} setError={setError} /> : <><InquiryView connectionId={shop} from={range.from} to={range.to} setError={setError} /><InquiryLossPanels user={user} connectionId={shop} from={range.from} to={range.to} setError={setError} /></>}
     </>}
   </div>
 }

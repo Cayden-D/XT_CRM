@@ -35,7 +35,7 @@ export type AccountTask = { id: string; title: string; description: string | nul
 export type AccountOrder = { id: string; order_number: string; status: string; currency: string; total_amount: string; delivery_date: string | null; created_at: string }
 export type AccountDetail = { account: Account; contacts: Contact[]; opportunities: AccountOpportunity[]; activities: LeadActivity[]; tasks: AccountTask[]; orders: AccountOrder[]; summary: { contactCount: number; openOpportunityCount: number; openPipeline: number; orderTotal: number; planned_amount: string; received_amount: string; overdue_count: number } }
 export type ProductPrice = { id?:string;min_quantity:number|string;unit_price:number|string;customer_level:'A'|'B'|'C'|'D'|null;valid_from:string|null;valid_until:string|null }
-export type Product = { id:string;sku:string;name:string;category:string|null;description:string|null;specifications:Record<string,string>;base_price:string;base_currency:string;status:'draft'|'active'|'inactive';created_at:string;updated_at:string;prices:ProductPrice[];images?:string[] }
+export type Product = { package_weight_g?:number|null;id:string;sku:string;name:string;category:string|null;description:string|null;specifications:Record<string,string>;base_price:string;base_currency:string;status:'draft'|'active'|'inactive';created_at:string;updated_at:string;prices:ProductPrice[];images?:string[] }
 export type Paged<T,F> = { data:T[];total:number;page:number;pageSize:number;facets:F }
 export type ProductFacets = { all:number;active:number;draft:number;inactive:number }
 export type CollectionStage = 'pending'|'queue'|'attention'|'promoted'|'published'
@@ -132,7 +132,7 @@ export const deleteContact = (accountId: string, contactId: string) => request<v
 
 export async function getProducts(params:{search?:string;category?:string;status?:string}={}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value)query.set(key,value)});return request<{data:Product[]}>(`/api/products?${query}`)}
 /** One catalogue page with status counts and the category list. */
-export async function getProductPage(params:{search?:string;category?:string;status?:string;page:number;pageSize:number}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value!==undefined&&value!=='')query.set(key,String(value))});return request<Paged<Product,ProductFacets>&{categories:string[]}>(`/api/products?${query}`)}
+export async function getProductPage(params:{search?:string;category?:string;status?:string;missingPackage?:string;page:number;pageSize:number}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value!==undefined&&value!=='')query.set(key,String(value))});return request<Paged<Product,ProductFacets>&{categories:string[]}>(`/api/products?${query}`)}
 export const getProduct=(id:string)=>request<{data:Product}>(`/api/products/${id}`)
 export const createProduct=(data:ProductInput)=>request<{data:Product}>('/api/products',{method:'POST',body:JSON.stringify(cleanInput(data))})
 export const updateProduct=(id:string,data:Partial<ProductInput>)=>request<{data:Product}>(`/api/products/${id}`,{method:'PATCH',body:JSON.stringify(cleanInput(data))})

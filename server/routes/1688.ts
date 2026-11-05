@@ -17,6 +17,7 @@ import { collectionQueueRoutes } from './1688-queue.js'
 import { buildSkuRows, mapReviewedVariants, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
 import { createDraftFromProduct } from '../integrations/1688-drafts.js'
+import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
 
 const idSchema = z.object({ id: z.string().uuid() })
 const digitId = z.string().regex(/^\d{1,20}$/)
@@ -384,6 +385,24 @@ export async function integration1688Routes(app: FastifyInstance) {
     if(!draft)throw new IntegrationError('NOT_FOUND','发布草稿不存在。',404)
     const values=await fillPublishTemplate(tenant,draft.platform_schema,draft.data_body.formValues)
     const row=(await db.query("UPDATE integration_1688_publish_drafts SET data_body=jsonb_set(data_body,'{formValues}',$4::jsonb),revision=revision+1,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND revision=$3 AND status IN ('draft','failed') RETURNING *",[id,tenant,revision,JSON.stringify(values)])).rows[0]
+    if(!row)throw new IntegrationError('DRAFT_CONFLICT','草稿已变化或不可编辑，请重新加载。',409)
+    return {data:row,missing:validatePublishBody(row.platform_schema,row.data_body)}
+  })
+  // Existing drafts are never changed silently: template values and values typed by hand look the same, so the person picks.
+  const draftForProductData=async(request:FastifyRequest)=>{
+    const {id}=idSchema.parse(request.params),tenant=request.authUser.tenantId
+    const draft=(await db.query('SELECT * FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]
+    if(!draft)throw new IntegrationError('NOT_FOUND','发布草稿不存在。',404)
+    return {draft,changes:draftProductChanges(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,draft.product_id))}
+  }
+  app.post('/drafts/:id/product-attributes/preview', { preHandler: [requirePermission('integration:publish'), requirePermission('product:read')] }, async request => {
+    const {draft,changes}=await draftForProductData(request)
+    return {data:{revision:draft.revision,editable:['draft','failed'].includes(draft.status),changes:changes.map(({value:_,...change})=>change)}}
+  })
+  app.post('/drafts/:id/product-attributes/apply', { preHandler: [requirePermission('integration:publish'), requirePermission('product:read')] }, async request => {
+    const {revision,fields}=z.object({revision:z.number().int().positive(),fields:z.array(z.string().min(1).max(200)).min(1).max(200)}).parse(request.body)
+    const {draft,changes}=await draftForProductData(request)
+    const row=(await db.query("UPDATE integration_1688_publish_drafts SET data_body=jsonb_set(data_body,'{formValues}',$4::jsonb),revision=revision+1,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND revision=$3 AND status IN ('draft','failed') RETURNING *",[draft.id,request.authUser.tenantId,revision,JSON.stringify(applyDraftChanges(draft.data_body.formValues,changes,fields))])).rows[0]
     if(!row)throw new IntegrationError('DRAFT_CONFLICT','草稿已变化或不可编辑，请重新加载。',409)
     return {data:row,missing:validatePublishBody(row.platform_schema,row.data_body)}
   })

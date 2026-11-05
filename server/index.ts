@@ -4,17 +4,20 @@ import { db } from './db.js'
 import { startCollectionQueue } from './integrations/1688-collection-queue.js'
 import { startPerformanceSync } from './integrations/1688-performance-sync.js'
 import { startImageWorker } from './integrations/image-workshop.js'
+import { startChatReviewWorker } from './integrations/chat-review.js'
 
 const app = await buildApp()
 let stopCollectionQueue:()=>Promise<void>=async()=>{}
 let stopPerformanceSync:()=>Promise<void>=async()=>{}
 let stopImageWorker:()=>Promise<void>=async()=>{}
+let stopChatReviewWorker:()=>Promise<void>=async()=>{}
 
 async function shutdown(signal: string) {
   app.log.info({ signal }, 'Shutting down')
   await stopCollectionQueue()
   await stopPerformanceSync()
   await stopImageWorker()
+  await stopChatReviewWorker()
   await app.close()
   await db.end()
   process.exit(0)
@@ -28,6 +31,7 @@ try {
   stopCollectionQueue=startCollectionQueue(error=>app.log.error({err:error},'1688 collection queue tick failed'))
   stopPerformanceSync=startPerformanceSync(error=>app.log.error({err:error},'1688 performance sync tick failed'))
   stopImageWorker=startImageWorker(error=>app.log.error({err:error},'image worker tick failed'))
+  stopChatReviewWorker=startChatReviewWorker(error=>app.log.error({err:error},'chat review tick failed'))
 } catch (error) {
   app.log.error(error)
   await db.end()

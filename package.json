@@ -21,6 +21,8 @@
     "test:1688-categories": "tsx scripts/test-1688-categories.ts",
     "test:order-list": "tsx scripts/test-order-list.ts",
     "test:products": "tsx scripts/test-products.ts",
+    "test:product-attributes": "tsx scripts/test-product-attributes.ts",
+    "test:inquiry-review": "tsx scripts/test-inquiry-review.ts",
     "test:product-collection": "tsx scripts/test-product-collection.ts",
     "test:1688": "tsx scripts/test-1688.ts",
     "test:1688-skus": "tsx scripts/test-1688-skus.ts",

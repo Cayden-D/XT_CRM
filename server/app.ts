@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth.js'
 import { userRoutes } from './routes/users.js'
 import { accountRoutes } from './routes/accounts.js'
 import { productRoutes } from './routes/products.js'
+import { productAttributeRoutes } from './routes/product-attributes.js'
 import { productCollectionRoutes } from './routes/product-collections.js'
 import { aiRoutes } from './routes/ai.js'
 import { integration1688Routes } from './routes/1688.js'
@@ -21,6 +22,7 @@ import { customerOpsRoutes } from './routes/customer-ops.js'
 import { dashboardRoutes } from './routes/dashboard.js'
 import { imageWorkshopRoutes } from './routes/image-workshop.js'
 import { chatInquiryRoutes } from './routes/1688-chat-inquiry.js'
+import { inquiryReviewRoutes } from './routes/inquiry-review.js'
 import { orderListRoutes } from './routes/1688-order-list.js'
 
 export async function buildApp() {
@@ -63,6 +65,7 @@ export async function buildApp() {
   await app.register(userRoutes, { prefix: '/api/users' })
   await app.register(accountRoutes, { prefix: '/api/accounts' })
   await app.register(productRoutes, { prefix: '/api/products' })
+  await app.register(productAttributeRoutes, { prefix: '/api/products' })
   await app.register(productCollectionRoutes, { prefix: '/api/product-collections' })
   await app.register(aiRoutes, { prefix: '/api/ai' })
   await app.register(integration1688Routes, { prefix: '/api/integrations/1688' })
@@ -70,6 +73,7 @@ export async function buildApp() {
   await app.register(performanceAnalysisRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performanceKeywordRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(chatInquiryRoutes, { prefix: '/api/integrations/1688/performance' })
+  await app.register(inquiryReviewRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(orderListRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performancePayrollRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(customerOpsRoutes, { prefix: '/api/customer-ops' })

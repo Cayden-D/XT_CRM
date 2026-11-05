@@ -79,7 +79,7 @@ try {
     { content: '**建议**：先跟进张老板。' })
   const first = await chat(auth(admin, ['*']), { message: '今天该跟进谁？', context: { page: 'customerOps', pageTitle: '客户经营', view: 'due', connectionId: c.id, customerId: A, customerName: '张老板' } })
   assert.equal(first.statusCode, 200, first.body)
-  assert.deepEqual(requests[0].tools!.map(t => t.function.name).sort(), ['get_agent_performance', 'get_business_overview', 'get_customer', 'get_customer_options', 'get_keyword_hits', 'get_reply_quality', 'get_top_products', 'list_customers', 'propose_followup', 'propose_owner', 'propose_tags'])
+  assert.deepEqual(requests[0].tools!.map(t => t.function.name).sort(), ['get_agent_performance', 'get_business_overview', 'get_customer', 'get_customer_options', 'get_inquiry_review_summary', 'get_keyword_hits', 'get_reply_quality', 'get_top_products', 'list_customers', 'propose_followup', 'propose_owner', 'propose_tags'])
   const system = requests[0].messages[0].content!
   for (const text of ['测试旗舰店', '客户经营 / due', '张老板', A, beijingDate(0), '店长']) assert.ok(system.includes(text), `system prompt mentions ${text}`)
   const [customers, overview] = toolResults(requests[1])

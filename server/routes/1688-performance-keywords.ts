@@ -19,6 +19,11 @@ export const keywordPresets: { category: string; hint: string; words: string[] }
   { category: '物流催单', hint: '催发货、问物流', words: ['发货', '快递', '物流', '到哪了', '什么时候到', '催'] },
   { category: '发票', hint: '开票需求', words: ['发票', '开票', '专票'] },
   { category: '议价', hint: '价格敏感，适合推阶梯价或活动', words: ['便宜', '优惠', '最低', '降价', '批发价', '包邮'] },
+  { category: '流失信号·价格', hint: '提到过价格，是否因此流失仍需结合会话判断', words: ['太贵', '贵了', '少点', '能便宜', '别家便宜'] },
+  { category: '流失信号·起订运费', hint: '起订量、混批、运费门槛', words: ['起订', '混批', '起批', '运费', '到付'] },
+  { category: '流失信号·现货交期', hint: '缺货或交期不满足', words: ['现货', '没货', '有货吗', '多久发', '交期'] },
+  { category: '流失信号·产品', hint: '问产品参数，可用来核对客服是否答得上', words: ['型号', '尺寸', '多重', '功率', '质保', '保修', '说明书'] },
+  { category: '流失信号·犹豫', hint: '还在比较，适合跟进', words: ['再看看', '考虑一下', '对比', '同款'] },
   { category: '定制大单', hint: '定制、贴牌、打样等高价值线索', words: ['定制', '贴牌', 'logo', '大货', '打样', '样品', '代发'] },
 ]
 const wordSchema = z.string().trim().min(1, '关键词不能为空').max(20, '关键词最多 20 个字').refine(w => !/[\s,，]/.test(w), '关键词不能包含空格或逗号')
@@ -57,19 +62,19 @@ export async function performanceKeywordRoutes(app: FastifyInstance) {
 
   // Adds words on 1688 one by one; each success is recorded locally, failures are reported per word.
   app.post('/keywords', { preHandler: requirePermission('performance:manage') }, async request => {
-    const input = z.object({ connectionId: z.string().uuid(), words: z.array(z.object({ word: wordSchema, category: categorySchema })).min(1).max(30) }).strict().parse(request.body)
+    const input = z.object({ connectionId: z.string().uuid(), words: z.array(z.object({ word: wordSchema, category: categorySchema, offerId: z.string().regex(/^\d{1,30}$/, '商品 ID 应为数字。').optional() })).min(1).max(30) }).strict().parse(request.body)
     await ensureConnection(tenant(request), input.connectionId)
     const wanted = [...new Map(input.words.map(w => [w.word.toLowerCase(), w])).values()]
     const existing = new Set((await db.query<{ word: string }>('SELECT lower(word) AS word FROM perf_keywords WHERE connection_id=$1 AND on_platform', [input.connectionId])).rows.map(r => r.word))
     const added: string[] = [], skipped: string[] = [], failed: { word: string; message: string }[] = []
     await serialised(input.connectionId, async () => {
-      for (const { word, category } of wanted) {
+      for (const { word, category, offerId } of wanted) {
         if (existing.has(word.toLowerCase())) { skipped.push(word); continue }
         try {
           await callPerformanceApi(input.connectionId, tenant(request), request.authUser.sub, 'wangwang.keyword.add', { word }, request.id)
-          await db.query(`INSERT INTO perf_keywords(tenant_id,connection_id,word,category,created_by) VALUES($1,$2,$3,$4,$5)
-            ON CONFLICT(connection_id,word) DO UPDATE SET category=excluded.category,on_platform=true,created_by=excluded.created_by,created_at=now(),checked_at=now()`,
-          [tenant(request), input.connectionId, word, category, request.authUser.sub])
+          await db.query(`INSERT INTO perf_keywords(tenant_id,connection_id,word,category,created_by,purpose,offer_id) VALUES($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT(connection_id,word) DO UPDATE SET category=excluded.category,on_platform=true,created_by=excluded.created_by,created_at=now(),checked_at=now(),purpose=excluded.purpose,offer_id=excluded.offer_id`,
+          [tenant(request), input.connectionId, word, category, request.authUser.sub, offerId ? 'product' : category.startsWith('流失信号') ? 'loss_signal' : 'general', offerId ?? null])
           added.push(word)
         } catch (error) {
           failed.push({ word, message: error instanceof Error ? error.message : '添加失败' })

@@ -41,6 +41,14 @@ export function collectedCategoryDefaults(schema:Json,source:Json|null){
   if(!source||source.source!=='1688'||String(source.source_category_id||'')!==String(schema.global?.systemParam?.catId||''))return result
   const rows=Array.isArray(source.source_category_attributes)?source.source_category_attributes:[]
   const attributes=source.attributes&&typeof source.attributes==='object'?source.attributes:{}
+  return categoryValues(schema,rows,attributes)
+}
+
+/** Values for the category's fields from the confirmed product data; text matching only, so any category works. */
+export const attributeCategoryDefaults=(schema:Json,attributes:Record<string,string>)=>categoryValues(schema,[],attributes)
+
+function categoryValues(schema:Json,rows:Json[],attributes:Json){
+  const result:Json={}
   for(const field of schema.data?.catProp?.fields?.dataSource||[]){
     if(!field?.name||!field.label||field.readonly||field.visible===false)continue
     const found=sourceFor(field,rows,attributes)

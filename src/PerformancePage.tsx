@@ -3,6 +3,7 @@ import { AgentsView, ComparisonView, HourlyView } from './PerformanceReports'
 import { ChatAnalysisView, OrdersView, QualityView } from './PerformanceAnalysis'
 import { KeywordsView } from './PerformanceKeywords'
 import { FavoritesView, KpiView, PayrollView } from './PerformancePayroll'
+import { AgentCoachingView } from './AgentCoaching'
 import './1688.css'
 import ConnectionDelete from './ConnectionDelete'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Link2, LoaderCircle, Power, RefreshCw, Save, ShieldCheck, Store, Trash2, X } from 'lucide-react'
@@ -18,11 +19,11 @@ const time = (value:string|null) => value ? new Date(value).toLocaleString('zh-C
 const message = (cause:unknown) => cause instanceof Error ? cause.message : '操作未完成，请稍后重试。'
 const permission = (user:SessionUser,name:string) => (user.permissions||[]).some(value => value==='*'||value===name||value===`${name.split(':')[0]}:*`)
 const statusNames:Record<string,string> = { connected:'已连接',reauthorize:'需重新授权',disabled:'已停用',available:'可用',unavailable:'不可用',unknown:'未验证',success:'成功',failed:'失败',main:'主账号',sub:'子账号' }
-export type View='comparison'|'kpi'|'favorites'|'hourly'|'chats'|'quality'|'keywords'|'orders'|'payroll'|'agents'|'connections'|'settings'|'operations'
+export type View='coaching'|'comparison'|'kpi'|'favorites'|'hourly'|'chats'|'quality'|'keywords'|'orders'|'payroll'|'agents'|'connections'|'settings'|'operations'
 type Preset='today'|'yesterday'|'7d'|'30d'
-const reportViews:View[]=['comparison','kpi','favorites','hourly','chats','quality','keywords','orders','payroll','agents']
+const reportViews:View[]=['coaching','comparison','kpi','favorites','hourly','chats','quality','keywords','orders','payroll','agents']
 const datedViews:View[]=['comparison','kpi','favorites','hourly','chats','orders']
-const tabs:[View,string][]=[['comparison','客服对比'],['kpi','综合排行'],['favorites','我关注的'],['hourly','分时接待'],['quality','回复质量'],['keywords','关键词'],['orders','订单归属'],['payroll','工资管理'],['agents','客服账号'],['connections','绩效应用授权'],['settings','指标口径'],['operations','调用记录']]
+const tabs:[View,string][]=[['comparison','客服对比'],['coaching','业务员复盘'],['kpi','综合排行'],['favorites','我关注的'],['hourly','分时接待'],['quality','回复质量'],['keywords','关键词'],['orders','订单归属'],['payroll','工资管理'],['agents','客服账号'],['connections','绩效应用授权'],['settings','指标口径'],['operations','调用记录']]
 const presets:[Preset,string][]=[['today','今天'],['yesterday','昨天'],['7d','近 7 天'],['30d','近 30 天']]
 const beijingDate=(offsetDays=0)=>new Date(Date.now()+8*3_600_000+offsetDays*86_400_000).toISOString().slice(0,10)
 function presetRange(preset:Preset){
@@ -87,7 +88,8 @@ export default function PerformancePage({user,initialView='comparison'}:{user:Se
         <input type="date" aria-label="开始日期" value={range.from} max={range.to} onChange={e=>{if(e.target.value){setPreset('custom');setRange({...range,from:e.target.value})}}}/><span>至</span><input type="date" aria-label="结束日期" value={range.to} min={range.from} max={presetRange('today').to} onChange={e=>{if(e.target.value){setPreset('custom');setRange({...range,to:e.target.value})}}}/></div>}
     </div>}
     {reportViews.includes(view)&&!loading&&!shop&&<div className="shop-empty"><Store size={28}/><p>请先在“绩效应用授权”中授权店铺</p></div>}
-    {reportViews.includes(view)&&!loading&&shop&&(view==='comparison'?<ComparisonView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='hourly'?<HourlyView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='kpi'?<KpiView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='favorites'?<FavoritesView connectionId={shop} from={range.from} to={range.to} setError={setError} setNotice={setNotice}/>:view==='payroll'?<PayrollView connectionId={shop} canManage={canPayroll} setError={setError} setNotice={setNotice}/>:view==='chats'?<ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='quality'?<QualityView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='keywords'?<KeywordsView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='orders'?<OrdersView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:<AgentsView connectionId={shop} canManage={canManage} canPayroll={canPayroll} setError={setError} setNotice={setNotice}/>)}
+    {view==='coaching'&&!loading&&shop&&<AgentCoachingView user={user} connectionId={shop} setError={setError}/>}
+    {reportViews.includes(view)&&view!=='coaching'&&!loading&&shop&&(view==='comparison'?<ComparisonView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='hourly'?<HourlyView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='kpi'?<KpiView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='favorites'?<FavoritesView connectionId={shop} from={range.from} to={range.to} setError={setError} setNotice={setNotice}/>:view==='payroll'?<PayrollView connectionId={shop} canManage={canPayroll} setError={setError} setNotice={setNotice}/>:view==='chats'?<ChatAnalysisView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='quality'?<QualityView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:view==='keywords'?<KeywordsView connectionId={shop} from={range.from} to={range.to} canManage={canManage} setError={setError} setNotice={setNotice}/>:view==='orders'?<OrdersView connectionId={shop} from={range.from} to={range.to} setError={setError}/>:<AgentsView connectionId={shop} canManage={canManage} canPayroll={canPayroll} setError={setError} setNotice={setNotice}/>)}
     {view==='connections'&&<div className="shop-controlbar"><p className="shop-note">绩效应用独立于商品应用，需要用店铺<b>主账号</b>单独授权；两者的令牌互不通用。</p><div className="shop-commandbar">
       {canManage&&<button className="shop-button primary" disabled={!configured||Boolean(busy)} onClick={()=>void authorize()}><Link2 size={16}/>授权绩效应用</button>}
       <button className="shop-icon" title="刷新当前视图" aria-label="刷新当前视图" disabled={Boolean(busy)} onClick={()=>void load()}><RefreshCw size={17}/></button>

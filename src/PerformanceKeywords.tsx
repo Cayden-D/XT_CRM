@@ -16,7 +16,7 @@ const day = (value:string) => new Date(value).toLocaleDateString('zh-CN',{month:
  */
 export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}:{connectionId:string;from:string;to:string;canManage:boolean;setError:(text:string)=>void;setNotice:(text:string)=>void}) {
   const [keywords,setKeywords]=useState<PerfKeyword[]>([]),[presets,setPresets]=useState<KeywordPreset[]>([]),[hits,setHits]=useState<{words:KeywordHit[];recent:KeywordRecent[]}|null>(null)
-  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[word,setWord]=useState(''),[category,setCategory]=useState('售后退款')
+  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[word,setWord]=useState(''),[offerId,setOfferId]=useState(''),[category,setCategory]=useState('售后退款')
   const [detail,setDetail]=useState<{buyerId:string;title:string;focus:string;data:ChatDetail}|null>(null)
   const load=useCallback(async()=>{
     try{const [k,h]=await Promise.all([getKeywords(connectionId),getKeywordHits(connectionId,from,to)]);setKeywords(k.data);setPresets(k.presets);setHits(h.data)}
@@ -25,16 +25,16 @@ export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}
   useEffect(()=>{setLoading(true);void load()},[load])
   const categories=[...new Set([...presets.map(p=>p.category),...keywords.map(k=>k.category),'其他'])]
   const have=new Set(keywords.filter(k=>k.on_platform).map(k=>k.word.toLowerCase()))
-  async function add(words:{word:string;category:string}[]){
+  async function add(words:{word:string;category:string;offerId?:string}[]){
     setBusy('add');setError('')
     try{const r=(await addKeywords(connectionId,words)).data;setKeywords(r.keywords)
       const parts=[r.added.length&&`已添加 ${r.added.length} 个`,r.skipped.length&&`${r.skipped.length} 个已存在`].filter(Boolean)
       if(r.failed.length)setError(`${r.failed.map(f=>`“${f.word}”`).join('、')} 添加失败：${r.failed[0].message}`)
       if(parts.length)setNotice(`${parts.join('，')}；新词从现在起对新消息生效`)
-      setWord('')
+      setWord('');setOfferId('')
     }catch(cause){setError(message(cause))}finally{setBusy('')}
   }
-  async function submit(event:FormEvent){event.preventDefault();if(word.trim())await add([{word:word.trim(),category}])}
+  async function submit(event:FormEvent){event.preventDefault();if(word.trim())await add([{word:word.trim(),category,...(offerId.trim()?{offerId:offerId.trim()}:{})}])}
   async function remove(k:PerfKeyword){if(!window.confirm(`从 1688 词库删除“${k.word}”？已统计的历史命中保留。`))return;setBusy(k.id);setError('');try{setKeywords((await deleteKeyword(k.id)).data);setNotice(`已删除“${k.word}”`)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function recategorize(k:PerfKeyword,next:string){setBusy(k.id);try{setKeywords((await setKeywordCategory(k.id,next)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   async function reconcile(){setBusy('sync');setError('');try{const r=(await reconcileKeywords(connectionId)).data;setKeywords(r.keywords);setNotice(`平台词库共 ${r.platform} 个词${r.imported?`，导入 ${r.imported} 个`:''}${r.missing.length?`，${r.missing.length} 个已不在平台`:''}`)}catch(cause){setError(message(cause))}finally{setBusy('')}}
@@ -48,6 +48,7 @@ export function KeywordsView({connectionId,from,to,canManage,setError,setNotice}
       <div className="perf-kw-card">
         <header><h3><Tags size={17}/>当前词库 <span>{keywords.filter(k=>k.on_platform).length}</span></h3>{canManage&&<button className="shop-button" disabled={Boolean(busy)} onClick={()=>void reconcile()}>{busy==='sync'?<LoaderCircle size={15} className="spin"/>:<RefreshCw size={15}/>}与平台核对</button>}</header>
         {canManage&&<form className="perf-kw-add" onSubmit={e=>void submit(e)}><input aria-label="关键词" value={word} maxLength={20} placeholder="输入关键词，如：退款" onChange={e=>setWord(e.target.value)}/>
+          <input aria-label="关联商品 ID（选填）" inputMode="numeric" value={offerId} maxLength={30} placeholder="货号或型号词可填商品 ID，用于关联询盘商品" onChange={e=>setOfferId(e.target.value)}/>
           <select aria-label="分类" value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c}>{c}</option>)}</select>
           <button className="shop-button primary" disabled={!word.trim()||Boolean(busy)}>{busy==='add'?<LoaderCircle size={15} className="spin"/>:<Plus size={15}/>}添加</button></form>}
         {grouped.length?grouped.map(g=><div className="perf-kw-group" key={g.category}><small>{g.category}</small><div>{g.items.map(k=><span key={k.id} className={`perf-kw-chip ${k.on_platform?'':'missing'}`} title={`${k.created_by_name?`${k.created_by_name} 添加于 `:'添加于 '}${day(k.created_at)}${k.on_platform?'':' · 已不在平台词库'}`}>

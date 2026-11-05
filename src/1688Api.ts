@@ -84,5 +84,6 @@ export type PublishTemplate = {values:import('../shared/1688-publish-template').
 export const getPublishTemplate=()=>request<{data:PublishTemplate}>(`${base}/publish-template`)
 export const savePublishTemplate=(input:PublishTemplate)=>request<{data:PublishTemplate}>(`${base}/publish-template`,{method:'PUT',body:JSON.stringify(input)})
 export const applyDraftTemplate=(id:string,revision:number)=>post<{data:PublishDraft;missing:string[]}>(`/drafts/${id}/apply-template`,{revision})
+export const applyDraftProductData=(id:string,revision:number,fields:string[])=>post<{data:PublishDraft;missing:string[]}>(`/drafts/${id}/product-attributes/apply`,{revision,fields})
 
 export const deleteShopListing=(id:string,input:{confirmed:true;offerId:string;syncedAt:string})=>post<{data:{deleted:boolean}}>(`/listings/${id}/delete`,input)

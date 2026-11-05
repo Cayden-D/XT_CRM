@@ -1,6 +1,7 @@
 import DeleteListing from './1688DeleteListing'
 import LogisticsEditor from './1688LogisticsEditor'
 import { applyDraftTemplate } from './1688Api'
+import DraftProductData from './DraftProductData'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import './1688.css'
 import SkuEditor from './1688SkuEditor'
@@ -125,6 +126,7 @@ export function DraftEditor({initial,targetName,canPublish,close,saved}:{initial
   return <Modal title="商品发布草稿" close={close} wide><div className="shop-editor-context"><Status value={draft.status}/><span>{targetName} · <span title={`类目 ID ${draft.cat_id}`}>{category}</span></span>{draft.offer_id&&<a href={`https://detail.1688.com/offer/${draft.offer_id}.html`} target="_blank" rel="noreferrer">商品 {draft.offer_id} <ExternalLink size={14}/></a>}</div><div className="shop-modal-body shop-editor-fields">
     <AgentPanel draft={draft} disabled={!canPublish||busy||dirty||invalid} onBusy={setBusy} updated={async()=>{const result=await getPublishDraft(draft.id);adopt(result)}}/>
     {editable&&<button className="shop-button" disabled={busy||dirty||invalid} onClick={async()=>{setBusy(true);setError('');try{adopt(await applyDraftTemplate(draft.id,draft.revision))}catch(cause){setError(message(cause))}finally{setBusy(false)}}}>应用公共模板（仅补空值）</button>}
+    {editable&&<DraftProductData draftId={draft.id} revision={draft.revision} disabled={busy||dirty||invalid} setError={setError} applied={adopt}/>}
     <label>商品标题<input value={values.title||''} maxLength={draft.platform_schema.data?.title?.fields?.maxLength||128} disabled={!editable||busy} onChange={e=>change('title',e.target.value)}/></label>
     <div className="shop-images"><span className="shop-field-label">商品主图</span><div className="shop-image-grid">{images.map((image,index)=><div key={`${image.url}-${index}`}><img src={image.url.startsWith('img/')?`https://cbu01.alicdn.com/${image.url}`:image.url} alt={`主图 ${index+1}`} referrerPolicy="no-referrer"/>{editable&&<button title="移除主图" onClick={()=>change('primaryPicture',{...values.primaryPicture,imageList:images.filter((_,i)=>i!==index)})}><Trash2 size={14}/></button>}</div>)}</div>{editable&&<><label>相册 ID<input value={albumId} onChange={e=>setAlbumId(e.target.value)} inputMode="numeric"/></label><label className="shop-upload"><ImagePlus size={17}/>上传主图<input type="file" accept="image/jpeg,image/png,image/gif,image/bmp" disabled={!albumId||busy} onChange={async e=>{const file=e.target.files?.[0];if(!file)return;setBusy(true);setError('');try{const url=await uploadPhoto(file);change('primaryPicture',{...values.primaryPicture,imageList:[...images,{url}]})}catch(cause){setError(message(cause))}finally{setBusy(false);e.target.value=''}}}/></label></>}</div>
     <DetailEditor html={values.description?.detailList?.[0]?.content||''} editable={editable} busy={busy} upload={uploadPhoto} onChange={html=>change('description',{detailList:[{...(values.description?.detailList?.[0]||{id:'0',title:'图文详情',isRequired:true}),content:html}]})}/>
