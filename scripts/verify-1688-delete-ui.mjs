@@ -20,7 +20,7 @@ try{
   else if(path.endsWith('/catalog'))data={data:[listing],total:1,page:1,pageSize:24,facets:{on_sale:1,expired:0,other:0},shops:[{id:shop,display_name:'测试店铺',status:'connected',synced_at:null,listings_synced_through:null}]}
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto('http://127.0.0.1:5173/#/products/listed')
+ await page.goto('http://127.0.0.1:5173/#/catalog/all')
  await page.getByRole('button',{name:'查看 删除界面测试',exact:true}).click()
  await page.getByRole('button',{name:'移入回收站',exact:true}).click()
  const dialog=page.getByRole('alertdialog',{name:'确认移入回收站'})

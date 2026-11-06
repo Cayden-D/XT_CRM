@@ -40,6 +40,7 @@
 .goods-missing { display:inline-block; width:fit-content; margin-top:6px; padding:1px 6px; border-radius:4px; background:#fff3dc; color:#8a6516; font-size:12px; }
 .catalog-tools { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
 .catalog-tools button { height:36px; padding:0 11px; border:1px solid #d9dfe7; border-radius:7px; background:#fff; color:#314356; font-size:13px; cursor:pointer; }
+.catalog-check { display:flex; align-items:center; gap:5px; font-size:13px; color:#314356; white-space:nowrap; }
 .catalog-tools label { display:flex; align-items:center; gap:5px; font-size:13px; color:#314356; }
 @media (max-width:640px) {
   .attr-section { margin:0 16px 18px; padding:13px; }
@@ -47,4 +48,24 @@
   .attr-row label:nth-child(2) { grid-column:1 / -1; }
   .attr-row > button { grid-column:1 / -1; }
   .attr-def-form { grid-template-columns:1fr 1fr; }
+}
+
+.catalog-detail-body { flex:1; min-height:0; overflow:auto; padding-top:18px; }
+.catalog-detail .form-error { margin:0 24px 14px; }
+.catalog-profile { border:0; margin:0; padding:0; min-width:0; }
+.catalog-profile:disabled .attr-actions, .catalog-profile:disabled .attr-suggest { display:none; }
+.catalog-detail-foot { position:sticky; bottom:0; display:flex; justify-content:flex-end; padding:12px 24px; background:#fff; border-top:1px solid #e4e9ef; }
+.catalog-link { display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 10px; border:1px solid #c3d8f1; border-radius:6px; background:#eff6ff; color:#2b5ba6; font-size:12px; text-decoration:none; }
+.catalog-images { display:flex; gap:8px; overflow-x:auto; margin-bottom:12px; }
+.catalog-images img { width:84px; height:84px; flex:none; object-fit:cover; border-radius:7px; border:1px solid #e4e9ef; background:#f5f8fc; }
+.catalog-facts, .catalog-attrs { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:9px 14px; margin:0; font-size:13px; }
+.catalog-facts dt, .catalog-attrs dt { color:#748191; font-size:12px; }
+.catalog-facts dd, .catalog-attrs dd { margin:2px 0 0; overflow-wrap:anywhere; }
+.catalog-subtitle { margin:16px 0 8px; font-size:13px; }
+.catalog-start h3 { margin:0 0 6px; font-size:14px; }
+.catalog-start p { margin:0 0 12px; color:#6b7886; font-size:13px; line-height:1.6; }
+.goods-saved { display:inline-block; width:fit-content; margin-top:6px; padding:1px 6px; border-radius:4px; background:#e8f6ee; color:#217a4b; font-size:12px; }
+@media (max-width:640px) {
+  .catalog-detail-foot { padding:12px 16px; }
+  .catalog-detail .form-error { margin:0 16px 14px; }
 }

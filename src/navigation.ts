@@ -1,4 +1,4 @@
-import { Headset, Images, LayoutDashboard, MessagesSquare, Package, ReceiptText, Settings, Users, type LucideIcon } from 'lucide-react'
+import { Headset, Images, LayoutDashboard, MessagesSquare, Package, PackageCheck, ReceiptText, Settings, Users, type LucideIcon } from 'lucide-react'
 import type { SessionUser } from './api'
 
 export const has = (user: SessionUser, ...names: string[]) => (user.permissions || []).some(p => p === '*' || names.some(name => p === name || p === `${name.split(':')[0]}:*`))
@@ -23,12 +23,11 @@ export const sections: Section[] = [
     { id: 'review', label: '询盘复盘', can: u => has(u, 'performance:review', 'performance:review_read') },
   ] },
   { id: 'orders', label: '订单', icon: ReceiptText, tabs: [{ id: 'all', label: '订单', can: perf }] },
-  { id: 'products', label: '商品', icon: Package, tabs: [
-    { id: 'listed', label: '在售商品', can: u => has(u, 'integration:read') },
+  { id: 'catalog', label: '产品目录', icon: Package, tabs: [{ id: 'all', label: '产品目录', can: u => has(u, 'product:read', 'integration:read') }] },
+  { id: 'products', label: '上架', icon: PackageCheck, tabs: [
     { id: 'collect', label: '采集箱', can: u => has(u, 'collection:read') },
     { id: 'queue', label: '上架队列', can: u => has(u, 'integration:read') },
     { id: 'drafts', label: '发布草稿', can: u => has(u, 'integration:read') },
-    { id: 'library', label: '产品资料', can: u => has(u, 'product:read') },
   ] },
   { id: 'images', label: '图片', icon: Images, tabs: [
     { id: 'edit', label: '图片编辑' },
@@ -60,7 +59,9 @@ export const visibleSections = (user: SessionUser) => sections.filter(section =>
 
 export type Route = { section: Section; tab: Tab }
 export function parseRoute(hash: string, user: SessionUser): Route {
-  const [sectionId, tabId] = hash.replace(/^#\/?/, '').split('/')
+  // Old links to the two views that became 产品目录.
+  const path = hash.replace(/^#\/?/, '')
+  const [sectionId, tabId] = (path === 'products/listed' || path === 'products/library' ? 'catalog/all' : path).split('/')
   const section = visibleSections(user).find(s => s.id === sectionId) ?? sections[0]
   const tabs = tabsFor(section, user)
   return { section, tab: tabs.find(t => t.id === tabId) ?? tabs[0] }

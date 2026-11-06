@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, ExternalLink, Inbox, Link2, Package, RefreshCw, Search, SearchX, Square, X } from 'lucide-react'
+import { AlertCircle, ExternalLink, Inbox, Package, Plus, RefreshCw, Search, SearchX, Square, X } from 'lucide-react'
 import { ApiError, type SessionUser } from './api'
-import { getCatalog, getShopListing, syncShop, syncNotice, type CatalogGroup, type CatalogItem, type CatalogShop, type CatalogSort, type PlatformListing } from './1688Api'
+import { getShopListing, syncShop, syncNotice, type CatalogGroup, type CatalogItem, type CatalogShop, type CatalogSort, type PlatformListing } from './1688Api'
 import { ListingViewer } from './1688Page'
+import CatalogDetail from './CatalogDetail'
+import { request } from './api'
 import Pagination, { useDebounced } from './Pagination'
 import { NeedShop } from './ui'
 import { ago } from './ProductCollectionsPage'
@@ -19,8 +21,9 @@ const sortNames: Record<CatalogSort, string> = { recent: '最近更新', sales: 
 const message = (cause: unknown) => cause instanceof ApiError || cause instanceof Error ? cause.message : '操作失败，请重试。'
 
 /** 在售商品: what is actually listed on the shop's 1688 storefront (as last synced), with 30-day sales. */
-export default function PlatformCatalog({ user }: { user: SessionUser }) {
-  const canManage = permission(user, 'integration:manage'), canPublish = permission(user, 'integration:publish')
+export default function PlatformCatalog({ user, onAdd }: { user: SessionUser; onAdd?: () => void }) {
+  const canManage = permission(user, 'integration:manage'), canPublish = permission(user, 'integration:publish'), canSeeShop = permission(user, 'integration:read')
+  const [detailId, setDetailId] = useState(''), [missingPackage, setMissingPackage] = useState(false)
   const [items, setItems] = useState<CatalogItem[]>([]), [facets, setFacets] = useState<Record<CatalogGroup, number>>({ on_sale: 0, expired: 0, other: 0 }), [shops, setShops] = useState<CatalogShop[]>([])
   const [group, setGroup] = useState<CatalogGroup>('on_sale'), [sort, setSort] = useState<CatalogSort>('recent'), [shop, setShop] = useState(''), [search, setSearch] = useState('')
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(24), [total, setTotal] = useState(0)
@@ -28,15 +31,16 @@ export default function PlatformCatalog({ user }: { user: SessionUser }) {
   const [syncing, setSyncing] = useState(false), [viewing, setViewing] = useState<PlatformListing | null>(null)
   const stop = useRef(false)
   const query = useDebounced(search.trim())
-  useEffect(() => { setPage(1) }, [query, group, sort, shop, pageSize])
+  useEffect(() => { setPage(1) }, [query, group, sort, shop, pageSize, missingPackage])
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const r = await getCatalog({ connectionId: shop || undefined, group, search: query || undefined, sort, page, pageSize })
+      const params = new URLSearchParams(Object.entries({ connectionId: shop, group, search: query, sort, page: String(page), pageSize: String(pageSize), missingPackage: missingPackage ? 'true' : '' }).filter(([, v]) => v))
+      const r = await request<{ data: CatalogItem[]; total: number; facets: Record<CatalogGroup, number>; shops: CatalogShop[] }>(`/api/products/catalog?${params}`)
       setItems(r.data); setFacets(r.facets); setShops(r.shops); setTotal(r.total); setLoaded(true)
       if (!r.data.length && page > 1 && r.total) setPage(Math.ceil(r.total / pageSize))
     } catch (cause) { setError(message(cause)) } finally { setLoading(false) }
-  }, [shop, group, query, sort, page, pageSize])
+  }, [shop, group, query, sort, page, pageSize, missingPackage])
   useEffect(() => { void load() }, [load])
 
   const connected = shops.filter(s => s.status === 'connected')
@@ -60,9 +64,10 @@ export default function PlatformCatalog({ user }: { user: SessionUser }) {
       setNotice(notices.join('；'))
     } catch (cause) { setError(`${message(cause)}（本轮已读取 ${count} 件，已保存的数据可继续查看）`) } finally { setSyncing(false); await load() }
   }
-  async function open(item: CatalogItem) { try { setViewing((await getShopListing(item.id)).data) } catch (cause) { setError(message(cause)) } }
+  const open = (item: CatalogItem) => setDetailId(item.id)
+  async function openPlatform() { try { setViewing((await getShopListing(detailId)).data) } catch (cause) { setError(message(cause)) } }
   const changePage = (next: number) => { setPage(next); document.querySelector('.catalog-head')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
-  const filtered = Boolean(query || shop)
+  const filtered = Boolean(query || shop || missingPackage)
   const noShops = loaded && !shops.length
 
   return <>
@@ -71,6 +76,8 @@ export default function PlatformCatalog({ user }: { user: SessionUser }) {
       <div className="catalog-search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索标题、1688 商品 ID 或货号" aria-label="搜索平台商品" />{search && <button onClick={() => setSearch('')} aria-label="清除搜索"><X size={14} /></button>}</div>
       {shops.length > 1 && <select className="catalog-select" value={shop} onChange={e => setShop(e.target.value)} aria-label="店铺"><option value="">全部店铺</option>{shops.map(s => <option key={s.id} value={s.id}>{s.display_name || '未命名店铺'}</option>)}</select>}
       <select className="catalog-select" value={sort} onChange={e => setSort(e.target.value as CatalogSort)} aria-label="排序">{(Object.keys(sortNames) as CatalogSort[]).map(k => <option key={k} value={k}>{sortNames[k]}</option>)}</select>
+      <label className="catalog-check"><input type="checkbox" checked={missingPackage} onChange={e => setMissingPackage(e.target.checked)} />只看缺件重尺</label>
+      {onAdd && <button className="catalog-secondary" onClick={onAdd}><Plus size={15} />手动添加</button>}
       {canManage && (syncing
         ? <button className="catalog-primary" onClick={() => { stop.current = true }}><Square size={14} />停止同步</button>
         : <><button className="catalog-primary" disabled={!connected.length} title={incremental ? '只读取上次同步后修改过的商品' : '首次同步会读取全部商品'} onClick={() => void sync()}><RefreshCw size={16} />{incremental ? '同步变动' : '同步平台商品'}</button>
@@ -85,7 +92,7 @@ export default function PlatformCatalog({ user }: { user: SessionUser }) {
     {!error && !loaded && <section className="card-grid" aria-busy="true">{Array.from({ length: 8 }, (_, i) => <div key={i} className="card-skeleton"><div /><span /><span /><span /></div>)}</section>}
     {!error && noShops && <NeedShop text="还没有连接 1688 店铺" />}
     {!error && loaded && !noShops && !items.length && (filtered
-      ? <section className="state-card compact"><SearchX size={26} /><h2>没有符合条件的商品</h2><p>换个关键词，或切换店铺。</p><button onClick={() => { setSearch(''); setShop('') }}>清除筛选</button></section>
+      ? <section className="state-card compact"><SearchX size={26} /><h2>没有符合条件的商品</h2><p>换个关键词，或切换店铺。</p><button onClick={() => { setSearch(''); setShop(''); setMissingPackage(false) }}>清除筛选</button></section>
       : <section className="state-card compact"><Inbox size={28} /><h2>{group === 'on_sale' ? '还没有在售商品' : `没有${groupNames[group]}的商品`}</h2>{canManage && connected.length > 0 && <button onClick={() => void sync()} disabled={syncing}><RefreshCw size={15} />同步平台商品</button>}</section>)}
     {!error && loaded && items.length > 0 && <section className={`card-grid ${loading ? 'is-loading' : ''}`}>{items.map(item => <article key={item.id} className="goods-card">
       <button className="goods-media" onClick={() => void open(item)} aria-label={`查看 ${item.title}`}><Package size={28} />{item.image_url && <img src={imageUrl(item.image_url)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.display = 'none' }} />}
@@ -94,15 +101,16 @@ export default function PlatformCatalog({ user }: { user: SessionUser }) {
         <button className="goods-title" onClick={() => void open(item)} title={item.title}>{item.title}</button>
         <div className="goods-price"><strong>{priceText(item)}</strong><span>{item.sku_count ? `${item.sku_count} 个 SKU` : item.unit ? `按${item.unit}` : ''}</span></div>
         <div className="goods-stats">
-          <span className={item.sales_quantity > 0 ? 'hot' : ''}>{item.sales_quantity > 0 ? <>近 30 天售 <b>{item.sales_quantity.toLocaleString('zh-CN')}</b>{item.unit ?? '件'} · {yuan(item.sales_amount)}</> : '近 30 天暂无成交'}</span>
+          {item.sales_quantity != null && <span className={item.sales_quantity > 0 ? 'hot' : ''}>{item.sales_quantity > 0 ? <>近 30 天售 <b>{item.sales_quantity.toLocaleString('zh-CN')}</b>{item.unit ?? '件'} · {yuan(item.sales_amount)}</> : '近 30 天暂无成交'}</span>}
           {item.stock != null && <span>库存 {compact(item.stock)}</span>}
         </div>
-        {item.product_sku && <span className="goods-link" title={item.product_name ?? ''}><Link2 size={12} />已关联 {item.product_sku}</span>}
+        {item.package_weight_g != null ? <span className="goods-saved">已有件重尺</span> : <span className="goods-missing">缺件重尺</span>}
       </div>
       <footer className="goods-foot"><span className="goods-id" title={item.cargo_number ? `货号 ${item.cargo_number}` : undefined}>{item.cargo_number ? `货号 ${item.cargo_number}` : `ID ${item.offer_id}`}</span>
         <a className="goods-icon" href={`https://detail.1688.com/offer/${item.offer_id}.html`} target="_blank" rel="noreferrer" title="在 1688 查看" aria-label={`在 1688 查看 ${item.title}`}><ExternalLink size={14} /></a></footer>
     </article>)}</section>}
     {!error && loaded && items.length > 0 && <Pagination page={page} pageSize={pageSize} total={total} onPage={changePage} onPageSize={setPageSize} unit="件" />}
+    {detailId && !viewing && <CatalogDetail user={user} listingId={detailId} close={() => setDetailId('')} changed={text => { if (text) setNotice(text); void load() }} openPlatform={canSeeShop ? () => void openPlatform() : undefined} />}
     {viewing && <ListingViewer initial={viewing} canManage={canManage} canPublish={canPublish} close={() => setViewing(null)} saved={() => void load()} />}
   </>
 }

@@ -16,25 +16,26 @@ function blurb(product:Product){
 const productEmpty:ProductInput={sku:'',name:'',category:'',description:'',specifications:{},basePrice:0,status:'active',prices:[]}
 
 /** Internal product data (created from 1688 collection or by hand): specifications and tier prices used when publishing. */
-export default function ProductLibrary(){
+export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit=true}:{unlisted?:boolean;startCreating?:boolean;onStarted?:()=>void;canEdit?:boolean}={}){
  const [products,setProducts]=useState<Product[]>([]),[facets,setFacets]=useState<ProductFacets>({all:0,active:0,draft:0,inactive:0}),[categories,setCategories]=useState<string[]>([]),[total,setTotal]=useState(0),[loaded,setLoaded]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[search,setSearch]=useState(''),[productForm,setProductForm]=useState<Product|null|undefined>(undefined),[deletingProduct,setDeletingProduct]=useState<Product|null>(null)
  const [dialog,setDialog]=useState<'templates'|'import'|null>(null),[missingPackage,setMissingPackage]=useState(false)
  const [status,setStatus]=useState<''|Product['status']>(''),[category,setCategory]=useState(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(24)
  const query=useDebounced(search.trim())
  useEffect(()=>{setPage(1)},[query,status,category,pageSize,missingPackage])
- const load=useCallback(async()=>{setLoading(true);setError('');try{const r=await getProductPage({search:query||undefined,status:status||undefined,category:category||undefined,missingPackage:missingPackage?'true':undefined,page,pageSize});setProducts(r.data);setFacets(r.facets);setCategories(r.categories);setTotal(r.total);setLoaded(true)
-   if(!r.data.length&&page>1)setPage(Math.max(1,Math.ceil(r.total/pageSize)))}catch(cause){setError(cause instanceof ApiError?cause.message:'产品数据加载失败。')}finally{setLoading(false)}},[query,status,category,page,pageSize,missingPackage])
+ const load=useCallback(async()=>{setLoading(true);setError('');try{const r=await getProductPage({search:query||undefined,status:status||undefined,category:category||undefined,missingPackage:missingPackage?'true':undefined,unlisted:unlisted?'true':undefined,page,pageSize});setProducts(r.data);setFacets(r.facets);setCategories(r.categories);setTotal(r.total);setLoaded(true)
+   if(!r.data.length&&page>1)setPage(Math.max(1,Math.ceil(r.total/pageSize)))}catch(cause){setError(cause instanceof ApiError?cause.message:'产品数据加载失败。')}finally{setLoading(false)}},[query,status,category,page,pageSize,missingPackage,unlisted])
+ useEffect(()=>{if(startCreating){setProductForm(null);onStarted?.()}},[startCreating,onStarted])
  useEffect(()=>{void load()},[load])
  const filtered=Boolean(query||status||category||missingPackage)
  const changePage=(next:number)=>{setPage(next);document.querySelector('.catalog-head')?.scrollIntoView({behavior:'smooth',block:'start'})}
  async function removeProduct(item:Product){try{await deleteProduct(item.id);setNotice('产品已停用并移出目录');await load()}catch(cause){setError(cause instanceof Error?cause.message:'删除产品失败。')}finally{setDeletingProduct(null)}}
- return <div className="commerce-page">
+ return <>
   {notice&&<div className="inline-notice">{notice}<button onClick={()=>setNotice('')}><X size={14}/></button></div>}
   <section className="catalog-head">
    <div className="catalog-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索 SKU 或产品名称" aria-label="搜索产品"/>{search&&<button onClick={()=>setSearch('')} aria-label="清除搜索"><X size={14}/></button>}</div>
    {categories.length>0&&<select className="catalog-select" value={category} onChange={e=>setCategory(e.target.value)} aria-label="分类"><option value="">全部分类</option>{categories.map(c=><option key={c}>{c}</option>)}</select>}
-   <div className="catalog-tools"><label><input type="checkbox" checked={missingPackage} onChange={e=>setMissingPackage(e.target.checked)}/>只看缺件重尺</label><button onClick={()=>setDialog('templates')}>属性模板</button><button onClick={()=>setDialog('import')}>导入导出</button></div>
-   <button className="catalog-primary" onClick={()=>setProductForm(null)}><Plus size={16}/>新建产品</button>
+   <div className="catalog-tools"><label><input type="checkbox" checked={missingPackage} onChange={e=>setMissingPackage(e.target.checked)}/>只看缺件重尺</label>{canEdit&&<><button onClick={()=>setDialog('templates')}>属性模板</button><button onClick={()=>setDialog('import')}>导入导出</button></>}</div>
+   {canEdit&&<button className="catalog-primary" onClick={()=>setProductForm(null)}><Plus size={16}/>新建产品</button>}
   </section>
   <div className="catalog-tabs" role="tablist" aria-label="产品状态">{([['','全部',facets.all],['active','在售',facets.active],['draft','草稿',facets.draft],['inactive','停用',facets.inactive]] as [''|Product['status'],string,number][]).map(([key,label,count])=>
    <button key={key||'all'} role="tab" aria-selected={status===key} className={status===key?'active':''} onClick={()=>setStatus(key)}>{label}<span>{count}</span></button>)}</div>
@@ -42,7 +43,7 @@ export default function ProductLibrary(){
   {!error&&!loaded&&<section className="card-grid" aria-busy="true">{Array.from({length:8},(_,i)=><div key={i} className="card-skeleton"><div/><span/><span/><span/></div>)}</section>}
   {!error&&loaded&&!products.length&&(filtered
    ?<section className="state-card compact"><SearchX size={26}/><h2>没有符合条件的产品</h2><p>换个关键词，或清除筛选条件。</p><button onClick={()=>{setSearch('');setStatus('');setCategory('');setMissingPackage(false)}}>清除筛选</button></section>
-   :<section className="state-card"><Inbox size={28}/><h2>建立第一件产品</h2><button onClick={()=>setProductForm(null)}><Plus size={15}/> 新建产品</button></section>)}
+   :<section className="state-card"><Inbox size={28}/><h2>建立第一件产品</h2>{canEdit&&<button onClick={()=>setProductForm(null)}><Plus size={15}/> 新建产品</button>}</section>)}
   {!error&&loaded&&products.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{products.map(product=>{const text=blurb(product);return <article key={product.id} className="goods-card">
    <button className="goods-media" onClick={()=>setProductForm(product)} aria-label={`编辑 ${product.name}`}><Box size={28}/>{product.images?.[0]&&<img src={product.images[0]} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>}
     {product.category&&<span className="goods-source">{product.category}</span>}<span className={`goods-stage product-${product.status}`}>{statusNames[product.status]}</span></button>
@@ -61,7 +62,7 @@ export default function ProductLibrary(){
   {dialog==='templates'&&<AttributeTemplatesDialog categories={categories} close={()=>setDialog(null)}/>}
   {dialog==='import'&&<AttributeImportDialog close={()=>setDialog(null)} imported={()=>{setDialog(null);setNotice('属性已导入');void load()}}/>}
   {deletingProduct&&<Confirm title="删除这个产品？" text={`“${deletingProduct.name}”将被移除。`} action="删除产品" close={()=>setDeletingProduct(null)} confirm={()=>void removeProduct(deletingProduct)}/>}
- </div>
+ </>
 }
 
 function Confirm({title,text,action,close,confirm}:{title:string;text:string;action:string;close:()=>void;confirm:()=>void}){return <div className="dialog-layer"><button className="drawer-scrim" onClick={close}/><section className="confirm-dialog"><div className="confirm-icon"><Trash2 size={20}/></div><h2>{title}</h2><p>{text}</p><div><button onClick={close}>取消</button><button className="danger" onClick={confirm}>{action}</button></div></section></div>}

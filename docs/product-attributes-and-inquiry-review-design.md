@@ -565,6 +565,13 @@ COMMIT;
 
 **新导航：** 已接入。“询盘复盘”在 聊天 下（`#/chats/review`，仅 `performance:review` 或 `performance:review_read` 可见），“业务员复盘”在 绩效 下（`#/performance/coaching`）。
 
+**产品目录合并（2026-11-05，取代第 4.3 节的页面划分）：** “在售商品”和“产品资料”合并为导航栏独立入口“产品目录”（`#/catalog/all`），原“商品”入口改名“上架”，只留采集箱、上架队列、发布草稿；旧链接 `#/products/listed`、`#/products/library` 自动跳转。
+
+- 平台商品就是目录：详情同时显示 1688 的信息（只读，来自上次同步）和 CRM 补充的尺寸、箱规、自定义属性。
+- 点“补充资料”时才建立 CRM 产品，并与平台商品一对一关联（SKU 取货号，已被占用时用 `1688-商品ID`；规格一并建立），不写平台。
+- 手动添加的产品，以及采集后还没上架的产品，放在“未上架”。平台商品被删除后，产品和资料回到这里。
+- 查看需要 `product:read` 或 `integration:read`，这样业务员也能查产品资料；近 30 天销量只给有 `integration:read` 或 `performance:read` 的账号。
+
 **部署：** 先执行迁移 044–047（`database/mac.sh` 或 `database/init-db.ps1`），再更新代码。Worker 随 API 启动，默认只刷新商品关联和生成数据日报，不调用模型。
 
 ## 附：现有代码的相关问题（设计范围外，供排期）

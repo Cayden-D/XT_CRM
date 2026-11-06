@@ -3,8 +3,7 @@ import { LogOut, Menu, Sparkles } from 'lucide-react'
 import AgentQueueSettings from './AgentQueueSettings'
 import LoginPage from './LoginPage'
 import CustomersPage from './CustomersPage'
-import ProductLibrary from './ProductsPage'
-import PlatformCatalog from './PlatformCatalog'
+import ProductCatalogPage from './ProductCatalogPage'
 import DashboardPage from './DashboardPage'
 import ProductCollectionsPage from './ProductCollectionsPage'
 import ShopPanel from './1688Page'
@@ -63,11 +62,10 @@ function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route
     case 'chats': return <ChatInquiryPage user={user} tab={tab.id === 'inquiry' || tab.id === 'review' ? tab.id : 'chats'} />
     case 'orders': return <OrdersPage user={user} />
     case 'products':
-      if (tab.id === 'listed') return <div className="commerce-page"><PlatformCatalog user={user} /></div>
       if (tab.id === 'collect') return <ProductCollectionsPage user={user} />
       if (tab.id === 'queue') return <AgentQueueSettings user={user} />
-      if (tab.id === 'drafts') return <ShopPanel user={user} view="drafts" />
-      return <ProductLibrary />
+      return <ShopPanel user={user} view="drafts" />
+    case 'catalog': return <ProductCatalogPage user={user} />
     case 'images': return tab.id === 'suite' ? <ImageSuitePage key={`suite-${toolKey}`} user={user} intent={intent} /> : <ImageEditPage key={`edit-${toolKey}`} user={user} intent={intent} />
     case 'performance': return <PerformancePage user={user} view={tab.id as PerfView} />
     default: break

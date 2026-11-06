@@ -11,6 +11,7 @@ import { userRoutes } from './routes/users.js'
 import { accountRoutes } from './routes/accounts.js'
 import { productRoutes } from './routes/products.js'
 import { productAttributeRoutes } from './routes/product-attributes.js'
+import { productCatalogRoutes } from './routes/product-catalog.js'
 import { productCollectionRoutes } from './routes/product-collections.js'
 import { aiRoutes } from './routes/ai.js'
 import { integration1688Routes } from './routes/1688.js'
@@ -66,6 +67,7 @@ export async function buildApp() {
   await app.register(accountRoutes, { prefix: '/api/accounts' })
   await app.register(productRoutes, { prefix: '/api/products' })
   await app.register(productAttributeRoutes, { prefix: '/api/products' })
+  await app.register(productCatalogRoutes, { prefix: '/api/products' })
   await app.register(productCollectionRoutes, { prefix: '/api/product-collections' })
   await app.register(aiRoutes, { prefix: '/api/ai' })
   await app.register(integration1688Routes, { prefix: '/api/integrations/1688' })

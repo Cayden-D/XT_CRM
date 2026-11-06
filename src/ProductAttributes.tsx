@@ -63,7 +63,7 @@ export function useProductAttributes(productId: string | null) {
 }
 type State = ReturnType<typeof useProductAttributes>
 
-export function ProductAttributesSections({ state, category }: { state: State; category?: string | null }) {
+export function ProductAttributesSections({ state, category, hideListingSuggestions }: { state: State; category?: string | null; hideListingSuggestions?: boolean }) {
   const { data, loading, loadError, texts, setTexts, rows, setRows, dismissed, setDismissed, invalid, preview } = state
   const [defs, setDefs] = useState<AttributeDef[]>([])
   useEffect(() => { getAttributeDefs(category || undefined).then(r => setDefs(r.data.filter(d => d.active))).catch(() => setDefs([])) }, [category])
@@ -71,7 +71,7 @@ export function ProductAttributesSections({ state, category }: { state: State; c
   const available = defs.filter(d => !used.has(d.label.toLowerCase()))
   const add = (row: Partial<Row>) => setRows(current => [...current, { key: nextKey++, label: '', value: '', unit: '', groupName: DEFAULT_GROUP, defId: null, source: 'manual', confirmed: true, ...row }])
   const change = (key: number, patch: Partial<Row>) => setRows(current => current.map(r => r.key === key ? { ...r, ...patch } : r))
-  const attributeSuggestions = (data?.suggestions.attributes ?? []).filter(s => !used.has(s.label.toLowerCase()) && !dismissed.includes(s.label))
+  const attributeSuggestions = (data?.suggestions.attributes ?? []).filter(s => !used.has(s.label.toLowerCase()) && !dismissed.includes(s.label) && !(hideListingSuggestions && s.source === 'listing'))
   const measurementSuggestions = (data?.suggestions.measurements ?? []).filter(s => !texts[s.field]?.trim() && !dismissed.includes(s.field))
   if (loading) return <section className="attr-section"><LoaderCircle size={18} className="spin" /></section>
   if (loadError) return <section className="attr-section"><p className="form-error">{loadError}</p></section>

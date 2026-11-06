@@ -22,6 +22,7 @@
     "test:order-list": "tsx scripts/test-order-list.ts",
     "test:products": "tsx scripts/test-products.ts",
     "test:product-attributes": "tsx scripts/test-product-attributes.ts",
+    "test:product-catalog": "tsx scripts/test-product-catalog.ts",
     "test:inquiry-review": "tsx scripts/test-inquiry-review.ts",
     "test:product-collection": "tsx scripts/test-product-collection.ts",
     "test:1688": "tsx scripts/test-1688.ts",

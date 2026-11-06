@@ -7,7 +7,7 @@ import { saveProjection,syncAttributesFromSpecifications } from '../integrations
 const idSchema=z.object({id:z.string().uuid()})
 // Without `page` the whole catalogue is returned (product pickers); with `page` the catalogue page is paginated and carries facet counts.
 const listSchema=z.object({search:z.string().trim().max(100).optional(),category:z.string().trim().max(120).optional(),status:z.enum(['draft','active','inactive']).optional(),
-  page:z.coerce.number().int().min(1).max(10000).optional(),pageSize:z.coerce.number().int().min(1).max(100).default(24),missingPackage:z.enum(['true']).optional()})
+  page:z.coerce.number().int().min(1).max(10000).optional(),pageSize:z.coerce.number().int().min(1).max(100).default(24),missingPackage:z.enum(['true']).optional(),unlisted:z.enum(['true']).optional()})
 const priceSchema=z.object({minQuantity:z.coerce.number().positive().default(1),unitPrice:z.coerce.number().min(0),customerLevel:z.enum(['A','B','C','D']).optional().nullable(),validFrom:z.string().date().optional().nullable(),validUntil:z.string().date().optional().nullable()})
 const productSchema=z.object({sku:z.string().trim().min(1).max(80),name:z.string().trim().min(1).max(200),category:z.string().trim().max(120).optional().nullable(),description:z.string().trim().max(10000).optional().nullable(),specifications:z.record(z.string(),z.string()).default({}),basePrice:z.coerce.number().min(0).default(0),status:z.enum(['draft','active','inactive']).default('active'),prices:z.array(priceSchema).max(100).default([])})
 // Not productSchema.partial(): its defaults would still apply and reset every field a PATCH leaves out.
@@ -16,10 +16,11 @@ const updateSchema=z.object({sku:z.string().trim().min(1).max(80),name:z.string(
 export async function productRoutes(app:FastifyInstance){
   app.get('/',{preHandler:requireAuth},async(request,reply)=>{
     const input=listSchema.safeParse(request.query);if(!input.success)return reply.code(400).send({error:'VALIDATION_ERROR'})
-    const {search,category,status,page,pageSize,missingPackage}=input.data
+    const {search,category,status,page,pageSize,missingPackage,unlisted}=input.data
     const values:unknown[]=[request.authUser.tenantId];const base=['p.tenant_id=$1','p.deleted_at IS NULL']
     if(search){values.push(`%${search.replace(/[\\%_]/g,m=>`\\${m}`)}%`);base.push(`(p.name ILIKE $${values.length} OR p.sku ILIKE $${values.length})`)}
     if(category){values.push(category);base.push(`p.category=$${values.length}`)}
+    if(unlisted)base.push("NOT EXISTS(SELECT 1 FROM integration_1688_listings l WHERE l.product_id=p.id AND l.status<>'deleted' AND coalesce(l.deletion_state,'') NOT IN ('deleted','deleting'))")
     if(missingPackage)base.push('NOT EXISTS(SELECT 1 FROM product_measurements m WHERE m.product_id=p.id AND m.variant_id IS NULL AND m.package_weight_g IS NOT NULL)')
     const where=[...base];const listValues=[...values]
     if(status){listValues.push(status);where.push(`p.status=$${listValues.length}`)}
