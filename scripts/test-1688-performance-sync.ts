@@ -15,7 +15,7 @@ const beijingDay=(offset:number)=>new Date(Date.now()+8*3_600_000+offset*DAY).to
 const D=beijingDay(-1),compactD=D.replaceAll('-',''),nextD=beijingDay(0)
 const at=(date:string,time:string)=>`${date} ${time}`
 const ms=(text:string)=>parseBeijingTime(text).getTime()
-type Msg={uuid:string;self:string;direction:0|1;time:string;types:string[];text?:string}
+type Msg={uuid:string;self:string;direction:0|1;time:string;types:string[];text?:string;urls?:string[]}
 const messages:Record<string,Msg[]>={
   c1:[
     {uuid:'m1',self:'shop:a',direction:1,time:at(D,'10:00:00'),types:['正常消息']},
@@ -32,7 +32,7 @@ const messages:Record<string,Msg[]>={
     {uuid:'m12',self:'shop:a',direction:1,time:at(nextD,'00:00:10'),types:['正常消息']},
   ],
   c2:[
-    {uuid:'n1',self:'shop:a',direction:1,time:at(D,'14:00:00'),types:['正常消息']},
+    {uuid:'n1',self:'shop:a',direction:1,time:at(D,'14:00:00'),types:['正常消息'],urls:['https://cbu-im.oss-accelerate.aliyuncs.com/webim/e95f19224d7847b9db15e3af8cbe23b3.png','https://evil.example/a.png']},
     {uuid:'n2',self:'shop:a',direction:0,time:at(D,'14:00:20'),types:['正常消息'],text:'好的'},
   ],
   c3:[{uuid:'p1',self:'shop:b',direction:1,time:at(D,'03:00:00'),types:['正常消息']},{uuid:'p2',self:'shop:b',direction:0,time:at(D,'03:00:05'),types:['其他消息']}],
@@ -76,7 +76,7 @@ globalThis.fetch=async(input,init)=>{
     // Two per page to exercise cursor paging; every account's messages in the cid are returned, as on the platform.
     const all=(messages[flat.cid]||[]).filter(m=>ms(m.time)>=Number(flat.beg)).sort((a,b)=>ms(a.time)-ms(b.time))
     const page=all.slice(0,2)
-    return response({success:true,data:{nextCursor:page.length?ms(page.at(-1)!.time)+1:Number(flat.beg),hasMore:all.length>2,historyChatLogList:page.map(m=>({content:m.direction?'---***---':(m.text??'x'),direction:m.direction,length:'3',time:m.time,uuid:m.uuid,receiverLoginId:'**',senderLoginId:'**',messageTypes:m.types,urls:[],words:[],selfLoginId:m.self,buyerOpenUid:'O1',buyerAdminOpenUid:'A1'}))}})
+    return response({success:true,data:{nextCursor:page.length?ms(page.at(-1)!.time)+1:Number(flat.beg),hasMore:all.length>2,historyChatLogList:page.map(m=>({content:m.direction?'---***---':(m.text??'x'),direction:m.direction,length:'3',time:m.time,uuid:m.uuid,receiverLoginId:'**',senderLoginId:'**',messageTypes:m.types,urls:(m.urls??[]).map(url=>({url})),words:[],selfLoginId:m.self,buyerOpenUid:'O1',buyerAdminOpenUid:'A1'}))}})
   }
   // Orders and refunds are covered by test-1688-performance-orders; this shop has none.
   if(url.includes('alibaba.trade.ec.getOrderList.sellerView'))return response({success:true,totalRecord:0,result:[]})
@@ -152,8 +152,16 @@ try{
     {login_id:'shop:b',cid:'c3',chat_date:D,buyer_messages:1,agent_messages:0,auto_replies:0,transferred:false,uuids:['p1','p2']},
   ])
   assert.equal((await db.query("SELECT count(*)::int AS n FROM perf_chat_sessions WHERE connection_id=$1 AND cid='noise'",[connection.id])).rows[0].n,0,'capped pages are discarded, not saved')
-  const buyers=(await db.query('SELECT buyer_key,open_uid,taobao_nick FROM perf_buyers WHERE connection_id=$1 ORDER BY buyer_key',[connection.id])).rows
-  assert.deepEqual(buyers,[{buyer_key:'A1',open_uid:'O1',taobao_nick:null},{buyer_key:'A3',open_uid:'O3',taobao_nick:null},{buyer_key:'tb:tbuser',open_uid:null,taobao_nick:'tbuser'}],'sub-buyers of one main buyer merge')
+  const pictures=(await db.query("SELECT m.uuid,m.image_urls FROM perf_chat_messages m JOIN perf_chat_sessions s ON s.id=m.session_id WHERE s.connection_id=$1 AND m.image_urls<>'{}'",[connection.id])).rows
+  assert.deepEqual(pictures,[{uuid:'n1',image_urls:['https://cbu-im.oss-accelerate.aliyuncs.com/webim/e95f19224d7847b9db15e3af8cbe23b3.png']}],'the buyer picture is kept; other hosts are not')
+  const buyers=(await db.query('SELECT buyer_key,open_uid,taobao_nick,login_id FROM perf_buyers WHERE connection_id=$1 ORDER BY buyer_key',[connection.id])).rows
+  assert.deepEqual(buyers,[{buyer_key:'A1',open_uid:'O1',taobao_nick:'nick1',login_id:'**'},{buyer_key:'A3',open_uid:'O3',taobao_nick:'nick3',login_id:'**'},{buyer_key:'tb:tbuser',open_uid:null,taobao_nick:'tbuser',login_id:'**'}],'sub-buyers of one main buyer merge; every buyer keeps the name the conversation list gives')
+  // A later peer without a nick never clears it; a new nick replaces the old one.
+  const {resolveBuyer}=await import('../server/integrations/customer-ops.js')
+  await resolveBuyer(connection.tenant_id,connection.id,{key:'A3',openUid:'O3',adminOpenUid:'A3',taobaoNick:null,loginId:null,at:new Date()})
+  assert.equal((await db.query("SELECT taobao_nick FROM perf_buyers WHERE connection_id=$1 AND buyer_key='A3'",[connection.id])).rows[0].taobao_nick,'nick3')
+  await resolveBuyer(connection.tenant_id,connection.id,{key:'A3',openUid:'O3',adminOpenUid:'A3',taobaoNick:'nick3-new',loginId:'n*',at:new Date()})
+  assert.deepEqual((await db.query("SELECT taobao_nick,login_id FROM perf_buyers WHERE connection_id=$1 AND buyer_key='A3'",[connection.id])).rows[0],{taobao_nick:'nick3-new',login_id:'n*'})
 
   // Metrics with the default 180 s threshold.
   const metrics=async(headers=all,from=D,to=D)=>{const r=await request('GET',`${base}/metrics?connectionId=${connection.id}&from=${from}&to=${to}`,undefined,headers);assert.equal(r.statusCode,200,r.body);return Object.fromEntries((r.json().data as {login_id:string}[]).map(row=>[row.login_id,row])) as Record<string,Record<string,unknown>>}

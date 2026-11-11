@@ -89,6 +89,7 @@ export async function orderListRoutes(app: FastifyInstance) {
         o.placed_at,o.paid_at,o.items,o.seller_memo,o.seller_flag,o.buyer_rate_status,
         (SELECT i.buyer_id FROM perf_buyer_identities i WHERE i.connection_id=o.connection_id AND i.open_uid=o.buyer_open_uid LIMIT 1) AS buyer_id,
         right(o.buyer_open_uid,6) AS buyer_tail,
+        (SELECT coalesce(b.taobao_nick,b.login_id) FROM perf_buyer_identities i JOIN perf_buyers b ON b.id=i.buyer_id WHERE i.connection_id=o.connection_id AND i.open_uid=o.buyer_open_uid LIMIT 1) AS buyer_nick,
         (SELECT json_agg(json_build_object('login_id',ag.login_id,'is_main',ag.is_main,'user_name',u.display_name,'share',a.share::float)) FROM perf_order_attributions a
           JOIN perf_agents ag ON ag.id=a.agent_id LEFT JOIN users u ON u.id=ag.user_id WHERE a.order_id=o.id AND a.scheme=$6) AS agents
       ${base}${filter} ORDER BY o.placed_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params)).rows

@@ -19,7 +19,7 @@ export async function replyQuality(tenantId: string, connectionId: string, from:
       count(*) FILTER (WHERE 'image'=ANY(m.flags))::int AS images,count(*) FILTER (WHERE 'curt'=ANY(m.flags))::int AS curt,
       count(*) FILTER (WHERE m.flags && ARRAY['phone','wechat','qq','offsite','external_link'])::int AS offsite
     ${base} GROUP BY ag.id,ag.login_id,ag.is_main,u.display_name ORDER BY count(*) DESC`, params)).rows
-  const risks = (await db.query(`SELECT m.uuid,m.sent_at,m.flags,m.text_masked,s.id AS session_id,s.buyer_id,s.chat_date::text AS chat_date,ag.login_id,right(b.buyer_key,6) AS buyer_tail,p.name AS buyer_name
+  const risks = (await db.query(`SELECT m.uuid,m.sent_at,m.flags,m.text_masked,s.id AS session_id,s.buyer_id,s.chat_date::text AS chat_date,ag.login_id,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,p.name AS buyer_name
     ${base}
       AND m.flags && ARRAY['phone','wechat','qq','offsite','external_link'] ORDER BY m.sent_at DESC LIMIT 200`, params)).rows
   const curt = (await db.query(`SELECT m.uuid,m.sent_at,m.text_masked,s.id AS session_id,ag.login_id ${base} AND 'curt'=ANY(m.flags) AND m.text_masked IS NOT NULL ORDER BY m.sent_at DESC LIMIT 50`, params)).rows
@@ -39,7 +39,7 @@ export async function keywordHits(tenantId: string, connectionId: string, from: 
       count(DISTINCT s.id)::int AS sessions,count(DISTINCT s.buyer_id) FILTER (WHERE m.direction=1)::int AS buyers,max(m.sent_at) AS last_hit
     ${base}
     GROUP BY 1,2 ORDER BY 3 DESC,4 DESC`, params)).rows
-  const recent = (await db.query(`SELECT m.uuid,m.sent_at,m.direction,k->>'word' AS word,coalesce(pk.category,'其他') AS category,s.id AS session_id,s.buyer_id,s.chat_date::text AS chat_date,ag.login_id,right(b.buyer_key,6) AS buyer_tail,p.name AS buyer_name
+  const recent = (await db.query(`SELECT m.uuid,m.sent_at,m.direction,k->>'word' AS word,coalesce(pk.category,'其他') AS category,s.id AS session_id,s.buyer_id,s.chat_date::text AS chat_date,ag.login_id,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,p.name AS buyer_name
     ${base}
     ORDER BY m.sent_at DESC LIMIT 100`, params)).rows
   return { words, recent }

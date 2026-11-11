@@ -1,3 +1,4 @@
+import { buyerLabel } from './buyerLabel'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { AlertCircle, ChevronDown, ChevronRight, LoaderCircle, MessageSquareText, MessagesSquare, Search, ShieldCheck, X } from 'lucide-react'
 import type { SessionUser } from './api'
@@ -62,11 +63,11 @@ function BuyerFinder({ connectionId, setError }: { connectionId: string; setErro
       <button className="shop-button primary" disabled={busy || loginId.trim().length < 2}>{busy ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}查找</button></form>
     {result === null && <p className="shop-note">近 90 天没有这位买家的会话。</p>}
     {result && <div className="chat-finder-result">
-      <div className="chat-finder-head"><div><strong>买家 …{result.buyer_tail}</strong><small>首次咨询 {day(result.first_chat_at)} · 最近 {day(result.last_chat_at)} · {result.sessions.length} 次会话</small></div>
+      <div className="chat-finder-head"><div><strong>{buyerLabel(result)}</strong><small>首次咨询 {day(result.first_chat_at)} · 最近 {day(result.last_chat_at)} · {result.sessions.length} 次会话</small></div>
         <div className="chat-finder-stats"><span>订单 <b>{result.orders.orders}</b></span><span>已付款 <b>{result.orders.paid}</b></span><span>付款金额 <b>¥{result.orders.paid_amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</b></span></div>
         <WangwangButton buyerId={result.id} setError={setError} label="旺旺联系" />
         <button className="shop-icon" title="关闭" aria-label="关闭查找结果" onClick={() => { setResult(undefined); setLoginId('') }}><X size={16} /></button></div>
-      {result.sessions.length > 0 && <ul className="chat-finder-sessions">{result.sessions.map(s => <li key={s.id}><button onClick={() => void open(s.id, `${agentLabel(s)} · ${s.chat_date} · 买家 …${result.buyer_tail}`)}>
+      {result.sessions.length > 0 && <ul className="chat-finder-sessions">{result.sessions.map(s => <li key={s.id}><button onClick={() => void open(s.id, `${agentLabel(s)} · ${s.chat_date} · ${buyerLabel(result)}`)}>
         <span>{s.chat_date}</span><span>{agentLabel(s)}</span><span>买家 {s.buyer_messages} · 客服 {s.agent_messages}</span><ChevronRight size={15} /></button></li>)}</ul>}
     </div>}
     {detail && <Drawer title={detail.title} close={() => setDetail(null)}><Timeline data={detail.data} /></Drawer>}
@@ -122,7 +123,7 @@ function KeywordSessions({ connectionId, from, to, word, setError }: { connectio
   useEffect(() => { let live = true; setRows(null)
     getKeywordSessions(connectionId, from, to, word).then(r => { if (live) { setRows(r.data); setMore(r.hasMore) } }).catch(cause => live && setError(message(cause)))
     return () => { live = false } }, [connectionId, from, to, word, setError])
-  const buyer = (r: KeywordSession) => r.buyer_name ?? `买家 …${r.buyer_tail}`
+  const buyer = (r: KeywordSession) => buyerLabel(r)
   async function show(r: KeywordSession) { try { setDetail({ title: `${agentLabel(r)} · ${r.chat_date} · ${buyer(r)}`, focus: r.first_hit_uuid, data: (await getChatDetail(r.id)).data }) } catch (cause) { setError(message(cause)) } }
   if (!rows) return <p className="shop-note inquiry-keyword-sessions"><LoaderCircle size={14} className="spin" /> 正在读取提到「{word}」的会话…</p>
   return <div className="inquiry-keyword-sessions">

@@ -25,7 +25,7 @@ const audit = (request: FastifyRequest, action: string, entityType: string, enti
   [tenant(request), request.authUser.sub, action, entityType, entityId, JSON.stringify(data), request.id])
 
 async function sessionFor(request: FastifyRequest, id: string) {
-  const session = (await db.query(`SELECT s.id,s.connection_id,s.agent_id,s.buyer_id,s.chat_date::text AS chat_date,a.login_id,a.is_main,a.user_id,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail
+  const session = (await db.query(`SELECT s.id,s.connection_id,s.agent_id,s.buyer_id,s.chat_date::text AS chat_date,a.login_id,a.is_main,a.user_id,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick
     FROM perf_chat_sessions s JOIN perf_agents a ON a.id=s.agent_id JOIN perf_buyers b ON b.id=s.buyer_id LEFT JOIN users u ON u.id=a.user_id WHERE s.id=$1 AND s.tenant_id=$2`, [id, tenant(request)])).rows[0]
   if (!session) throw new IntegrationError('NOT_FOUND', '会话不存在。', 404)
   return session
@@ -62,7 +62,7 @@ export async function inquiryReviewRoutes(app: FastifyInstance) {
       ranked AS (SELECT l.*,row_number() OVER (PARTITION BY l.agent_id ORDER BY l.priority DESC,l.started_at DESC) AS position FROM listed l)
       SELECT x.id,x.agent_id,x.buyer_id,x.chat_date::text AS chat_date,x.started_at,x.category,x.new_customer,x.buyer_messages,x.agent_messages,x.other_agent_messages,x.real_chars,x.text_messages,x.template_messages,x.offsite,x.keywords,x.first_response_seconds,x.matured,x.evidence_level,x.rule_loss_code,
         x.review_id,x.review_status,x.review_revision,x.ai_loss_code,x.ai_loss_confidence,x.finding_count,x.final_loss_code,x.published_at,x.priority,
-        a.login_id,a.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,
+        a.login_id,a.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,
         coalesce((SELECT jsonb_agg(jsonb_build_object('offer_id',p.offer_id,'name',p.product_name,'confidence',p.confidence)) FROM (SELECT DISTINCT ON (offer_id) offer_id,product_name,confidence FROM chat_session_products sp WHERE sp.session_id=x.id AND sp.source<>'recent_order' ORDER BY offer_id,CASE sp.confidence WHEN 'certain' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END) p),'[]'::jsonb) AS products
       FROM ranked x JOIN perf_agents a ON a.id=x.agent_id LEFT JOIN users u ON u.id=a.user_id JOIN perf_buyers b ON b.id=x.buyer_id
       WHERE x.position<=$8 ORDER BY x.priority DESC,x.started_at DESC LIMIT 300`,
@@ -87,14 +87,14 @@ export async function inquiryReviewRoutes(app: FastifyInstance) {
     await refreshSessionProducts(tenant(request), session.connection_id, session.chat_date, session.chat_date)
     const [facts] = (await db.query(`WITH ${reviewFactsCte} SELECT f.id,f.category,f.after_sales,f.new_customer,f.buyer_messages,f.agent_messages,f.other_agent_messages,f.real_chars,f.text_messages,f.template_messages,f.offsite,f.keywords,f.first_response_seconds,f.matured,f.evidence_level,f.rule_loss_code FROM review_rules f WHERE f.id=$6`,
       [tenant(request), session.connection_id, session.chat_date, session.chat_date, null, id])).rows
-    const messages = (await db.query('SELECT uuid,direction,sent_at,length,message_types,keywords,text_masked,flags,linked_offer_ids FROM perf_chat_messages WHERE session_id=$1 ORDER BY sent_at,uuid', [id])).rows
+    const messages = (await db.query('SELECT uuid,direction,sent_at,length,message_types,keywords,text_masked,flags,linked_offer_ids,image_urls FROM perf_chat_messages WHERE session_id=$1 ORDER BY sent_at,uuid', [id])).rows
     const products = (await db.query("SELECT offer_id,product_name,source,confidence,evidence_message_uuid FROM chat_session_products WHERE session_id=$1 ORDER BY CASE confidence WHEN 'certain' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,source", [id])).rows
     const row = (await db.query('SELECT * FROM chat_reviews WHERE session_id=$1', [id])).rows[0] ?? null
     // Before publication an agent gets the conversation and nothing the AI or supervisor concluded.
     const review = reviewer || row?.published_at ? row : null
     const visible = review && !reviewer ? { id: review.id, status: review.status, final_loss_code: review.final_loss_code, final_findings: review.final_findings ?? (review.status === 'confirmed' ? review.ai_findings : []), reviewer_note: review.reviewer_note, ai_coaching: review.status === 'confirmed' ? review.ai_coaching : null, published_at: review.published_at, agent_response: review.agent_response, revision: review.revision } : review
     const facts_by_offer = reviewer ? await Promise.all(products.filter(p => p.source !== 'recent_order').slice(0, 3).map(async p => ({ offer_id: p.offer_id, ...(await productFacts(tenant(request), p.offer_id)) }))) : []
-    return { data: { session: { id: session.id, chat_date: session.chat_date, agent_id: session.agent_id, login_id: session.login_id, is_main: session.is_main, user_name: session.user_name, buyer_id: session.buyer_id, buyer_tail: session.buyer_tail }, facts, messages, turns: [], products, review: visible, productFacts: facts_by_offer, own, canReview: canReview(request) }, lossNames: LOSS_NAMES }
+    return { data: { session: { id: session.id, chat_date: session.chat_date, agent_id: session.agent_id, login_id: session.login_id, is_main: session.is_main, user_name: session.user_name, buyer_id: session.buyer_id, buyer_tail: session.buyer_tail, buyer_nick: session.buyer_nick }, facts, messages, turns: [], products, review: visible, productFacts: facts_by_offer, own, canReview: canReview(request) }, lossNames: LOSS_NAMES }
   })
 
   app.post('/inquiry-review/sessions/:id/analyze', { preHandler: requirePermission('performance:review') }, async (request, reply) => {

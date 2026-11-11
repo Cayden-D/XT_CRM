@@ -1,3 +1,4 @@
+import { buyerLabel } from './buyerLabel'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import './1688.css'
 import { AlertCircle, Sparkles, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, MessageSquareText, Paperclip, PenLine, Plus, Save, ListFilter, Search, ShieldCheck, Store, Tag as TagIcon, Trash2, X } from 'lucide-react'
@@ -17,7 +18,7 @@ const message = (cause:unknown) => cause instanceof Error ? cause.message : '操
 const permission = (user:SessionUser,name:string) => (user.permissions||[]).some(v => v==='*'||v===name||v===`${name.split(':')[0]}:*`)
 const yuan = (v:number|null) => v==null ? '—' : `¥${v.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`
 const dateTime = (v:string|null) => v ? new Date(v).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'
-const label = (c:{name:string|null;buyer_tail:string}) => c.name || `买家 …${c.buyer_tail}`
+const label = (c:{name:string|null;buyer_tail:string;buyer_nick?:string|null}) => buyerLabel(c)
 const typeNames = { prospect:'未购买', new:'新客户', returning:'老客户', loyal:'忠诚客户' } as const
 const levelNames = { normal:'普通客户', platinum:'白金客户', vip:'VIP 客户' } as const
 const priceNames = { low:'低价值', mid:'一般价值', high:'高价值' } as const
@@ -149,7 +150,7 @@ function DetailDrawer({id,options,canUpdate,canChat,close,changed,setError,setNo
     setForm({revision:c.revision,name:c.name,wangwangId:c.wangwang_id,phone:c.phone,wechat:c.wechat,email:c.email,qq:c.qq,address:c.address,memberIdentity:c.member_identity,purchaseType:c.purchase_type,salesChannels:c.sales_channels,cycleMode:c.cycle_mode,cycleDays:c.cycle_days,note:c.note,accountId:c.account_id,ownerAgentId:c.owner_source==='manual'?c.owner_agent_id:'auto'})
     setAgents((await getShopAgents(c.connection_id)).data)}catch(cause){setError(message(cause))}},[id,setError])
   useEffect(()=>{void load()},[load])
-  useAiFocusPart({ customerId: id, customerName: data ? data.customer.name || data.customer.wangwang_id || `买家尾号 ${data.customer.buyer_tail}` : undefined })
+  useAiFocusPart({ customerId: id, customerName: data ? data.customer.name || data.customer.wangwang_id || buyerLabel(data.customer) : undefined })
   useEffect(()=>{if(!accountSearch.trim()){setAccounts([]);return};const timer=setTimeout(()=>{getAccounts({search:accountSearch.trim()}).then(r=>setAccounts(r.data)).catch(()=>setAccounts([]))},300);return()=>clearTimeout(timer)},[accountSearch])
   async function save(){if(!form)return;setBusy(true);try{await saveProfile(id,form);await setCustomerTags(id,tagIds);setNotice('客户资料已保存');changed();await load()}catch(cause){setError(message(cause))}finally{setBusy(false)}}
   async function addTag(){if(!newTag.trim())return;try{const t=(await createTag(newTag.trim())).data;setTagIds(v=>[...v,t.id]);setNewTag('');changed()}catch(cause){setError(message(cause))}}

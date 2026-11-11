@@ -1,3 +1,4 @@
+import { buyerLabel } from './buyerLabel'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Note } from './ui'
 import { ChevronLeft, ChevronRight, LoaderCircle, MessageSquareText, Search, ShieldAlert, Store, X } from 'lucide-react'
@@ -47,7 +48,8 @@ export function WangwangButton({buyerId,setError,label}:{buyerId:string;setError
 /** Message timeline of one session: buyer text is masked by the platform; agent text is shown masked, with risk flags. */
 export function Timeline({data,focus}:{data:ChatDetail;focus?:string}) {
   return <><ol className="perf-timeline">{data.messages.map(m=><li key={m.uuid} className={`${m.direction===1?'buyer':'agent'} ${m.uuid===focus?'focus':''}`}>
-    <time>{clock(m.sent_at)}</time><span>{m.text_masked?<q>{m.text_masked}</q>:`${m.direction===1?'买家':'客服'}${nonText(m)?'发送了图片/卡片等':`消息${m.length?`（${m.length} 字）`:''}`}`}</span>
+    <time>{clock(m.sent_at)}</time><span>{m.text_masked&&!(m.text_masked==='[图片]'&&m.image_urls?.length)?<q>{m.text_masked}</q>:m.image_urls?.length?null:`${m.direction===1?'买家':'客服'}${nonText(m)?'发送了图片/卡片等':`消息${m.length?`（${m.length} 字）`:''}`}`}
+      {m.image_urls?.length?<span className="perf-images">{m.image_urls.map(url=><a key={url} href={url} target="_blank" rel="noopener noreferrer" title="查看原图"><img src={url} alt={`${m.direction===1?'买家':'客服'}发送的图片`} loading="lazy" referrerPolicy="no-referrer"/></a>)}</span>:null}</span>
     {m.message_types.filter(t=>t!=='正常消息').map(t=>t==='其他消息'?<em key={t} title={OTHER_HINT}>内容不可见</em>:<em key={t}>{t}</em>)}{m.keywords.map(k=><em key={k.word} className="keyword">{k.word}</em>)}
     {(m.flags??[]).filter(f=>f!=='short'&&f!=='image').map(f=><em key={f} className={(OFFSITE_FLAGS as readonly string[]).includes(f)?'risk':'keyword'}>{flagNames[f]??f}</em>)}</li>)}</ol>
   {!data.messages.length&&<p className="shop-note">该会话没有消息记录。</p>}</>
@@ -77,7 +79,7 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
       <select className="perf-select" aria-label="筛选客服" value={agentId} onChange={e=>setAgentId(e.target.value)}><option value="">全部客服</option>{agents.map(a=><option key={a.id} value={a.id}>{agentLabel(a)}</option>)}</select>
     </div>
     {loading?<div className="shop-empty"><LoaderCircle size={26} className="spin"/><p>正在读取…</p></div>:<div className="shop-table-scroll"><table className="shop-table perf-table"><thead><tr><th>客服</th><th>日期</th><th>买家</th><th>分类</th><th>买家 / 客服消息</th><th>首次响应</th><th>未回复</th><th>相关订单</th><th/></tr></thead>
-      <tbody>{rows.map(row=><tr key={row.id}><td><strong>{agentLabel(row)}</strong></td><td>{row.chat_date}<small>{clock(row.started_at)} 起</small></td><td>…{row.buyer_tail}{row.new_customer&&<small>新客</small>}</td>
+      <tbody>{rows.map(row=><tr key={row.id}><td><strong>{agentLabel(row)}</strong></td><td>{row.chat_date}<small>{clock(row.started_at)} 起</small></td><td>{buyerLabel(row)}{row.new_customer&&<small>新客</small>}</td>
         <td><span className={`shop-status ${row.category==='paid'?'positive':row.category==='no_order'?'':row.category==='after_sales'?'':'warning'}`}>{chatCategoryNames[row.category]}</span></td>
         <td>{row.buyer_messages} / {row.agent_messages}{row.other_agent_messages?<small>其他 {row.other_agent_messages}</small>:null}</td><td>{seconds(row.first_response_seconds)}</td><td>{row.unanswered||'—'}</td>
         <td>{row.orders_after?.length?row.orders_after.map(id=><small key={id}><button className="perf-order-link" title="查看订单详情" onClick={()=>setOrder(id)}>{id}</button>{row.paid_after?.includes(id)?' 已付款':''}</small>):'—'}</td>
@@ -85,7 +87,7 @@ export function ChatAnalysisView({connectionId,from,to,setError}:{connectionId:s
       {!rows.length&&<div className="shop-empty"><Store size={28}/><p>没有符合条件的会话</p></div>}</div>}
     <Pager page={page} setPage={setPage} more={rows.length===50} loading={loading}/>
     <Note>分类按会话首轮买家消息后的归属窗口内是否下单、付款判断；售后指此前 90 天内有已付款订单。平台不提供买家消息原文，只显示时间与字数；客服消息显示遮盖了联系方式的文本（保留 90 天，文本采集上线前的消息没有文本）。</Note>
-    {detail&&<Drawer title={`${agentLabel(detail.row)} · ${detail.row.chat_date} · 买家 …${detail.row.buyer_tail}`} close={()=>setDetail(null)}>
+    {detail&&<Drawer title={`${agentLabel(detail.row)} · ${detail.row.chat_date} · ${buyerLabel(detail.row)}`} close={()=>setDetail(null)}>
       <div className="perf-drawer-actions"><WangwangButton buyerId={detail.row.buyer_id} setError={setError} label="旺旺联系买家"/>
         {detail.row.orders_after?.length?<span className="perf-drawer-orders">相关订单：{detail.row.orders_after.map(id=><button key={id} className="perf-order-link" onClick={()=>setOrder(id)}>{id}</button>)}</span>:null}</div>
       <Timeline data={detail.data}/>
@@ -148,10 +150,10 @@ export function QualityView({connectionId,from,to,setError}:{connectionId:string
       {!data.agents.length&&<div className="shop-empty"><Store size={28}/><p>本期没有客服消息</p></div>}</div>
     <h3 className="perf-chart-title"><ShieldAlert size={17}/>站外交易风险记录</h3>
     {data.risks.length?<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>时间</th><th>客服</th><th>买家</th><th>风险</th><th>客服消息（已遮盖）</th><th/></tr></thead>
-      <tbody>{data.risks.map(r=><tr key={r.uuid}><td>{dateTime(r.sent_at)}</td><td>{r.login_id.split(':').pop()}</td><td>{r.buyer_name??`买家 …${r.buyer_tail}`}</td>
+      <tbody>{data.risks.map(r=><tr key={r.uuid}><td>{dateTime(r.sent_at)}</td><td>{r.login_id.split(':').pop()}</td><td>{buyerLabel(r)}</td>
         <td>{r.flags.filter(f=>(OFFSITE_FLAGS as readonly string[]).includes(f)).map(f=><span key={f} className="shop-status warning" style={{marginRight:4}}>{flagNames[f]}</span>)}</td>
         <td className="perf-quote">{r.text_masked??'—'}</td>
-        <td><button className="shop-icon" title="查看会话" aria-label={`查看 ${r.chat_date} 会话`} onClick={()=>void open(r.session_id,r.uuid,`${r.login_id.split(':').pop()} · ${r.chat_date} · ${r.buyer_name??`买家 …${r.buyer_tail}`}`)}><MessageSquareText size={16}/></button></td></tr>)}</tbody></table></div>
+        <td><button className="shop-icon" title="查看会话" aria-label={`查看 ${r.chat_date} 会话`} onClick={()=>void open(r.session_id,r.uuid,`${r.login_id.split(':').pop()} · ${r.chat_date} · ${buyerLabel(r)}`)}><MessageSquareText size={16}/></button></td></tr>)}</tbody></table></div>
       :<p className="shop-note">本期没有发现客服发送联系方式、外部链接或站外付款用语。</p>}
     {data.curt.length>0&&<><h3 className="perf-chart-title">生硬用语（供复盘参考）</h3><ul className="perf-quote-list">{data.curt.slice(0,12).map(c=><li key={c.uuid}><time>{dateTime(c.sent_at)}</time><b>{c.login_id.split(':').pop()}</b><q>{c.text_masked}</q>
       <button className="shop-icon" title="查看会话" aria-label="查看会话" onClick={()=>void open(c.session_id,c.uuid,`${c.login_id.split(':').pop()} · 会话记录`)}><MessageSquareText size={15}/></button></li>)}</ul></>}

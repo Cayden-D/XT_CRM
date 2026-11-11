@@ -1,3 +1,4 @@
+import { buyerLabel } from './buyerLabel'
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, LoaderCircle, ReceiptText, Search, ShieldCheck, X } from 'lucide-react'
 import type { SessionUser } from './api'
@@ -65,7 +66,7 @@ export default function OrdersPage({ user }: { user: SessionUser }) {
           <td>{when(o.placed_at)}{o.paid_at && <small>付 {when(o.paid_at)}</small>}</td>
           <td><button className="orders-id" onClick={() => setOpen(o)}>{o.order_id}</button>{o.seller_memo && <small title={o.seller_memo}>备注：{o.seller_memo}</small>}</td>
           <td className="orders-product"><span title={first?.name}>{first?.name ?? '—'}</span><small>{first?.sku ? `${first.sku} · ` : ''}{o.items.length > 1 ? `共 ${o.items.length} 种 ${qty} 件` : `${qty} 件`}</small></td>
-          <td>{o.buyer_tail ? `…${o.buyer_tail}` : '—'}</td>
+          <td>{buyerLabel(o)}</td>
           <td><strong>{yuan(o.total_amount)}</strong>{o.shipping_fee > 0 && <small>含运费 {yuan(o.shipping_fee)}</small>}{o.refund_amount > 0 && <small className="orders-refund">退款 {yuan(o.refund_amount)}</small>}</td>
           <td><span className={`shop-status ${tone[o.status_group] ?? ''}`}>{statusNames[o.status] ?? o.status}</span></td>
           <td>{o.agents?.length ? o.agents.map(a => <small key={a.login_id}>{agentLabel(a)}{a.share < 1 ? ` ${Math.round(a.share * 100)}%` : ''}</small>) : <small>—</small>}</td>

@@ -50,6 +50,25 @@ function linkedOfferIds(raw: string) {
   return [...ids]
 }
 
+// Pictures are shown straight from Alibaba's image hosts; anything else stays a plain link.
+const IMAGE_HOST = /(^|\.)alicdn\.com$|^cbu-im\.oss[-a-z0-9]*\.aliyuncs\.com$/i
+const IMAGE_PATH = /\.(jpe?g|png|gif|webp)$/i
+const MAX_IMAGES = 9
+function imageUrl(raw: unknown) {
+  if (typeof raw !== 'string' || raw.length > 1000) return null
+  try {
+    const url = new URL(raw.trim())
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || !IMAGE_HOST.test(url.hostname) || !IMAGE_PATH.test(url.pathname)) return null
+    return url.href
+  } catch { return null }
+}
+/** Picture links of a message: the buyer's `urls` list, or links in the agent's own text. Must run before masking. */
+export function messageImages(log: { content?: unknown; urls?: unknown; direction?: unknown }) {
+  const candidates: unknown[] = Array.isArray(log.urls) ? log.urls.map(u => (u && typeof u === 'object' ? (u as { url?: unknown }).url : u)) : []
+  if (Number(log.direction) === 0 && typeof log.content === 'string') candidates.push(...(log.content.match(LINK) ?? []))
+  return [...new Set(candidates.map(imageUrl).filter((u): u is string => Boolean(u)))].slice(0, MAX_IMAGES)
+}
+
 export function analyzeAgentText(content: unknown, messageTypes: string[]) {
   const raw = typeof content === 'string' ? content.trim() : ''
   const flags = new Set<ChatFlag>()

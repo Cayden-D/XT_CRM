@@ -60,7 +60,7 @@ async function buyerOf(tenantId: string, buyerId: string) {
  * so changing a threshold re-segments everyone immediately.
  */
 const customerSql = (where: string, order: string, limit: string) => `WITH settings AS (SELECT * FROM cust_settings WHERE tenant_id=$1),
-  base AS (SELECT b.id,b.buyer_key,b.connection_id,right(b.buyer_key,6) AS buyer_tail,
+  base AS (SELECT b.id,b.buyer_key,b.connection_id,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,
       p.name,p.wangwang_id,p.phone,p.wechat,p.email,p.qq,p.address,p.member_identity,p.purchase_type,coalesce(p.sales_channels,'{}') AS sales_channels,coalesce(p.cycle_mode,'system') AS cycle_mode,p.cycle_days,p.note,
       p.account_id,p.owner_agent_id,p.owner_source,coalesce(p.revision,0) AS revision,
       coalesce(st.paid_orders,0) AS paid_orders,coalesce(st.paid_amount,0)::float AS paid_amount,st.avg_order_amount::float AS avg_order_amount,st.first_paid_at,st.last_paid_at,
@@ -127,7 +127,7 @@ function filters(query: z.infer<typeof listQuery>, params: unknown[]) {
     const like = `$${params.length}`
     params.push(query.search)
     const exact = `$${params.length}`
-    where.push(`(name ILIKE ${like} OR wangwang_id ILIKE ${like} OR phone ILIKE ${like} OR note ILIKE ${like} OR buyer_tail=${exact}
+    where.push(`(name ILIKE ${like} OR wangwang_id ILIKE ${like} OR phone ILIKE ${like} OR note ILIKE ${like} OR buyer_nick ILIKE ${like} OR buyer_tail=${exact}
       OR EXISTS(SELECT 1 FROM perf_orders o JOIN perf_buyer_identities i ON i.connection_id=o.connection_id AND i.open_uid=o.buyer_open_uid WHERE i.buyer_id=due.id AND o.order_id=${exact}))`)
   }
   return where.length ? `WHERE ${where.join(' AND ')}` : ''
@@ -274,9 +274,9 @@ export async function customerOpsRoutes(app: FastifyInstance) {
     const names = { prospect: '未购买', new: '新客户', returning: '老客户', loyal: '忠诚客户', normal: '普通', platinum: '白金', vip: 'VIP', low: '低', mid: '一般', high: '高', distribution: '分销', procurement: '采购' } as Record<string, string>
     await audit(tenantOf(request), request.authUser.sub, 'cust_export', query.connectionId, 'customer.export', request.id, { rows: rows.length, filters: Object.keys(query).filter(k => k !== 'connectionId') })
     return sendCsv(reply, `线上客户_${shop.display_name ?? '店铺'}_${day(new Date())}.csv`, [
-      ['买家尾号', '客户名称', '旺旺号', '电话', '微信', '邮箱', '地址', '会员身份', '购买类型', '客户类型', '等级', '客单价档', '购买次数', '累计金额', '客单价', '首次交易', '最近交易',
+      ['买家尾号', '淘宝昵称', '客户名称', '旺旺号', '电话', '微信', '邮箱', '地址', '会员身份', '购买类型', '客户类型', '等级', '客单价档', '购买次数', '累计金额', '客单价', '首次交易', '最近交易',
         '购买周期(天)', '超期未购', '询单天数', '最近咨询', '待付款订单', '待付款金额', '回访次数', '最近跟进', '下次跟进', '标签', '所属客服', '备注'],
-      ...rows.map(r => [r.buyer_tail, r.name, r.wangwang_id, r.phone, r.wechat, r.email, r.address, r.member_identity, names[r.purchase_type] ?? '', names[r.customer_type], names[r.level] ?? '', names[r.price_tier] ?? '',
+      ...rows.map(r => [r.buyer_tail, r.buyer_nick, r.name, r.wangwang_id, r.phone, r.wechat, r.email, r.address, r.member_identity, names[r.purchase_type] ?? '', names[r.customer_type], names[r.level] ?? '', names[r.price_tier] ?? '',
         r.paid_orders, r.paid_amount, r.avg_order_amount ?? '', day(r.first_paid_at), day(r.last_paid_at), r.cycle_known ? Math.round(r.cycle) : '', r.overdue ? '是' : '', r.inquiry_days, day(r.last_chat_at),
         r.unpaid_order_id ?? '', r.unpaid_amount ?? '', r.followups, day(r.last_followup_at), day(r.next_follow_up_at), (r.tag_ids as string[]).map(id => tags.get(id)).filter(Boolean).join('、'),
         r.owner_agent_id ? agents.get(r.owner_agent_id) ?? '' : '', r.note]),

@@ -17,7 +17,7 @@ export async function performanceAnalysisRoutes(app: FastifyInstance) {
     await ensureSettings(request.authUser.tenantId)
     const params = [request.authUser.tenantId, query.connectionId, query.from, query.to, scope(request), query.category ?? null, query.agentId ?? null, (query.page - 1) * 50]
     const rows = (await db.query(`WITH ${factsSql}
-      SELECT c.id,c.agent_id,c.buyer_id,ag.login_id,ag.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,c.chat_date::text AS chat_date,c.started_at,c.last_peer_at,
+      SELECT c.id,c.agent_id,c.buyer_id,ag.login_id,ag.is_main,u.display_name AS user_name,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,c.chat_date::text AS chat_date,c.started_at,c.last_peer_at,
         c.buyer_messages,c.agent_messages,c.other_agent_messages,c.auto_replies,c.transferred,c.category,c.orders_after,c.paid_after,c.new_customer,
         (SELECT round(perf_response_seconds(t.turn_at,r.reply_at,perf_response_clock(t.turn_at,settings.work_hours_enabled,settings.work_start,settings.work_end)))::int
           FROM perf_chat_turns t CROSS JOIN settings CROSS JOIN LATERAL (SELECT ${replyAtSql('t', 'c', 'settings')} AS reply_at) r
@@ -39,7 +39,7 @@ export async function performanceAnalysisRoutes(app: FastifyInstance) {
     const session = (await db.query(`SELECT s.id,s.chat_date::text AS chat_date,s.cid,ag.login_id,ag.is_main,ag.user_id FROM perf_chat_sessions s JOIN perf_agents ag ON ag.id=s.agent_id
       WHERE s.id=$1 AND s.tenant_id=$2`, [id, request.authUser.tenantId])).rows[0]
     if (!session || (ownOnly(request) && session.user_id !== request.authUser.sub)) throw new IntegrationError('NOT_FOUND', '会话不存在。', 404)
-    const messages = (await db.query('SELECT uuid,direction,sent_at,length,message_types,keywords,text_masked,flags FROM perf_chat_messages WHERE session_id=$1 ORDER BY sent_at,uuid', [id])).rows
+    const messages = (await db.query('SELECT uuid,direction,sent_at,length,message_types,keywords,text_masked,flags,image_urls FROM perf_chat_messages WHERE session_id=$1 ORDER BY sent_at,uuid', [id])).rows
     const turns = (await db.query("SELECT t.mode,t.turn_index,t.turn_at,t.reply_at,t.buyer_messages FROM perf_chat_turns t WHERE t.session_id=$1 ORDER BY t.mode,t.turn_index", [id])).rows
     return { data: { session: { id: session.id, chat_date: session.chat_date, login_id: session.login_id, is_main: session.is_main }, messages, turns } }
   })

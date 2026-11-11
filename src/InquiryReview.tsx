@@ -1,3 +1,4 @@
+import { buyerLabel } from './buyerLabel'
 import { useCallback, useEffect, useState } from 'react'
 import { LoaderCircle, Settings2, Sparkles } from 'lucide-react'
 import type { SessionUser } from './api'
@@ -42,7 +43,7 @@ export function InquiryReviewView({ user, connectionId, from, to, setError }: { 
     {loading ? <div className="shop-empty"><LoaderCircle size={24} className="spin" /></div> : !rows.length ? <div className="shop-empty"><p>{status === 'pending' ? '这段时间没有待复盘的询盘。' : '没有记录。'}</p></div> :
       <div className="shop-table-scroll"><table className="shop-table review-table"><thead><tr><th>日期</th><th>客服</th><th>买家</th><th>结果</th><th>初步判断</th><th>证据</th><th>首响</th><th>商品</th><th>状态</th></tr></thead>
         <tbody>{rows.map(r => <tr key={r.id} className="clickable" onClick={() => setOpen(r.id)}>
-          <td>{r.chat_date}</td><td>{agentLabel(r)}</td><td>尾号 {r.buyer_tail}{r.new_customer && <small>新客</small>}</td>
+          <td>{r.chat_date}</td><td>{agentLabel(r)}</td><td>{buyerLabel(r)}{r.new_customer && <small>新客</small>}</td>
           <td>{categoryNames[r.category] ?? r.category}{!r.matured && <small>观察中</small>}</td>
           <td>{reasonOf(r) ? names[reasonOf(r)!] ?? reasonOf(r) : '—'}<small>{r.final_loss_code ? '主管判断' : r.rule_loss_code ? '规则' : r.ai_loss_code ? `AI 推断·${confidenceNames[r.ai_loss_confidence ?? 'low']}` : ''}{r.finding_count > 0 ? ` · ${r.finding_count} 个问题` : ''}{r.offsite > 0 ? ' · 站外风险' : ''}</small></td>
           <td>{evidenceNames[r.evidence_level]}<small>{r.real_chars} 字{r.template_messages > 0 ? ` · 话术 ${r.template_messages} 条` : ''}</small></td>
@@ -71,7 +72,7 @@ export function ReviewDrawer({ sessionId, close, changed, setError }: { sessionI
   // Re-saving a correction (to publish it, say) stays a correction, and keeps the findings it already has.
   const correcting = changedLoss || editedFindings || review?.status === 'corrected'
   const decide = (action: 'confirm' | 'correct' | 'dismiss') => act(() => decideReview(session.id, { revision: review?.revision ?? 0, action, lossCode: loss || null, ...(editedFindings || review?.final_findings ? { findings: kept } : {}), note: note || null, publish }))
-  return <Drawer title={`${session.chat_date} · ${agentLabel(session)} · 买家尾号 ${session.buyer_tail}`} close={close}>
+  return <Drawer title={`${session.chat_date} · ${agentLabel(session)} · ${buyerLabel(session)}`} close={close}>
     <div className="review-drawer">
       <div>
         <InferenceNote />

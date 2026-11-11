@@ -57,12 +57,12 @@ export const getFlagRules = (connectionId:string) => request<{data:FlagRules}>(`
 export const saveFlagRules = (connectionId:string,rules:{flag:number;agentId:string}[]) => request<{data:FlagRules['rules']}>(`${base}/connections/${connectionId}/flag-rules`,{method:'PUT',body:JSON.stringify({rules})})
 export type ChatCategory = 'no_order'|'ordered_unpaid'|'paid'|'after_sales'
 export const chatCategoryNames: Record<ChatCategory,string> = { no_order:'未下单', ordered_unpaid:'下单未付款', paid:'促成付款', after_sales:'售后聊天' }
-export type ChatSession = { id:string; agent_id:string; buyer_id:string; login_id:string; is_main:boolean; user_name:string|null; buyer_tail:string; chat_date:string; started_at:string; last_peer_at:string; buyer_messages:number; agent_messages:number; other_agent_messages:number; auto_replies:number; transferred:boolean; category:ChatCategory; orders_after:string[]|null; paid_after:string[]|null; new_customer:boolean; first_response_seconds:number|null; unanswered:number }
-export type ChatMessage = { uuid:string; direction:0|1; sent_at:string; length:number; message_types:string[]; keywords:{word:string;count:number}[]; text_masked?:string|null; flags?:string[] }
+export type ChatSession = { id:string; agent_id:string; buyer_id:string; login_id:string; is_main:boolean; user_name:string|null; buyer_tail:string; buyer_nick?:string|null; chat_date:string; started_at:string; last_peer_at:string; buyer_messages:number; agent_messages:number; other_agent_messages:number; auto_replies:number; transferred:boolean; category:ChatCategory; orders_after:string[]|null; paid_after:string[]|null; new_customer:boolean; first_response_seconds:number|null; unanswered:number }
+export type ChatMessage = { uuid:string; direction:0|1; sent_at:string; length:number; message_types:string[]; keywords:{word:string;count:number}[]; text_masked?:string|null; flags?:string[]; image_urls?:string[] }
 export const OFFSITE_FLAGS = ['phone','wechat','qq','offsite','external_link'] as const
 export const flagNames:Record<string,string> = { phone:'手机号', wechat:'微信', qq:'QQ', offsite:'站外付款/交易', external_link:'外部链接', curt:'生硬用语', short:'极短回复', image:'图片/卡片', address:'地址/退货信息' }
 export type QualityAgent = { agent_id:string; login_id:string; is_main:boolean; user_name:string|null; messages:number; captured:number; avg_chars:number|null; short_replies:number; text_replies:number; images:number; curt:number; offsite:number }
-export type QualityRisk = { uuid:string; sent_at:string; flags:string[]; text_masked:string|null; session_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_name:string|null }
+export type QualityRisk = { uuid:string; sent_at:string; flags:string[]; text_masked:string|null; session_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_nick?:string|null; buyer_name:string|null }
 export type ReplyQuality = { agents:QualityAgent[]; risks:QualityRisk[]; curt:{uuid:string;sent_at:string;text_masked:string;session_id:string;login_id:string}[]; coverage:number|null; totals:{messages:number;captured:number;offsite:number} }
 export type ChatDetail = { session:{id:string;chat_date:string;login_id:string;is_main:boolean}; messages:ChatMessage[]; turns:{mode:'strict'|'loose';turn_index:number;turn_at:string;reply_at:string|null;buyer_messages:number}[] }
 export type OrderCredit = { agent_id:string; login_id:string; is_main:boolean; user_name:string|null; share:number; basis:CreditBasis; basis_at:string|null }
@@ -109,7 +109,7 @@ export const getReplyQuality = (connectionId:string,from:string,to:string) => re
 export type PerfKeyword = { id:string; word:string; category:string; on_platform:boolean; created_at:string; checked_at:string; created_by_name:string|null }
 export type KeywordPreset = { category:string; hint:string; words:string[] }
 export type KeywordHit = { word:string; category:string; buyer_hits:number; agent_hits:number; sessions:number; buyers:number; last_hit:string }
-export type KeywordRecent = { uuid:string; sent_at:string; direction:0|1; word:string; category:string; session_id:string; buyer_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_name:string|null }
+export type KeywordRecent = { uuid:string; sent_at:string; direction:0|1; word:string; category:string; session_id:string; buyer_id:string; chat_date:string; login_id:string; buyer_tail:string; buyer_nick?:string|null; buyer_name:string|null }
 export const getKeywords = (connectionId:string) => request<{data:PerfKeyword[];presets:KeywordPreset[]}>(`${base}/keywords?${new URLSearchParams({connectionId})}`)
 export const addKeywords = (connectionId:string,words:{word:string;category:string;offerId?:string}[]) => post<{data:{added:string[];skipped:string[];failed:{word:string;message:string}[];keywords:PerfKeyword[]}}>('/keywords',{connectionId,words})
 export const deleteKeyword = (id:string) => request<{data:PerfKeyword[]}>(`${base}/keywords/${id}`,{method:'DELETE'})
@@ -124,10 +124,10 @@ export type InquirySummary = {
   daily:{ date:string; inquiries:number; new_buyers:number; paid:number }[]; hourly:{ hour:number; inquiries:number }[]; agents:InquiryAgent[]
   keywords:{ word:string; hits:number; sessions:number }[]
 }
-export type BuyerLookup = { id:string; buyer_tail:string; first_chat_at:string|null; last_chat_at:string|null
+export type BuyerLookup = { id:string; buyer_tail:string; buyer_nick?:string|null; first_chat_at:string|null; last_chat_at:string|null
   sessions:{ id:string; chat_date:string; buyer_messages:number; agent_messages:number; login_id:string; is_main:boolean; user_name:string|null }[]
   orders:{ orders:number; paid:number; paid_amount:number; last_order_at:string|null } }
-export type KeywordSession = { id:string; chat_date:string; buyer_id:string; buyer_tail:string; buyer_name:string|null; login_id:string; is_main:boolean; user_name:string|null; buyer_messages:number; agent_messages:number; hits:number; first_hit_at:string; first_hit_uuid:string }
+export type KeywordSession = { id:string; chat_date:string; buyer_id:string; buyer_tail:string; buyer_nick?:string|null; buyer_name:string|null; login_id:string; is_main:boolean; user_name:string|null; buyer_messages:number; agent_messages:number; hits:number; first_hit_at:string; first_hit_uuid:string }
 /** Sessions in the period where a buyer message carried `word` (newest first, up to 50). */
 export const getKeywordSessions = (connectionId:string, from:string, to:string, word:string) => request<{data:KeywordSession[];hasMore:boolean}>(`${base}/inquiry/keyword-sessions?${new URLSearchParams({ connectionId, from, to, word })}`)
 export type PerfConnectionUsage = { status:string; display_name:string; orders:number; sessions:number; buyers:number; agents:number; followups:number; attachments:number; payrolls:number; locked_payrolls:number }
@@ -141,7 +141,7 @@ export const wangwangLinks = (buyerId:string) => post<{data:{ web:string; client
 export type OrderGroup = 'unpaid'|'toship'|'shipped'|'done'|'closed'|'refund'
 export type OrderRow = { order_id:string; status:string; status_group:OrderGroup|'other'; total_amount:number; product_amount:number; shipping_fee:number; refund_amount:number
   placed_at:string; paid_at:string|null; items:{ name:string; sku?:string; price:number; amount:number; quantity:number; productId?:string }[]; seller_memo:string|null; seller_flag:number|null
-  buyer_rate_status:number|null; buyer_id:string|null; buyer_tail:string|null; agents:{ login_id:string; is_main:boolean; user_name:string|null; share:number }[]|null }
+  buyer_rate_status:number|null; buyer_id:string|null; buyer_tail:string|null; buyer_nick?:string|null; agents:{ login_id:string; is_main:boolean; user_name:string|null; share:number }[]|null }
 export type OrderDetail = {
   order:{ id:string; status:string; trade_type:string|null; created_at:string|null; paid_at:string|null; delivered_at:string|null; received_at:string|null; completed_at:string|null
     total_amount:number; product_amount:number; shipping_fee:number; discount:number; coupon:number; refund:number; pay_channels:string[]; close_reason:string|null

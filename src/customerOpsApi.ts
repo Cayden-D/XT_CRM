@@ -8,7 +8,7 @@ export type Level = 'normal'|'platinum'|'vip'
 export type PriceTier = 'low'|'mid'|'high'
 export type Followup = { id?:string; content:string; method:'wangwang'|'other'; need_follow_up:boolean; next_follow_up_at:string|null; created_at:string; superseded?:boolean; created_by_name?:string|null }
 export type Customer = {
-  id:string; connection_id:string; buyer_tail:string; name:string|null; wangwang_id:string|null; phone:string|null; wechat:string|null; email:string|null; qq:string|null; address:string|null
+  id:string; connection_id:string; buyer_tail:string; buyer_nick:string|null; name:string|null; wangwang_id:string|null; phone:string|null; wechat:string|null; email:string|null; qq:string|null; address:string|null
   member_identity:string|null; purchase_type:'distribution'|'procurement'|null; sales_channels:string[]; cycle_mode:'system'|'custom'; cycle_days:number|null; note:string|null
   account_id:string|null; owner_agent_id:string|null; owner_source:'manual'|'auto'|null; revision:number
   paid_orders:number; paid_amount:number; avg_order_amount:number|null; first_paid_at:string|null; last_paid_at:string|null; avg_interval_days:number|null; inquiry_days:number; last_chat_at:string|null

@@ -154,7 +154,7 @@ try{
   const exported=await request('GET',`${base}/customers/export?connectionId=${c.id}&customerType=returning,loyal,prospect`);assert.equal(exported.statusCode,200)
   assert.match(String(exported.headers['content-type']),/text\/csv/);assert.match(String(exported.headers['content-disposition']),/filename\*=UTF-8''/)
   const csvLines=exported.body.replace(/^\ufeff/,'').split('\r\n')
-  assert.ok(exported.body.startsWith('\ufeff'));assert.ok(csvLines[0].startsWith('买家尾号,客户名称,旺旺号,电话'))
+  assert.ok(exported.body.startsWith('\ufeff'));assert.ok(csvLines[0].startsWith('买家尾号,淘宝昵称,客户名称,旺旺号,电话'))
   assert.equal(csvLines.length,1+4,'filters apply: A, E (loyal), C, D (no paid order)');assert.ok(csvLines.some(l=>l.includes('张三五金')&&l.includes('13800000000')))
   assert.ok(exported.body.includes(`"'=HYPERLINK(""x"")"`),'formula neutralised')
   assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE tenant_id=$1 AND action='customer.export'",[tenantId])).rows[0].n,1)

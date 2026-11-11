@@ -5,7 +5,7 @@ import { IntegrationError } from './1688.js'
 import { callPerformanceApi } from './1688-performance.js'
 import { computeAttributions, syncOrders, syncRefunds, type SyncContext } from './1688-performance-orders.js'
 import { assignOwners, ensureOrderBuyers, refreshCustomerStats, resolveBuyer } from './customer-ops.js'
-import { analyzeAgentText } from './chat-text.js'
+import { analyzeAgentText, messageImages } from './chat-text.js'
 
 type Json = Record<string, any>
 type Run = { id: string; tenant_id: string; connection_id: string; requested_by: string | null; trigger: 'schedule' | 'manual'; scope_days: number | null; worker_id: string; stats: Json }
@@ -133,7 +133,7 @@ async function savePeers(run: Run, agent: Agent, peers: Json[]) {
     const at = new Date(Number(peer.time))
     const openUid = typeof peer.openUid === 'string' && peer.openUid ? peer.openUid : null
     // One customer may appear under several encrypted ids; resolve through all ids seen so far.
-    const resolved = await resolveBuyer(run.tenant_id, run.connection_id, { key, openUid, adminOpenUid: peer.adminOpenUid || null, taobaoNick: peer.taobaoNick || null, at })
+    const resolved = await resolveBuyer(run.tenant_id, run.connection_id, { key, openUid, adminOpenUid: peer.adminOpenUid || null, taobaoNick: peer.taobaoNick || null, loginId: peer.loginId || null, at })
     if (resolved.merged) run.stats.mergedBuyers = (run.stats.mergedBuyers || 0) + resolved.merged
     const buyer = { id: resolved.buyerId }
     await db.query(`INSERT INTO perf_chat_sessions(tenant_id,connection_id,agent_id,buyer_id,cid,chat_date,last_peer_at)VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -222,17 +222,20 @@ async function syncSession(run: Run, session: Session) {
       const direction = Number(log.direction), msgTypes = types(log.messageTypes)
       const agentText = direction === 0 ? analyzeAgentText(log.content, msgTypes) : null
       // Re-reading fills what an earlier sync could not capture; captured text stays as stored, so purged text does not return.
-      const inserted = await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,length,message_types,keywords,text_masked,char_count,flags,linked_offer_ids)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      const inserted = await db.query(`INSERT INTO perf_chat_messages(tenant_id,connection_id,session_id,uuid,direction,sent_at,length,message_types,keywords,text_masked,char_count,flags,linked_offer_ids,image_urls)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         ON CONFLICT(connection_id,uuid) DO UPDATE SET
           text_masked=CASE WHEN perf_chat_messages.char_count IS NULL THEN excluded.text_masked ELSE perf_chat_messages.text_masked END,
           flags=CASE WHEN perf_chat_messages.char_count IS NULL THEN excluded.flags ELSE perf_chat_messages.flags END,
           char_count=coalesce(perf_chat_messages.char_count,excluded.char_count),
-          linked_offer_ids=excluded.linked_offer_ids
+          linked_offer_ids=CASE WHEN perf_chat_messages.linked_offer_ids='{}' THEN excluded.linked_offer_ids ELSE perf_chat_messages.linked_offer_ids END,
+          image_urls=CASE WHEN perf_chat_messages.image_urls='{}' THEN excluded.image_urls ELSE perf_chat_messages.image_urls END
           WHERE (perf_chat_messages.char_count IS NULL AND excluded.char_count IS NOT NULL)
-            OR (perf_chat_messages.linked_offer_ids='{}' AND excluded.linked_offer_ids<>'{}') RETURNING (xmax=0) AS inserted`,
+            OR (perf_chat_messages.linked_offer_ids='{}' AND excluded.linked_offer_ids<>'{}')
+            -- Pictures of older messages are filled in on a re-read, but never brought back once purged.
+            OR (perf_chat_messages.image_urls='{}' AND excluded.image_urls<>'{}' AND perf_chat_messages.sent_at>=now()-interval '90 days') RETURNING (xmax=0) AS inserted`,
         [run.tenant_id, run.connection_id, session.id, log.uuid, direction, sentAt, Math.max(0, Number.parseInt(String(log.length ?? 0), 10) || 0), msgTypes,
           JSON.stringify(Array.isArray(log.words) ? log.words.filter((w: Json) => w && typeof w.word === 'string').map((w: Json) => ({ word: w.word, count: Number(w.count) || 0 })) : []),
-          agentText?.text ?? null, agentText ? agentText.chars : null, agentText?.flags ?? [], agentText?.offerIds ?? []])
+          agentText?.text ?? null, agentText ? agentText.chars : null, agentText?.flags ?? [], agentText?.offerIds ?? [], messageImages(log)])
       const fresh = inserted.rows.filter(r => r.inserted).length
       saved += fresh
       run.stats.messages = (run.stats.messages || 0) + fresh
@@ -339,7 +342,7 @@ export async function runPerformanceSyncOnce(workerId = randomUUID(), connection
     }
     await syncMessages(run, scopeFrom ?? historyFrom)
     // Agent text is kept for 90 days; flags and character counts stay with the message.
-    await db.query(`UPDATE perf_chat_messages SET text_masked=NULL WHERE connection_id=$1 AND text_masked IS NOT NULL AND sent_at<now()-interval '90 days'`, [run.connection_id])
+    await db.query(`UPDATE perf_chat_messages SET text_masked=NULL,image_urls='{}' WHERE connection_id=$1 AND (text_masked IS NOT NULL OR image_urls<>'{}') AND sent_at<now()-interval '90 days'`, [run.connection_id])
     await rebuildStale(run)
     const context: SyncContext = { tenantId: run.tenant_id, connectionId: run.connection_id, backfillFrom, scopeFrom, stats: run.stats, call: caller(run), heartbeat: phase => heartbeat(run, phase) }
     await syncOrders(context, now)

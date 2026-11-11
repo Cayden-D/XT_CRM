@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { analyzeAgentText } from '../server/integrations/chat-text.js'
+import { analyzeAgentText, messageImages } from '../server/integrations/chat-text.js'
 
 // Rules checked against real agent replies (2026-10-16 backfill review); flags sorted for comparison.
 const f = (text: string, types = ['正常消息']) => analyzeAgentText(text, types).flags.sort()
@@ -37,4 +37,15 @@ for (const text of ['https://detail.1688.com/offer/######.html', 'https://x1688.
   'https://example.cn/detail.1688.com/offer/712345678901.html', 'https://trade.1688.com/order?orderId=712345678901', '订单号 712345678901', 'https://detail.1688.com/offer/123.html']) assert.deepEqual(offers(text), [], text)
 assert.deepEqual(analyzeAgentText('', ['其他消息']).offerIds, [])
 assert.deepEqual(analyzeAgentText('https://img.alicdn.com/imgextra/i4/2218/O1CN01.jpg', ['正常消息']).offerIds, [])
-console.log(JSON.stringify({ cases: cases.length, masking: 'ok', reclassifyMasked: 'ok', offerLinks: 'ok' }))
+// Pictures: the buyer's urls list and the agent's own image links, from Alibaba's image hosts only.
+const buyerPic = 'https://cbu-im.oss-accelerate.aliyuncs.com/webim/e95f19224d7847b9db15e3af8cbe23b3.png'
+const agentPic = 'https://img.alicdn.com/imgextra/i3/2218207153733/O1CN01cCeUfxc0PdJ2b8N1_!!2218207153733-2-ampmedia.png'
+assert.deepEqual(messageImages({ direction: 1, content: '---***---', urls: [{ url: buyerPic }, { url: buyerPic }] }), [buyerPic], 'from the list, once')
+assert.deepEqual(messageImages({ direction: 0, content: agentPic }), [agentPic], 'digits in the path survive: taken before masking')
+assert.equal(analyzeAgentText(agentPic, ['正常消息']).text, '[图片]')
+assert.deepEqual(messageImages({ direction: 0, content: `看这个 ${agentPic} 和 https://detail.1688.com/offer/712345678901.html` }), [agentPic], 'only picture links')
+for (const bad of ['http://img.alicdn.com/a.png', 'https://img.alicdn.com.evil.cn/a.png', 'https://evil.cn/img.alicdn.com/a.png', 'https://img.alicdn.com/a.html', 'https://user@img.alicdn.com/a.png', 'https://other-bucket.oss-cn-hangzhou.aliyuncs.com/a.png'])
+  assert.deepEqual(messageImages({ direction: 1, urls: [{ url: bad }] }), [], bad)
+assert.deepEqual(messageImages({ direction: 1, content: agentPic }), [], 'buyer text is masked by the platform and never read')
+assert.equal(messageImages({ direction: 1, urls: Array.from({ length: 12 }, (_, i) => ({ url: `https://cbu01.alicdn.com/img/${i}.jpg` })) }).length, 9)
+console.log(JSON.stringify({ cases: cases.length, masking: 'ok', reclassifyMasked: 'ok', offerLinks: 'ok', images: 'ok' }))

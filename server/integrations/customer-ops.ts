@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg'
 import { db } from '../db.js'
 
-type Peer = { key: string; openUid: string | null; adminOpenUid: string | null; taobaoNick: string | null; at: Date }
+type Peer = { key: string; openUid: string | null; adminOpenUid: string | null; taobaoNick: string | null; loginId?: string | null; at: Date }
 
 /**
  * Moves everything attached to `dropId` onto `keepId` and deletes the duplicate buyer.
@@ -29,9 +29,13 @@ export async function mergeBuyers(client: PoolClient, keepId: string, dropId: st
   await client.query('DELETE FROM perf_buyers WHERE id=$1', [dropId])
 }
 
+const buyerName = (value: unknown) => typeof value === 'string' && value.trim() && value.trim().length <= 64 ? value.trim() : null
+
 /** Finds (or creates) the buyer for a chat peer through every encrypted id already seen, merging duplicates. */
 export async function resolveBuyer(tenantId: string, connectionId: string, peer: Peer) {
   const uids = [...new Set([peer.openUid, peer.adminOpenUid].filter((v): v is string => Boolean(v)))]
+  // Names as the conversation list gives them; the latest one wins, an empty one never clears a known name.
+  const nick = buyerName(peer.taobaoNick), loginId = buyerName(peer.loginId)
   const client = await db.connect()
   try {
     await client.query('BEGIN')
@@ -41,17 +45,18 @@ export async function resolveBuyer(tenantId: string, connectionId: string, peer:
       WHERE i.connection_id=$1 AND i.open_uid=ANY($2)`, [connectionId, uids])).rows : []
     let buyerId: string
     if (!found.length) {
-      buyerId = (await client.query(`INSERT INTO perf_buyers(tenant_id,connection_id,buyer_key,open_uid,admin_open_uid,taobao_nick,first_chat_at,last_chat_at)VALUES($1,$2,$3,$4,$5,$6,$7,$7)
+      buyerId = (await client.query(`INSERT INTO perf_buyers(tenant_id,connection_id,buyer_key,open_uid,admin_open_uid,taobao_nick,login_id,first_chat_at,last_chat_at)VALUES($1,$2,$3,$4,$5,$6,$8,$7,$7)
         ON CONFLICT(connection_id,buyer_key) DO UPDATE SET open_uid=coalesce(excluded.open_uid,perf_buyers.open_uid),admin_open_uid=coalesce(excluded.admin_open_uid,perf_buyers.admin_open_uid),
+        taobao_nick=coalesce(excluded.taobao_nick,perf_buyers.taobao_nick),login_id=coalesce(excluded.login_id,perf_buyers.login_id),
         first_chat_at=least(perf_buyers.first_chat_at,excluded.first_chat_at),last_chat_at=greatest(perf_buyers.last_chat_at,excluded.last_chat_at) RETURNING id`,
-      [tenantId, connectionId, peer.key, peer.openUid, peer.adminOpenUid, peer.openUid ? null : peer.taobaoNick, peer.at])).rows[0].id
+      [tenantId, connectionId, peer.key, peer.openUid, peer.adminOpenUid, nick, peer.at, loginId])).rows[0].id
     } else {
       // Prefer the buyer keyed by the main-account id; fold the others into it.
       const keep = found.find(f => f.buyer_key === peer.adminOpenUid) ?? found[0]
       for (const other of found) if (other.buyer_id !== keep.buyer_id) await mergeBuyers(client, keep.buyer_id, other.buyer_id)
       buyerId = keep.buyer_id
-      await client.query(`UPDATE perf_buyers SET open_uid=coalesce($2,open_uid),admin_open_uid=coalesce($3,admin_open_uid),
-        first_chat_at=least(coalesce(first_chat_at,$4),$4),last_chat_at=greatest(coalesce(last_chat_at,$4),$4) WHERE id=$1`, [buyerId, peer.openUid, peer.adminOpenUid, peer.at])
+      await client.query(`UPDATE perf_buyers SET open_uid=coalesce($2,open_uid),admin_open_uid=coalesce($3,admin_open_uid),taobao_nick=coalesce($5,taobao_nick),login_id=coalesce($6,login_id),
+        first_chat_at=least(coalesce(first_chat_at,$4),$4),last_chat_at=greatest(coalesce(last_chat_at,$4),$4) WHERE id=$1`, [buyerId, peer.openUid, peer.adminOpenUid, peer.at, nick, loginId])
     }
     for (const uid of uids) await client.query('INSERT INTO perf_buyer_identities(connection_id,open_uid,buyer_id)VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [connectionId, uid, buyerId])
     await client.query('COMMIT')

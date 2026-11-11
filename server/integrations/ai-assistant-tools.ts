@@ -47,7 +47,7 @@ async function names(ctx: AssistantContext): Promise<Names> {
   const agents = ctx.connectionId ? (await db.query('SELECT id,login_id FROM perf_agents WHERE connection_id=$1', [ctx.connectionId])).rows : []
   return { tags: new Map(tags.map(t => [t.id, t.name])), agents: new Map(agents.map(a => [a.id, a.login_id])) }
 }
-const customerName = (r: Record<string, unknown>) => (r.name ?? r.wangwang_id ?? `买家尾号 ${r.buyer_tail}`) as string
+const customerName = (r: Record<string, unknown>) => (r.name ?? r.wangwang_id ?? r.buyer_nick ?? `买家尾号 ${r.buyer_tail}`) as string
 const customerRow = (r: Record<string, unknown>, n?: Names) => ({
   ...(n ? { tags: (r.tag_ids as string[] ?? []).map(id => n.tags.get(id)).filter(Boolean),
     owner: r.owner_agent_id ? `${n.agents.get(r.owner_agent_id as string) ?? '其他客服'}${r.owner_source === 'manual' ? '（手动指定）' : '（自动分配）'}` : undefined } : {}),
@@ -176,7 +176,7 @@ const tools = [
         notes: '文本覆盖率低于 80% 时指标仅供参考；生硬用语与极短回复只是复盘提示，不计入绩效；手机号与地址一起出现（退货/寄样地址）不算风险',
         agents: q.agents.map(a => ({ agent: a.login_id, mainAccount: a.is_main || undefined, staff: a.user_name, manualMessages: a.messages, avgChars: a.avg_chars,
           shortReplyRate: a.text_replies ? Math.round(a.short_replies / a.text_replies * 1000) / 1000 : null, imagesOrCards: a.images, curt: a.curt, offsiteRisks: a.offsite })),
-        offsiteRisks: q.risks.slice(0, 20).map(r => ({ at: r.sent_at, agent: String(r.login_id).split(':').pop(), customerId: r.buyer_id, customer: r.buyer_name ?? `买家尾号 ${r.buyer_tail}`,
+        offsiteRisks: q.risks.slice(0, 20).map(r => ({ at: r.sent_at, agent: String(r.login_id).split(':').pop(), customerId: r.buyer_id, customer: r.buyer_name ?? r.buyer_nick ?? `买家尾号 ${r.buyer_tail}`,
           types: (r.flags as string[]).filter(f => ['phone', 'wechat', 'qq', 'offsite', 'external_link'].includes(f)).map(f => FLAG_NAMES[f]), text: r.text_masked })),
         curtExamples: q.curt.slice(0, 10).map(c => ({ at: c.sent_at, agent: String(c.login_id).split(':').pop(), text: c.text_masked })),
       }
@@ -198,7 +198,7 @@ const tools = [
         from, to, notes: '1688 只在关键词加入后的新消息上标记命中，加入前的历史消息不会补标；词库为空时不会有任何命中',
         library: library.map(k => ({ word: k.word, category: k.category, addedAt: k.created_at, onPlatform: k.on_platform })),
         words: pick(h.words).map(w => ({ word: w.word, category: w.category, buyerMentions: w.buyer_hits, agentMentions: w.agent_hits, sessions: w.sessions, buyers: w.buyers, lastHit: w.last_hit })),
-        recent: pick(h.recent).slice(0, 20).map(r => ({ at: r.sent_at, word: r.word, category: r.category, by: r.direction === 1 ? '买家' : '客服', agent: String(r.login_id).split(':').pop(), customerId: r.buyer_id, customer: r.buyer_name ?? `买家尾号 ${r.buyer_tail}` })),
+        recent: pick(h.recent).slice(0, 20).map(r => ({ at: r.sent_at, word: r.word, category: r.category, by: r.direction === 1 ? '买家' : '客服', agent: String(r.login_id).split(':').pop(), customerId: r.buyer_id, customer: r.buyer_name ?? r.buyer_nick ?? `买家尾号 ${r.buyer_tail}` })),
       }
     },
   }),
@@ -307,7 +307,7 @@ const tools = [
 async function listed(ctx: AssistantContext, ids: string[]) {
   const { ids: unique, connectionId } = await customersOf(ctx.tenantId, ids)
   if (connectionId !== needShop(ctx)) throw new Error('这些客户不属于当前店铺。')
-  const rows = (await db.query(`SELECT b.id,p.name,p.wangwang_id,right(b.buyer_key,6) AS buyer_tail FROM perf_buyers b LEFT JOIN cust_profiles p ON p.buyer_id=b.id WHERE b.id=ANY($1::uuid[])`, [unique])).rows
+  const rows = (await db.query(`SELECT b.id,p.name,p.wangwang_id,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick FROM perf_buyers b LEFT JOIN cust_profiles p ON p.buyer_id=b.id WHERE b.id=ANY($1::uuid[])`, [unique])).rows
   const byId = new Map(rows.map(r => [r.id, customerName(r)]))
   return unique.map(id => ({ id, name: byId.get(id)! }))
 }

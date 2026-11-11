@@ -30,7 +30,7 @@ const audit = (request: FastifyRequest, action: string, entityId: string, data: 
   [tenant(request), request.authUser.sub, action, entityId, JSON.stringify(data), request.id])
 /** A buyer of this tenant; with own-only access, only buyers the user's bound agents have talked to. */
 async function buyerFor(request: FastifyRequest, id: string) {
-  const buyer = (await db.query(`SELECT b.id,b.connection_id,b.buyer_key,b.open_uid,b.first_chat_at,b.last_chat_at FROM perf_buyers b WHERE b.id=$1 AND b.tenant_id=$2
+  const buyer = (await db.query(`SELECT b.id,b.connection_id,b.buyer_key,b.open_uid,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,b.first_chat_at,b.last_chat_at FROM perf_buyers b WHERE b.id=$1 AND b.tenant_id=$2
     AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM perf_chat_sessions s JOIN perf_agents a ON a.id=s.agent_id WHERE s.buyer_id=b.id AND a.user_id=$3))`, [id, tenant(request), scope(request)])).rows[0]
   if (!buyer) throw new IntegrationError('NOT_FOUND', '买家不存在。', 404)
   return buyer
@@ -75,14 +75,14 @@ export async function chatInquiryRoutes(app: FastifyInstance) {
   app.get('/inquiry/keyword-sessions', { preHandler: readScope }, async request => {
     const q = reportQuery.extend({ word: z.string().trim().min(1).max(50) }).parse(request.query)
     await ensureConnection(tenant(request), q.connectionId)
-    const rows = (await db.query(`SELECT s.id,s.chat_date::text AS chat_date,s.buyer_id,right(b.buyer_key,6) AS buyer_tail,p.name AS buyer_name,
+    const rows = (await db.query(`SELECT s.id,s.chat_date::text AS chat_date,s.buyer_id,right(b.buyer_key,6) AS buyer_tail,coalesce(b.taobao_nick,b.login_id) AS buyer_nick,p.name AS buyer_name,
         ag.login_id,ag.is_main,u.display_name AS user_name,s.buyer_messages,s.agent_messages,
         sum(coalesce((k->>'count')::int,1))::int AS hits,min(m.sent_at) AS first_hit_at,(array_agg(m.uuid ORDER BY m.sent_at))[1] AS first_hit_uuid
       FROM perf_chat_messages m JOIN perf_chat_sessions s ON s.id=m.session_id JOIN perf_agents ag ON ag.id=s.agent_id JOIN perf_buyers b ON b.id=s.buyer_id
         LEFT JOIN cust_profiles p ON p.buyer_id=b.id LEFT JOIN users u ON u.id=ag.user_id CROSS JOIN LATERAL jsonb_array_elements(m.keywords) k
       WHERE s.tenant_id=$1 AND s.connection_id=$2 AND s.chat_date BETWEEN $3::date AND $4::date AND m.direction=1 AND m.keywords<>'[]'::jsonb AND k->>'word'=$5
         AND ($6::uuid IS NULL OR ag.user_id=$6)
-      GROUP BY s.id,b.buyer_key,p.name,ag.login_id,ag.is_main,u.display_name ORDER BY min(m.sent_at) DESC LIMIT 51`,
+      GROUP BY s.id,b.buyer_key,b.taobao_nick,b.login_id,p.name,ag.login_id,ag.is_main,u.display_name ORDER BY min(m.sent_at) DESC LIMIT 51`,
     [tenant(request), q.connectionId, q.from, q.to, q.word, scope(request)])).rows
     return { data: rows.slice(0, 50), hasMore: rows.length > 50 }
   })
@@ -107,7 +107,7 @@ export async function chatInquiryRoutes(app: FastifyInstance) {
       WHERE s.buyer_id=$1 AND ($2::uuid IS NULL OR a.user_id=$2) ORDER BY s.chat_date DESC LIMIT 30`, [buyer.id, scope(request)])).rows
     const orders = (await db.query(`SELECT count(*)::int AS orders,count(*) FILTER (WHERE o.paid_at IS NOT NULL)::int AS paid,coalesce(sum(o.total_amount) FILTER (WHERE o.paid_at IS NOT NULL),0)::float AS paid_amount,max(o.placed_at) AS last_order_at
       FROM perf_orders o WHERE o.connection_id=$1 AND o.buyer_open_uid IN (SELECT open_uid FROM perf_buyer_identities WHERE buyer_id=$2 UNION SELECT $3)`, [buyer.connection_id, buyer.id, buyer.open_uid ?? buyer.buyer_key])).rows[0]
-    return { data: { id: buyer.id, buyer_tail: String(buyer.buyer_key).slice(-6), first_chat_at: buyer.first_chat_at, last_chat_at: buyer.last_chat_at, sessions, orders } }
+    return { data: { id: buyer.id, buyer_tail: String(buyer.buyer_key).slice(-6), buyer_nick: buyer.buyer_nick, first_chat_at: buyer.first_chat_at, last_chat_at: buyer.last_chat_at, sessions, orders } }
   })
 
   // Opens a Wangwang chat with the buyer: decrypts on this click only and returns the chat links (nothing stored).
