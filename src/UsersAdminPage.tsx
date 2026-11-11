@@ -56,7 +56,7 @@ export default function UsersAdminPage({user}:{user:SessionUser}) {
           <td>{(!locked || self) && <button className="shop-button" disabled={Boolean(busy)} onClick={() => setResetting(a)}>{busy === a.id ? <LoaderCircle size={14} className="spin"/> : <KeyRound size={14}/>}重置密码</button>}</td>
         </tr> })}</tbody></table></div>}
     {!loading && scope === 'team' && !accounts.length && <div className="shop-empty">还没有子账号，点「开设账号」为团队成员开设。</div>}
-    <Note label="角色说明">{scope === 'team' ? '这里只显示你开设的子账号，可分配「外贸业务员」或「跟单员」。' : '「管理员」可以使用全部业务功能（首页、客户、商品、绩效与工资、设置），但不能开设或管理账号。销售经理可以开设自己的子账号（外贸业务员、跟单员），「所属主管」显示由谁开设。'}停用、重置密码、调整角色会让该账号已登录的会话立即失效。</Note>
+    <Note label="角色说明">{scope === 'team' ? '这里只显示你开设的子账号，可分配「业务员」或「跟单员」。' : '「管理员」可以使用全部业务功能（首页、客户、商品、绩效与工资、设置），但不能开设或管理账号。销售经理可以开设自己的子账号（业务员、跟单员），「所属主管」显示由谁开设。'}停用、重置密码、调整角色会让该账号已登录的会话立即失效。</Note>
     {creating && <CreateDialog roles={roles} close={() => setCreating(false)} created={(account, password) => { setCreating(false); setAccounts(list => [...list, account]); setIssued({ title:'账号已开设', email:account.email, password }) }}/>}
     {resetting && <ResetDialog account={resetting} self={resetting.id === me} close={() => setResetting(null)} done={password => { const a = resetting; setResetting(null); if (a.id === me) { window.dispatchEvent(new Event('crm:unauthorized')); return } setIssued({ title:'密码已重置', email:a.email, password }) }}/>}
     {issued && <Issued {...issued} close={() => setIssued(null)}/>}

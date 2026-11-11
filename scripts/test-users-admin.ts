@@ -90,7 +90,7 @@ try {
   void otherBoss
 
   // 子账号: a supervisor opens and manages only their own team, with team roles only.
-  for (const [code, name, perms] of [['sales_manager', '销售经理', ['user:manage_team', 'dashboard:*']], ['sales_rep', '外贸业务员', ['dashboard:read']], ['order_specialist', '跟单员', ['order:*']]] as const)
+  for (const [code, name, perms] of [['sales_manager', '销售经理', ['user:manage_team', 'dashboard:*']], ['sales_rep', '业务员', ['dashboard:read']], ['order_specialist', '跟单员', ['order:*']]] as const)
     await db.query('INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id,code) DO UPDATE SET permissions=excluded.permissions', [t1.id, code, name, JSON.stringify(perms)])
   const openManager = async (email: string) => { const r = await call('POST', '/api/users', boss, { email, displayName: email.split('@')[0], password: 'Manager-team-1', role: 'sales_manager' }); assert.equal(r.statusCode, 200, r.body); return { id: r.json().data.id as string, token: await tokenOf(email, 'Manager-team-1') } }
   const lead = await openManager('lead@users.test'), rival = await openManager('rival@users.test')

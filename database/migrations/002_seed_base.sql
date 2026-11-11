@@ -10,7 +10,7 @@ FROM tenants t
 CROSS JOIN (VALUES
   ('super_admin', '超级管理员', '["*"]'),
   ('sales_manager', '销售经理', '["dashboard:*","lead:*","account:*","opportunity:*","quote:approve","report:read"]'),
-  ('sales_rep', '外贸业务员', '["dashboard:read","lead:own","account:own","opportunity:own","quote:own","order:read"]'),
+  ('sales_rep', '业务员', '["dashboard:read","lead:own","account:own","opportunity:own","quote:own","order:read"]'),
   ('order_specialist', '跟单员', '["order:*","fulfillment:*","account:read"]'),
   ('finance', '财务人员', '["order:read","payment:*","report:finance"]'),
   ('executive', '管理层', '["dashboard:*","report:*","account:read","opportunity:read"]')
