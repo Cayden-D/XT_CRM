@@ -5,7 +5,7 @@ import { request, type SessionUser } from './api'
 import './1688.css'
 
 type Role = { code:string; name:string; permissions:string[] }
-type Account = { id:string; email:string; display_name:string; mobile:string|null; status:'active'|'disabled'|'invited'; last_login_at:string|null; created_at:string; roles:{code:string;name:string}[] }
+type Account = { id:string; email:string; display_name:string; mobile:string|null; status:'active'|'disabled'|'invited'; last_login_at:string|null; created_at:string; roles:{code:string;name:string}[]; parent_name?:string|null }
 const base = '/api/users'
 const json = (method:string, body:unknown) => ({ method, body:JSON.stringify(body) })
 const message = (cause:unknown) => cause instanceof Error ? cause.message : '操作未完成，请稍后重试。'
@@ -20,9 +20,9 @@ const passwordProblem = (v:string) => v.length < 10 ? '至少 10 位' : !/[A-Za-
 
 /** 账户管理: the super administrator opens accounts (default: 管理员), changes roles, disables and resets passwords. */
 export default function UsersAdminPage({user}:{user:SessionUser}) {
-  const [accounts, setAccounts] = useState<Account[]>([]), [roles, setRoles] = useState<Role[]>([]), [loading, setLoading] = useState(true), [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('')
+  const [accounts, setAccounts] = useState<Account[]>([]), [roles, setRoles] = useState<Role[]>([]), [loading, setLoading] = useState(true), [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [scope, setScope] = useState<'all'|'team'>('all')
   const [creating, setCreating] = useState(false), [resetting, setResetting] = useState<Account|null>(null), [issued, setIssued] = useState<{title:string;email:string;password:string}|null>(null)
-  const load = useCallback(async () => { setLoading(true); try { const r = await request<{data:Account[];roles:Role[]}>(base); setAccounts(r.data); setRoles(r.roles); setError('') } catch (cause) { setError(message(cause)) } finally { setLoading(false) } }, [])
+  const load = useCallback(async () => { setLoading(true); try { const r = await request<{data:Account[];roles:Role[];scope:'all'|'team'}>(base); setAccounts(r.data); setRoles(r.roles); setScope(r.scope); setError('') } catch (cause) { setError(message(cause)) } finally { setLoading(false) } }, [])
   useEffect(() => { void load() }, [load])
   async function update(account:Account, change:{role?:string;status?:'active'|'disabled'}) {
     setBusy(account.id); setError(''); setNotice('')
@@ -36,25 +36,27 @@ export default function UsersAdminPage({user}:{user:SessionUser}) {
   const isSuper = (a:Account) => a.roles.some(r => r.code === 'super_admin')
   const active = accounts.filter(a => a.status === 'active').length
   return <div className="shop-page users-admin">
-    <div className="shop-page-heading"><div><p>{accounts.length} 个账号 · {active} 个启用中</p></div>
+    <div className="shop-page-heading"><div><p>{scope === 'team' ? '我的子账号 · ' : ''}{accounts.length} 个账号 · {active} 个启用中</p></div>
       <button className="shop-button primary" onClick={() => setCreating(true)}><UserPlus size={16}/>开设账号</button>
       <button className="shop-icon" title="刷新" aria-label="刷新" disabled={loading} onClick={() => void load()}><RefreshCw size={17}/></button></div>
     {error && <p className="shop-alert error" role="alert"><AlertCircle size={16}/>{error}</p>}
     {notice && <p className="shop-alert" role="status"><Check size={16}/>{notice}</p>}
     {loading && !accounts.length ? <div className="shop-empty"><LoaderCircle className="spin"/></div>
-      : <div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>姓名</th><th>登录邮箱</th><th>角色</th><th>状态</th><th>最近登录</th><th>开设时间</th><th/></tr></thead>
+      : <div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>姓名</th><th>登录邮箱</th><th>角色</th>{scope === 'all' && <th>所属主管</th>}<th>状态</th><th>最近登录</th><th>开设时间</th><th/></tr></thead>
         <tbody>{accounts.map(a => { const self = a.id === me, locked = isSuper(a); return <tr key={a.id} className={a.status !== 'active' ? 'users-disabled' : ''}>
           <td><strong>{a.display_name}</strong>{self && <span className="shop-status positive users-self">我</span>}{a.mobile && <small className="users-sub">{a.mobile}</small>}</td>
           <td>{a.email}</td>
           <td>{locked || self ? <span className={`shop-status ${locked ? 'positive' : ''}`}>{a.roles.map(r => r.name).join('、') || '无角色'}</span>
             : <select aria-label={`${a.display_name} 的角色`} value={a.roles[0]?.code ?? ''} disabled={Boolean(busy)} onChange={e => void update(a, { role:e.target.value })}>
               {!a.roles.length && <option value="">无角色</option>}{roles.map(r => <option key={r.code} value={r.code}>{r.name}</option>)}</select>}</td>
+          {scope === 'all' && <td>{a.parent_name ?? '—'}</td>}
           <td>{locked || self ? <span className="shop-status positive">启用</span>
             : <label className="agent-switch"><input type="checkbox" role="switch" aria-label={`${a.display_name} 启用状态`} checked={a.status === 'active'} disabled={Boolean(busy)} onChange={e => { if (e.target.checked || window.confirm(`停用 ${a.display_name}？该账号会被立即退出，且无法再登录。`)) void update(a, { status:e.target.checked ? 'active' : 'disabled' }) }}/><span>{a.status === 'active' ? '启用' : '已停用'}</span></label>}</td>
           <td>{when(a.last_login_at)}</td><td>{when(a.created_at)}</td>
           <td>{(!locked || self) && <button className="shop-button" disabled={Boolean(busy)} onClick={() => setResetting(a)}>{busy === a.id ? <LoaderCircle size={14} className="spin"/> : <KeyRound size={14}/>}重置密码</button>}</td>
         </tr> })}</tbody></table></div>}
-    <Note label="角色说明">「管理员」可以使用全部业务功能（首页、客户、商品、绩效与工资、设置），但不能开设或管理账号。停用、重置密码、调整角色会让该账号已登录的会话立即失效。</Note>
+    {!loading && scope === 'team' && !accounts.length && <div className="shop-empty">还没有子账号，点「开设账号」为团队成员开设。</div>}
+    <Note label="角色说明">{scope === 'team' ? '这里只显示你开设的子账号，可分配「外贸业务员」或「跟单员」。' : '「管理员」可以使用全部业务功能（首页、客户、商品、绩效与工资、设置），但不能开设或管理账号。销售经理可以开设自己的子账号（外贸业务员、跟单员），「所属主管」显示由谁开设。'}停用、重置密码、调整角色会让该账号已登录的会话立即失效。</Note>
     {creating && <CreateDialog roles={roles} close={() => setCreating(false)} created={(account, password) => { setCreating(false); setAccounts(list => [...list, account]); setIssued({ title:'账号已开设', email:account.email, password }) }}/>}
     {resetting && <ResetDialog account={resetting} self={resetting.id === me} close={() => setResetting(null)} done={password => { const a = resetting; setResetting(null); if (a.id === me) { window.dispatchEvent(new Event('crm:unauthorized')); return } setIssued({ title:'密码已重置', email:a.email, password }) }}/>}
     {issued && <Issued {...issued} close={() => setIssued(null)}/>}
@@ -68,7 +70,7 @@ function PasswordField({value, onChange}:{value:string;onChange:(v:string)=>void
 }
 
 function CreateDialog({roles, close, created}:{roles:Role[];close:()=>void;created:(account:Account, password:string)=>void}) {
-  const [form, setForm] = useState({ displayName:'', email:'', mobile:'', role:'admin', password:generatePassword() }), [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const [form, setForm] = useState({ displayName:'', email:'', mobile:'', role:['admin','sales_rep'].find(code => roles.some(r => r.code === code)) ?? roles[0]?.code ?? '', password:generatePassword() }), [busy, setBusy] = useState(false), [error, setError] = useState('')
   const set = (key:keyof typeof form) => (value:string) => setForm(f => ({ ...f, [key]:value }))
   const role = roles.find(r => r.code === form.role)
   async function submit() {

@@ -50,7 +50,7 @@ export const sections: Section[] = [
     { id: 'agents', label: '客服账号', can: perf },
     { id: 'rules', label: '绩效规则', can: u => has(u, 'performance:read') },
     { id: 'automation', label: '自动上架', can: u => has(u, 'integration:read') },
-    { id: 'users', label: '账号权限', can: u => has(u, 'user:manage') },
+    { id: 'users', label: '账号权限', can: u => has(u, 'user:manage', 'user:manage_team') },
     { id: 'logs', label: '调用记录', can: u => has(u, 'integration:read', 'performance:read') },
   ] },
 ]

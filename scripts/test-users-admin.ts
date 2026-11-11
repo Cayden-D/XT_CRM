@@ -89,13 +89,43 @@ try {
   assert.equal((await call('POST', `/api/users/${secondBoss}/password`, boss, { password: 'Valid-pass-123' })).statusCode, 403)
   void otherBoss
 
+  // 子账号: a supervisor opens and manages only their own team, with team roles only.
+  for (const [code, name, perms] of [['sales_manager', '销售经理', ['user:manage_team', 'dashboard:*']], ['sales_rep', '外贸业务员', ['dashboard:read']], ['order_specialist', '跟单员', ['order:*']]] as const)
+    await db.query('INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id,code) DO UPDATE SET permissions=excluded.permissions', [t1.id, code, name, JSON.stringify(perms)])
+  const openManager = async (email: string) => { const r = await call('POST', '/api/users', boss, { email, displayName: email.split('@')[0], password: 'Manager-team-1', role: 'sales_manager' }); assert.equal(r.statusCode, 200, r.body); return { id: r.json().data.id as string, token: await tokenOf(email, 'Manager-team-1') } }
+  const lead = await openManager('lead@users.test'), rival = await openManager('rival@users.test')
+  const teamView = (await call('GET', '/api/users', lead.token)).json()
+  assert.deepEqual([teamView.scope, teamView.data.length, teamView.roles.map((r: { code: string }) => r.code).sort()], ['team', 0, ['order_specialist', 'sales_rep']], 'a supervisor starts with an empty team and two roles to give')
+  assert.equal((await call('POST', '/api/users', lead.token, { email: 'up@users.test', displayName: '越权', password: 'Valid-pass-12', role: 'admin' })).statusCode, 400, 'no admin from a supervisor')
+  assert.equal((await call('POST', '/api/users', lead.token, { email: 'up2@users.test', displayName: '越权', password: 'Valid-pass-12', role: 'sales_manager' })).statusCode, 400)
+  const member = await call('POST', '/api/users', lead.token, { email: 'rep@users.test', displayName: '业务员甲', password: 'Member-pass-12' })
+  assert.equal(member.statusCode, 200, member.body)
+  const memberId = member.json().data.id as string
+  assert.deepEqual(member.json().data.roles.map((r: { code: string }) => r.code), ['sales_rep'], 'the first team role by default')
+  assert.equal((await db.query('SELECT parent_user_id FROM users WHERE id=$1', [memberId])).rows[0].parent_user_id, lead.id)
+  assert.deepEqual((await call('GET', '/api/users', lead.token)).json().data.map((u: { id: string }) => u.id), [memberId], 'only their own')
+  assert.equal((await call('GET', '/api/users', rival.token)).json().data.length, 0)
+  assert.equal((await call('PATCH', `/api/users/${memberId}`, lead.token, { role: 'order_specialist' })).statusCode, 200)
+  assert.equal((await call('PATCH', `/api/users/${memberId}`, lead.token, { role: 'admin' })).statusCode, 400)
+  for (const [method, url, body] of [['PATCH', `/api/users/${memberId}`, { status: 'disabled' }], ['POST', `/api/users/${memberId}/password`, { password: 'Valid-pass-123' }], ['PATCH', `/api/users/${rival.id}`, { status: 'disabled' }], ['PATCH', `/api/users/${bossId}`, { displayName: '改名' }]] as const)
+    assert.equal((await call(method, url, rival.token, body)).statusCode, 404, `a supervisor cannot reach other accounts: ${url}`)
+  assert.equal((await call('POST', `/api/users/${memberId}/password`, lead.token, { password: 'Member-pass-34' })).statusCode, 200)
+  assert.equal((await call('PATCH', `/api/users/${memberId}`, lead.token, { status: 'disabled' })).statusCode, 200)
+  const all = (await call('GET', '/api/users', boss)).json()
+  assert.equal(all.scope, 'all'); assert.equal(all.data.find((u: { id: string }) => u.id === memberId).parent_name, 'lead', 'the administrator sees who opened it')
+  // Promoted out of the team by the administrator, the account is no longer the supervisor's to manage.
+  assert.equal((await call('PATCH', `/api/users/${memberId}`, boss, { role: 'admin' })).statusCode, 200)
+  assert.equal((await call('PATCH', `/api/users/${memberId}`, lead.token, { status: 'active' })).statusCode, 404)
+  assert.equal((await call('GET', '/api/users', await tokenOf('rep@users.test', 'Member-pass-34').catch(() => 'disabled'))).statusCode, 401, 'disabled stays disabled')
+  assert.equal((await call('GET', '/api/users', (await call('POST', '/api/users', boss, { email: 'plain@users.test', displayName: '普通', password: 'Plain-pass-123', role: 'viewer' }), await tokenOf('plain@users.test', 'Plain-pass-123')))).statusCode, 403, 'no account permission, no page')
+
   // Own password reset: the current session ends too.
   await pause(1100)
   assert.equal((await call('POST', `/api/users/${bossId}/password`, boss, { password: 'Boss-new-2026' })).json().self, true)
   assert.equal((await call('GET', '/api/users', boss)).statusCode, 401)
   await tokenOf('boss@users.test', 'Boss-new-2026')
 
-  console.log(JSON.stringify({ listRoles: 'ok', createValidation: 'ok', adminScope: 'ok', roleChangeRevokes: 'ok', disable: 'ok', passwordReset: 'ok', guards: 'ok', isolation: 'ok', selfReset: 'ok' }))
+  console.log(JSON.stringify({ listRoles: 'ok', createValidation: 'ok', adminScope: 'ok', roleChangeRevokes: 'ok', disable: 'ok', passwordReset: 'ok', guards: 'ok', isolation: 'ok', selfReset: 'ok', teamAccounts: 'ok' }))
 } finally {
   for (const t of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [t.id]); await db.query('DELETE FROM tenants WHERE id=$1', [t.id]) }
   await app.close(); await db.end()
