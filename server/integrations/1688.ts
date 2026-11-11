@@ -8,7 +8,7 @@ const json = JSONbigFactory({ storeAsString: true, protoAction: 'error', constru
 export const parsePlatformJson = (value: string): Record<string, any> => json.parse(value)
 
 export class IntegrationError extends Error {
-  constructor(public code: string, message: string, public statusCode = 502) { super(message) }
+  constructor(public code: string, message: string, public statusCode = 502, public detail?: string) { super(message) }
 }
 
 export type Grant = {
@@ -108,6 +108,13 @@ export async function gateway(path: string, params: Record<string, string>, imag
     const safeCode = String(code || nested.bizCode || response.status).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 100)
     if(safeCode==='CHK_LOGISTICS_ITEM_NUM_ERROR')throw new IntegrationError(safeCode,'1688 件重尺校验未通过（CHK_LOGISTICS_ITEM_NUM_ERROR）：请核对物流件数及销售包装数据是否完整、符合平台规则。',400)
     if(safeCode.startsWith('gw.Qos'))throw new IntegrationError(safeCode,`1688 平台限流或当日调用额度已用完（${safeCode}），已保存进度，额度恢复后自动继续。`,429)
+    // Publishing only: the reason is needed to correct the listing. Other endpoints keep the code alone (see OAuth above).
+    if(path.includes('alibaba.new.product.add')){
+      const raw=[nested.errorMessage,nested.errorMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
+      const detail=raw?.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,300)
+      if(detail)throw new IntegrationError(safeCode,`1688 拒绝发布（${safeCode}）：${detail}`,400,detail)
+      if(safeCode.startsWith('CHK_'))throw new IntegrationError(safeCode,`1688 校验未通过（${safeCode}），平台没有返回具体原因。`,400)
+    }
     throw new IntegrationError(safeCode, `1688 接口调用失败（${safeCode}），请检查接口权限或重新授权。`)
   }
   if (Array.isArray(data.result) && data.result.some((item: { result?: boolean }) => item.result === false)) throw new IntegrationError('PARTIAL_FAILURE', '平台报告部分商品处理失败，请重新读取状态后核对。')

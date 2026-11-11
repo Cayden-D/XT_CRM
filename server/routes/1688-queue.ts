@@ -16,7 +16,7 @@ export async function collectionQueueRoutes(app:FastifyInstance){
     const from=`FROM integration_1688_collection_queue_jobs j JOIN collected_products p ON p.id=j.collected_product_id JOIN integration_1688_connections c ON c.id=j.connection_id WHERE j.tenant_id=$1 AND ($2::text IS NULL OR j.status=$2) AND ($3::uuid IS NULL OR j.connection_id=$3) AND ($4::text IS NULL OR strpos(lower(p.title),lower($4))>0)`
     const total=Number((await db.query(`SELECT count(*) AS total ${from}`,params)).rows[0].total)
     const page=Math.min(input.page,Math.max(1,Math.ceil(total/input.pageSize)))
-    const jobs=(await db.query(`SELECT j.id,j.collected_product_id,j.connection_id,j.status,j.phase,j.attempts,j.message,j.product_id,j.draft_id,j.created_at,j.updated_at,p.title,c.display_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $5 OFFSET $6`,[...params,input.pageSize,(page-1)*input.pageSize])).rows
+    const jobs=(await db.query(`SELECT j.id,j.collected_product_id,j.connection_id,j.status,j.phase,j.attempts,j.message,j.product_id,j.draft_id,j.created_at,j.updated_at,j.report#>'{agentReport,ai}' AS ai_fill,p.title,c.display_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $5 OFFSET $6`,[...params,input.pageSize,(page-1)*input.pageSize])).rows
     return {data:{settings,jobs,total,page,pageSize:input.pageSize}}
 
   })
@@ -51,8 +51,8 @@ export async function collectionQueueRoutes(app:FastifyInstance){
   })
   app.post('/agent/queue-jobs/:id/retry',{preHandler:[requirePermission('integration:publish'),requirePermission('collection:read')]},async request=>{
     const {id}=idSchema.parse(request.params)
-    const row=(await db.query(`UPDATE integration_1688_collection_queue_jobs j SET status='queued',phase='screening',attempts=0,available_at=now(),source_updated_at=p.updated_at,actor_id=$3,message=NULL,report='{}'::jsonb,worker_id=NULL,lease_until=NULL,updated_at=now() FROM collected_products p JOIN integration_1688_collection_queue_settings q ON q.tenant_id=p.tenant_id AND q.enabled WHERE j.id=$1 AND j.tenant_id=$2 AND j.collected_product_id=p.id AND j.connection_id=q.connection_id AND j.status IN ('blocked','failed') AND j.product_id IS NULL AND j.draft_id IS NULL AND p.product_id IS NULL RETURNING j.id`,[id,request.authUser.tenantId,request.authUser.sub])).rows[0]
-    if(!row)throw new IntegrationError('QUEUE_CANNOT_RETRY','任务已生成产品、结果待核对或队列未启用，不能自动重试。',409)
+    const row=(await db.query(`UPDATE integration_1688_collection_queue_jobs j SET status='queued',phase='screening',attempts=0,available_at=now(),source_updated_at=p.updated_at,actor_id=$3,message=NULL,report='{}'::jsonb,worker_id=NULL,lease_until=NULL,updated_at=now() FROM collected_products p JOIN integration_1688_collection_queue_settings q ON q.tenant_id=p.tenant_id AND q.enabled WHERE j.id=$1 AND j.tenant_id=$2 AND j.collected_product_id=p.id AND j.connection_id=q.connection_id AND j.status IN ('blocked','failed') AND ((j.product_id IS NULL AND j.draft_id IS NULL AND p.product_id IS NULL) OR EXISTS(SELECT 1 FROM integration_1688_publish_drafts d WHERE d.id=j.draft_id AND d.tenant_id=j.tenant_id AND d.status IN ('draft','failed') AND d.offer_id IS NULL)) RETURNING j.id`,[id,request.authUser.tenantId,request.authUser.sub])).rows[0]
+    if(!row)throw new IntegrationError('QUEUE_CANNOT_RETRY','任务的发布草稿已提交、结果待核对或队列未启用，不能自动重试。',409)
     await db.query("UPDATE collected_products SET processing_status='ai_processing' WHERE id=(SELECT collected_product_id FROM integration_1688_collection_queue_jobs WHERE id=$1)",[id])
     return {data:{id:row.id,status:'queued'}}
   })

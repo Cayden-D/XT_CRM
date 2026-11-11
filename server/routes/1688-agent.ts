@@ -10,10 +10,12 @@ import { inspectPublishingImages, prepareAgentFields, publishingImages } from '.
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
+import { attributeFacts, attributePictures, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
 import { validatePublishBody } from './1688.js'
 
 type Publisher=(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,agent?:{jobId:string;settingsRevision:number;queue?:{id:string;workerId:string}})=>Promise<unknown>
 const idSchema=z.object({id:z.string().uuid()})
+const MAX_PLATFORM_REPAIRS=2
 export async function agent1688Routes(app:FastifyInstance,publish:Publisher){
   app.post('/agent/test',{preHandler:[requirePermission('integration:manage'),requirePermission('integration:publish')]},async()=>{
     if(!config.DASHSCOPE_API_KEY)throw new IntegrationError('LLM_NOT_CONFIGURED','请先配置百炼 API Key。',503)
@@ -91,21 +93,54 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
       const current=await fillPublishTemplate(tenant,draft.platform_schema,fillFromProductData(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,product.id)))
       const catProp={...(current.catProp||{})}
       for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
-      const formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)
+      let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)
       report={...report,title:formValues.title}
       const images=publishingImages(formValues)
       const findings=await inspectPublishingImages(images);report={...report,images:findings}
       const risky=findings.filter(i=>!i.readable||i.watermark||i.rightsRisk||i.uncertain)
       if(risky.length)throw new IntegrationError('AGENT_IMAGE_RISK',`图片检查未通过：${risky.map(i=>i.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或替换图片；不能通过编辑原图消除明确的公司水印或品牌 Logo。`,400)
-      const missing=validatePublishBody(draft.platform_schema,{...draft.data_body,formValues})
-      if(missing.length)throw new IntegrationError('AGENT_MISSING_FIELDS',`发布规则未通过：${missing.join('、')}`,400)
-      // CAS keeps an image inspection tied to the exact body that will be published.
-      const updated=(await db.query("UPDATE integration_1688_publish_drafts SET data_body=jsonb_set(data_body,'{formValues}',$4::jsonb),revision=revision+1,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND revision=$3 AND status IN ('draft','failed') RETURNING revision",[id,tenant,revision,JSON.stringify(formValues)])).rows[0]
-      if(!updated)throw new IntegrationError('DRAFT_CONFLICT','AI 检测期间草稿已变化，请重新检测。',409)
-      const claimed=await db.query("UPDATE integration_1688_agent_jobs SET status='publishing',report=$2,updated_at=now() WHERE id=$1 AND status='analyzing' RETURNING id",[job.id,JSON.stringify(report)])
-      if(!claimed.rows.length)throw new IntegrationError('AGENT_STOPPED','任务已取消，本次未发布。',409)
-      await publish({...request,params:{id},body:{revision:updated.revision,confirmed:true}},{jobId:job.id,settingsRevision:settings.revision,queue})
-      await db.query("UPDATE integration_1688_agent_jobs SET status='published',message='已提交平台；审核状态以平台为准。',updated_at=now() WHERE id=$1",[job.id])
+      const facts=attributeFacts(product,reviewed,source),pictures=attributePictures(formValues)
+      const fill=await fillRequiredAttributes(draft.platform_schema,formValues,facts,pictures)
+      formValues=fill.values
+      const ai:AttributeFillReport={filled:fill.filled,refused:fill.refused,repairs:[]}
+      report={...report,ai}
+      const requireComplete=()=>{
+        const missing=validatePublishBody(draft.platform_schema,{...draft.data_body,formValues})
+        if(!missing.length)return
+        const why=ai.refused.filter(item=>missing.includes(item.label)).map(item=>`${item.label}（${item.reason}）`)
+        throw new IntegrationError('AGENT_MISSING_FIELDS',`发布规则未通过：${missing.join('、')}${why.length?`。AI 未填写：${why.join('；')}`:''}`,400)
+      }
+      requireComplete()
+      let currentRevision=revision
+      for(let repairs=0;;repairs++){
+        // CAS keeps an image inspection tied to the exact body that will be published.
+        const updated=(await db.query("UPDATE integration_1688_publish_drafts SET data_body=jsonb_set(data_body,'{formValues}',$4::jsonb),revision=revision+1,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND revision=$3 AND status IN ('draft','failed') RETURNING revision",[id,tenant,currentRevision,JSON.stringify(formValues)])).rows[0]
+        if(!updated)throw new IntegrationError('DRAFT_CONFLICT','AI 检测期间草稿已变化，请重新检测。',409)
+        currentRevision=updated.revision
+        const claimed=await db.query("UPDATE integration_1688_agent_jobs SET status='publishing',report=$2,updated_at=now() WHERE id=$1 AND status='analyzing' RETURNING id",[job.id,JSON.stringify(report)])
+        if(!claimed.rows.length)throw new IntegrationError('AGENT_STOPPED','任务已取消，本次未发布。',409)
+        try{
+          await publish({...request,params:{id},body:{revision:currentRevision,confirmed:true}},{jobId:job.id,settingsRevision:settings.revision,queue})
+          break
+        }catch(error){
+          // Only a definite rejection leaves the draft 'failed'; anything that may have reached the shop is never sent again.
+          const state=(await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]?.status
+          if(state!=='failed'||!isAttributeRejection(error))throw error
+          if(repairs>=MAX_PLATFORM_REPAIRS)throw new IntegrationError(error.code,`${error.message}（AI 已自动修改并重试 ${repairs} 次仍未通过，请人工核对）`,400,error.detail)
+          const reopened=await db.query("UPDATE integration_1688_agent_jobs SET status='analyzing',updated_at=now() WHERE id=$1 AND status='publishing' RETURNING id",[job.id])
+          if(!reopened.rows.length)throw new IntegrationError('AGENT_STOPPED','任务已取消，本次未发布。',409)
+          const repair=await repairRejectedAttributes(draft.platform_schema,formValues,facts,pictures,error,ai.filled.map(item=>item.name))
+          ai.repairs.push({code:error.code,detail:error.detail??null,diagnosis:repair.diagnosis,changed:repair.changed})
+          if(!repair.changed.length)throw new IntegrationError(error.code,`${error.message}（AI 未找到可修改的内容，请人工核对）`,400,error.detail)
+          formValues=repair.values
+          ai.filled=[...ai.filled.filter(item=>!repair.filled.some(next=>next.name===item.name)),...repair.filled]
+          ai.refused=repair.refused
+          report={...report,title:formValues.title,ai}
+          requireComplete()
+        }
+      }
+      const summary=[ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:''].filter(Boolean).join('，')
+      await db.query("UPDATE integration_1688_agent_jobs SET status='published',report=$2,message=$3,updated_at=now() WHERE id=$1",[job.id,JSON.stringify(report),`已提交平台；审核状态以平台为准。${summary?`${summary}，可在任务详情核对。`:''}`])
     }catch(error){
       const state=(await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]?.status
       const status=state==='unknown'||state==='submitting'?'unknown':error instanceof IntegrationError?'blocked':'failed'

@@ -537,3 +537,9 @@
 @media(max-width:640px){ .co-timeline li:has(.co-chat-actions) { grid-template-columns:minmax(0,1fr) auto; } .co-chat-actions { grid-column:2; } }
 .dash-shop { display:inline-flex; align-items:center; gap:6px; color:#5b6d83; } .dash-shop select { max-width:240px; }
 .wangwang-icon { width:18px; height:18px; flex:none; display:block; object-fit:contain; }
+
+.queue-ai-fill ul { list-style:none; margin:0 0 12px; padding:0; }
+.queue-ai-fill li { display:grid; grid-template-columns:minmax(90px,auto) 1fr; gap:2px 12px; padding:8px 0; border-bottom:1px solid #eef2f6; font-size:13px; }
+.queue-ai-fill li b { font-weight:600; color:#2b3a4e; }
+.queue-ai-fill li small { grid-column:1 / -1; color:#6a7a8e; font-size:12px; overflow-wrap:anywhere; }
+.queue-ai-fill li > span { color:#2b3a4e; overflow-wrap:anywhere; }

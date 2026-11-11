@@ -10,7 +10,7 @@ import { runAgentDraft } from '../routes/1688-agent.js'
 import { publishDraft } from '../routes/1688.js'
 
 type Json=Record<string,any>
-type QueueJob={id:string;tenant_id:string;connection_id:string;collected_product_id:string;actor_id:string;source_updated_at:Date;attempts:number;worker_id:string}
+type QueueJob={id:string;tenant_id:string;connection_id:string;collected_product_id:string;actor_id:string;source_updated_at:Date;attempts:number;worker_id:string;draft_id:string|null}
 const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))
 const sourceSku=(source:Json)=>`COL-${createHash('sha256').update(`${source.tenant_id}:${source.source}:${source.source_product_id}`).digest('hex').slice(0,24).toUpperCase()}`
 
@@ -50,11 +50,31 @@ async function finish(job:QueueJob,status:string,message:string,report:Json={}){
   }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
 }
 
-async function processJob(job:QueueJob){
-  const source=(await db.query('SELECT * FROM collected_products WHERE id=$1 AND tenant_id=$2',[job.collected_product_id,job.tenant_id])).rows[0]
-  if(!source||source.product_id||new Date(source.updated_at).getTime()!==new Date(job.source_updated_at).getTime())throw new IntegrationError('QUEUE_SOURCE_CHANGED','采集商品已变化或已转正式产品，请人工核对后再处理。',409)
+async function activeActor(job:QueueJob){
   const actor=(await db.query("SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL",[job.actor_id,job.tenant_id])).rows[0]
   if(!actor)throw new IntegrationError('QUEUE_ACTOR','入队账号已停用，不能自动发布。',409)
+  return actor
+}
+
+async function publishThroughAgent(job:QueueJob,draft:Json,actor:Json,report:Json){
+  await db.query("UPDATE integration_1688_collection_queue_jobs SET phase='publishing',draft_id=$2,updated_at=now() WHERE id=$1 AND worker_id=$3 AND status='processing'",[job.id,draft.id,job.worker_id])
+  const result=await runAgentDraft({params:{id:draft.id},body:{revision:draft.revision},authUser:{sub:actor.id,tenantId:job.tenant_id,email:actor.email,displayName:actor.display_name,roles:[],permissions:[]},id:job.id},publishDraft,{id:job.id,workerId:job.worker_id})
+  const agent=result.data as Json
+  await finish(job,agent.status==='published'?'published':agent.status==='unknown'?'unknown':agent.status==='blocked'?'blocked':'failed',agent.message||'Agent 任务未完成。',{...report,agentJobId:agent.id,agentReport:agent.report})
+}
+
+/** A job that already has a draft goes straight back to the agent; the source and product were dealt with the first time. */
+async function resumeDraft(job:QueueJob){
+  const draft=(await db.query("SELECT id,revision FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2 AND status IN ('draft','failed') AND offer_id IS NULL",[job.draft_id,job.tenant_id])).rows[0]
+  if(!draft)throw new IntegrationError('QUEUE_DRAFT_STATE','发布草稿已提交或结果待核对，不能自动重试。',409)
+  await publishThroughAgent(job,draft,await activeActor(job),{resumed:true})
+}
+
+async function processJob(job:QueueJob){
+  if(job.draft_id)return resumeDraft(job)
+  const source=(await db.query('SELECT * FROM collected_products WHERE id=$1 AND tenant_id=$2',[job.collected_product_id,job.tenant_id])).rows[0]
+  if(!source||source.product_id||new Date(source.updated_at).getTime()!==new Date(job.source_updated_at).getTime())throw new IntegrationError('QUEUE_SOURCE_CHANGED','采集商品已变化或已转正式产品，请人工核对后再处理。',409)
+  const actor=await activeActor(job)
   const allowed=(await db.query(`SELECT 1 FROM integration_1688_collection_queue_settings q JOIN integration_1688_agent_settings a ON a.connection_id=q.connection_id JOIN integration_1688_connections c ON c.id=q.connection_id WHERE q.connection_id=$1 AND q.tenant_id=$2 AND q.enabled AND a.enabled AND c.status='connected'`,[job.connection_id,job.tenant_id])).rows[0]
   if(!allowed)throw new IntegrationError('QUEUE_DISABLED','队列或 Agent 模式已关闭，任务未发布。',409)
   const variants=(await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 AND tenant_id=$2 ORDER BY position',[source.id,job.tenant_id])).rows
@@ -78,10 +98,7 @@ async function processJob(job:QueueJob){
     await client.query('COMMIT')
   }catch(error){await client.query('ROLLBACK');if((error as {code?:string}).code==='23505')throw new IntegrationError('QUEUE_SKU_CONFLICT','来源商品货号已存在，请人工核对重复商品。',409);throw error}finally{client.release()}
   const draft=await createDraftFromProduct({tenantId:job.tenant_id,actorId:job.actor_id,requestId:job.id,connectionId:job.connection_id,product,catId:String(source.source_category_id),scene:'cbu',reuse:true})
-  await db.query("UPDATE integration_1688_collection_queue_jobs SET phase='publishing',draft_id=$2,updated_at=now() WHERE id=$1 AND worker_id=$3 AND status='processing'",[job.id,draft.id,job.worker_id])
-  const result=await runAgentDraft({params:{id:draft.id},body:{revision:draft.revision},authUser:{sub:actor.id,tenantId:job.tenant_id,email:actor.email,displayName:actor.display_name,roles:[],permissions:[]},id:job.id},publishDraft,{id:job.id,workerId:job.worker_id})
-  const agent=result.data as Json
-  await finish(job,agent.status==='published'?'published':agent.status==='unknown'?'unknown':agent.status==='blocked'?'blocked':'failed',agent.message||'Agent 任务未完成。',{...report,agentJobId:agent.id,agentReport:agent.report})
+  await publishThroughAgent(job,draft,actor,report)
 }
 
 export async function runClaimedCollectionQueueJob(id:string,workerId:string){

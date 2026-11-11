@@ -1,10 +1,19 @@
 import {useCallback,useEffect,useRef,useState} from 'react'
 import {AlertCircle,Bot,ChevronLeft,ChevronRight,FileText,LoaderCircle,RefreshCw,Search,X} from 'lucide-react'
-import {getAgentQueue,getPublishDraft,retryAgentQueueJob,type AgentQueueJob,type AgentQueueSetting,type PublishDraft} from './1688Api'
+import {getAgentQueue,getPublishDraft,retryAgentQueueJob,type AgentAiFill,type AgentQueueJob,type AgentQueueSetting,type PublishDraft} from './1688Api'
 import {DraftEditor} from './1688Page'
 import type {SessionUser} from './api'
 import {navigate} from './navigation'
 import './1688.css'
+const evidenceNames:Record<string,string>={title:'标题',attributes:'采集属性',image:'图片',inferred:'AI 判断',default:'其它选项',rule:'固定规则'}
+function AiFillReport({fill}:{fill:AgentAiFill}){
+  if(!fill.filled.length&&!fill.refused.length&&!fill.repairs.length)return null
+  return <div className="queue-ai-fill">
+    {fill.filled.length>0&&<><h3>AI 填写的属性</h3><ul>{fill.filled.map(item=><li key={item.name}><b>{item.label}</b><span>{item.value}</span><small>{evidenceNames[item.evidence]||item.evidence}{item.reason?` · ${item.reason}`:''}</small></li>)}</ul></>}
+    {fill.refused.length>0&&<><h3>AI 没有填写</h3><ul>{fill.refused.map(item=><li key={item.name}><b>{item.label}</b><small>{item.reason}</small></li>)}</ul></>}
+    {fill.repairs.length>0&&<><h3>平台拒绝后的修复</h3><ul>{fill.repairs.map((item,index)=><li key={index}><b>{item.code}</b><span>{item.changed.join('、')||'没有修改'}</span><small>{item.diagnosis}{item.detail?` · 平台原文：${item.detail}`:''}</small></li>)}</ul></>}
+  </div>
+}
 const names:Record<AgentQueueJob['status'],string>={queued:'排队中',processing:'处理中',blocked:'需核对',failed:'处理失败',published:'已提交平台',unknown:'结果待核对',cancelled:'已取消'}
 export default function AgentQueueSettings({user}:{user:SessionUser}){
  const [shops,setShops]=useState<AgentQueueSetting[]>([]),[jobs,setJobs]=useState<AgentQueueJob[]>([])
@@ -30,7 +39,7 @@ export default function AgentQueueSettings({user}:{user:SessionUser}){
    {loading?<div className="shop-empty" role="status"><LoaderCircle className="spin"/>正在加载任务…</div>:error?<div className="shop-empty">队列加载失败，请重试。</div>:!jobs.length&&<div className="shop-empty">{query||status||shopId?'没有符合筛选条件的任务。':'还没有上架任务'}</div>}
    <div className="queue-pagination"><span>共 {total} 条</span><label>每页 <select aria-label="每页条数" value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setPage(1)}}>{[10,20,50].map(n=><option key={n} value={n}>{n} 条</option>)}</select></label><div><button className="shop-icon" aria-label="上一页" disabled={loading||page<=1} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} / {pages} 页</span><button className="shop-icon" aria-label="下一页" disabled={loading||page>=pages} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div></div>
   </section>
-  {detail&&<div className="dialog-layer shop-dialog"><button className="drawer-scrim" aria-label="关闭任务详情" onClick={()=>setDetail(null)}/><section className="shop-modal queue-modal" role="dialog" aria-modal="true" aria-label="上架任务详情"><header><h2>上架任务详情</h2><button aria-label="关闭详情" onClick={()=>setDetail(null)}><X size={18}/></button></header><div className="shop-modal-body"><h3>{detail.title}</h3><p>{detail.display_name}</p><p><span className={`queue-state queue-state-${detail.status}`}>{names[detail.status]}</span> · 已尝试 {detail.attempts} 次</p><h3>最近处理结果</h3><p className="queue-full-message">{detail.message||'暂无处理结果。'}</p>{detail.draft_id&&<p className="shop-note">已生成发布草稿，请核对草稿，避免重复上架。</p>}</div><footer><button className="shop-button" onClick={()=>setDetail(null)}>关闭</button>{detail.draft_id&&<button className="shop-button" disabled={Boolean(opening)} onClick={()=>{const job=detail;setDetail(null);void openDraft(job)}}>{opening===detail.id?<LoaderCircle size={16} className="spin"/>:<FileText size={16}/>}查看发布草稿</button>}{canRetry&&['blocked','failed'].includes(detail.status)&&!detail.product_id&&!detail.draft_id&&<button className="shop-button primary" disabled={busy} onClick={()=>void retry(detail)}>重新入队</button>}</footer></section></div>}
+  {detail&&<div className="dialog-layer shop-dialog"><button className="drawer-scrim" aria-label="关闭任务详情" onClick={()=>setDetail(null)}/><section className="shop-modal queue-modal" role="dialog" aria-modal="true" aria-label="上架任务详情"><header><h2>上架任务详情</h2><button aria-label="关闭详情" onClick={()=>setDetail(null)}><X size={18}/></button></header><div className="shop-modal-body"><h3>{detail.title}</h3><p>{detail.display_name}</p><p><span className={`queue-state queue-state-${detail.status}`}>{names[detail.status]}</span> · 已尝试 {detail.attempts} 次</p><h3>最近处理结果</h3><p className="queue-full-message">{detail.message||'暂无处理结果。'}</p>{detail.ai_fill&&<AiFillReport fill={detail.ai_fill}/>}{detail.draft_id&&<p className="shop-note">已生成发布草稿，请核对草稿，避免重复上架。</p>}</div><footer><button className="shop-button" onClick={()=>setDetail(null)}>关闭</button>{detail.draft_id&&<button className="shop-button" disabled={Boolean(opening)} onClick={()=>{const job=detail;setDetail(null);void openDraft(job)}}>{opening===detail.id?<LoaderCircle size={16} className="spin"/>:<FileText size={16}/>}查看发布草稿</button>}{canRetry&&['blocked','failed'].includes(detail.status)&&(detail.draft_id||!detail.product_id)&&<button className="shop-button primary" disabled={busy} onClick={()=>void retry(detail)}>{detail.draft_id?'AI 重新填写并发布':'重新入队'}</button>}</footer></section></div>}
     {draft&&<DraftEditor initial={draft.data} targetName={draft.shop} canPublish={has('integration:publish')} close={()=>setDraft(null)} saved={()=>void load()}/>}
  </div>
 }
