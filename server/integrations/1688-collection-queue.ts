@@ -5,6 +5,7 @@ import { config } from '../config.js'
 import { IntegrationError } from './1688.js'
 import { inspectPublishingImages, publishingImages } from './1688-agent.js'
 import { createDraftFromProduct } from './1688-drafts.js'
+import { ownBrandNames } from './brands.js'
 import { collectedSkuAttributes } from './1688-collected-skus.js'
 import { runAgentDraft } from '../routes/1688-agent.js'
 import { publishDraft } from '../routes/1688.js'
@@ -79,7 +80,7 @@ async function processJob(job:QueueJob){
   if(!allowed)throw new IntegrationError('QUEUE_DISABLED','队列或 Agent 模式已关闭，任务未发布。',409)
   const variants=(await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 AND tenant_id=$2 ORDER BY position',[source.id,job.tenant_id])).rows
   const images=checkedSource(source,variants)
-  const findings=await inspectPublishingImages(images.all)
+  const findings=await inspectPublishingImages(images.all,await ownBrandNames(job.tenant_id))
   const report={images:findings,sourceTitle:source.title,sourceCategoryId:source.source_category_id}
   const risky=findings.filter(item=>!item.readable||item.watermark||item.rightsRisk||item.uncertain)
   if(risky.length){await finish(job,'blocked',`图片检查未通过：${risky.map(item=>item.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或更换图片。`,report);return}

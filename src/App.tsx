@@ -14,6 +14,7 @@ import UsersAdminPage from './UsersAdminPage'
 import ChatInquiryPage from './ChatInquiryPage'
 import OrdersPage from './OrdersPage'
 import { ImageEditPage, ImageSuitePage } from './ImageWorkshop'
+import BrandsPage from './BrandsPage'
 import { OPEN_IMAGE_TOOL, type ImageIntent } from './imageApi'
 import AiAssistant from './AiAssistant'
 import { OPEN_AI, resetAiFocus } from './aiFocus'
@@ -66,7 +67,7 @@ function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route
       if (tab.id === 'queue') return <AgentQueueSettings user={user} />
       return <ShopPanel user={user} view="drafts" />
     case 'catalog': return <ProductCatalogPage user={user} />
-    case 'images': return tab.id === 'suite' ? <ImageSuitePage key={`suite-${toolKey}`} user={user} intent={intent} /> : <ImageEditPage key={`edit-${toolKey}`} user={user} intent={intent} />
+    case 'images': return tab.id === 'brands' ? <BrandsPage /> : tab.id === 'suite' ? <ImageSuitePage key={`suite-${toolKey}`} user={user} intent={intent} /> : <ImageEditPage key={`edit-${toolKey}`} user={user} intent={intent} />
     case 'performance': return <PerformancePage user={user} view={tab.id as PerfView} />
     default: break
   }

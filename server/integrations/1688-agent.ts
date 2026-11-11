@@ -36,7 +36,14 @@ export function publishingImages(values:Json):string[]{
 const visualSignal=z.object({detected:z.boolean(),name:z.string().max(120),confidence:z.number().min(0).max(1)}).strict()
 const inspection=z.object({images:z.array(z.object({index:z.number().int().nonnegative(),readable:z.boolean(),companyWatermark:visualSignal,famousBrandLogo:visualSignal}))}).strict()
 const genericText=/^(源头工厂|自有工厂|官方标配|质量保障|品质保证|现货速发|支持定制|支持代发|大机芯气缸|无线款|自动充停|OEM\/?ODM)$/i
-export async function inspectPublishingImages(urls:string[]){
+const brandKey=(value:string)=>value.trim().toLocaleLowerCase().replace(/[\s/／_.·-]+/g,'')
+/** Whether a name read off a picture is one of the given brand names (either may be the fuller form). */
+export function sameBrand(seen:string,names:string[]){
+  const key=brandKey(seen)
+  return key.length>=2&&names.some(name=>{const own=brandKey(name);return own.length>=2&&(key.includes(own)||own.includes(key))})
+}
+/** `ownBrands`: names the shop registered as its own. The model still reports what it sees; the match is decided here. */
+export async function inspectPublishingImages(urls:string[],ownBrands:string[]=[]){
   const findings:Array<{url:string;readable:boolean;watermark:boolean;rightsRisk:boolean;uncertain:boolean;reason:string}>=[]
   for(let offset=0;offset<urls.length;offset+=4){
     const batch=urls.slice(offset,offset+4)
@@ -49,8 +56,8 @@ export async function inspectPublishingImages(urls:string[]){
     for(let index=0;index<batch.length;index++){
       const item=data.images.find(i=>i.index===index)!
       const company=item.companyWatermark.name.trim(),brand=item.famousBrandLogo.name.trim()
-      const watermark=item.readable&&item.companyWatermark.detected&&item.companyWatermark.confidence>=0.98&&company.length>=2&&!genericText.test(company)
-      const rightsRisk=item.readable&&item.famousBrandLogo.detected&&item.famousBrandLogo.confidence>=0.98&&brand.length>=2
+      const watermark=item.readable&&item.companyWatermark.detected&&item.companyWatermark.confidence>=0.98&&company.length>=2&&!genericText.test(company)&&!sameBrand(company,ownBrands)
+      const rightsRisk=item.readable&&item.famousBrandLogo.detected&&item.famousBrandLogo.confidence>=0.98&&brand.length>=2&&!sameBrand(brand,ownBrands)
       const reason=!item.readable?'图片无法读取，请人工检查。':watermark&&rightsRisk?`清晰可见公司/店铺水印“${company}”及知名品牌 Logo“${brand}”。`:watermark?`清晰可见公司/店铺水印“${company}”。`:rightsRisk?`清晰可见知名品牌 Logo“${brand}”。`:'未发现明确的公司水印或知名品牌 Logo。'
       findings.push({url:batch[index],readable:item.readable,watermark,rightsRisk,uncertain:false,reason})
     }

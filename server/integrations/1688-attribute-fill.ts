@@ -5,7 +5,7 @@ import { IntegrationError } from './1688.js'
 import { publishingImages } from './1688-agent.js'
 
 type Json = Record<string, any>
-export type AttributeFacts = { title: string; text: string; attributes: Record<string, string>; category: string | null }
+export type AttributeFacts = { title: string; text: string; attributes: Record<string, string>; category: string | null; ownBrand?: string | null }
 export type FilledAttribute = { name: string; label: string; value: string; evidence: string; reason: string }
 export type RefusedAttribute = { name: string; label: string; reason: string }
 export type AttributeRepair = { code: string; detail: string | null; diagnosis: string; changed: string[] }
@@ -16,7 +16,7 @@ type Patch = { values: Json; filled: FilledAttribute[]; refused: RefusedAttribut
 const REFUSED = /证书|证号|认证|许可|备案|批准|批文|注册证|检测报告|检验报告|质检|执行标准|条形码|条码|UPC|EAN|GTIN|批号|专利号|生产日期|保质期|生产企业|生产厂家|厂名|厂址|3C|CCC/i
 // A statement about how the shop may sell the goods. Without an explicit source value the only safe answer is "no".
 const DECLARATION = /专利|授权|跨境|出口|专供|加工定制|代工|贴牌|进口|保税|OEM/i
-const BRAND = /品牌/
+export const BRAND_FIELD = /品牌/
 const NEUTRAL_BRAND = /^(无品牌|无|其他|其它|other|oem)$/i
 const OTHER_OPTION = /^(其它|其他)$/
 const MEASURED = /功率|电压|电流|容量|转速|风量|气压|流量|重量|净重|毛重|尺寸|长度|宽度|高度|直径/
@@ -38,7 +38,7 @@ const proposalSchema = z.object({
 }).passthrough()
 
 /** Everything known about the product, as data for the model and as the text a stated measurement is checked against. */
-export function attributeFacts(product: Json, variants: Json[], source: Json | null): AttributeFacts {
+export function attributeFacts(product: Json, variants: Json[], source: Json | null, ownBrand?: string | null): AttributeFacts {
   const attributes: Record<string, string> = {}
   const add = (key: unknown, value: unknown) => { if (typeof key === 'string' && key.trim() && ['string', 'number'].includes(typeof value) && String(value).trim()) attributes[key.trim()] = String(value).trim().slice(0, 300) }
   for (const [key, value] of Object.entries(product.specifications || {})) add(key, value)
@@ -47,7 +47,7 @@ export function attributeFacts(product: Json, variants: Json[], source: Json | n
   const title = String(source?.title || product.name || '')
   const description = String(product.description || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 1500)
   const variantText = variants.flatMap(v => [v.label, ...Object.values(v.attributes || {})]).filter(v => typeof v === 'string')
-  return { title, attributes, category: source?.category_path || product.category || null, text: [title, product.name, description, ...variantText, ...Object.values(attributes)].filter(Boolean).join('\n') }
+  return { title, attributes, ownBrand: ownBrand ?? null, category: source?.category_path || product.category || null, text: [title, product.name, description, ...variantText, ...Object.values(attributes)].filter(Boolean).join('\n') }
 }
 
 /** Up to six pictures, main ones first; stored JSON does not keep key order, so they are read field by field. */
@@ -65,10 +65,17 @@ function choose(field: Json, text: string) {
 }
 
 /** Fields answered by rule, so no model output can reach them. Returns undefined when the field is the model's to fill. */
-function ruled(field: Json): { value?: unknown; refused?: string; reason?: string } | undefined {
+function ruled(field: Json, facts: AttributeFacts): { value?: unknown; refused?: string; reason?: string } | undefined {
   const label = String(field.label || field.name)
   if (REFUSED.test(label)) return { refused: '涉及资质、编号或厂家信息，AI 不代填，请人工提供' }
-  if (BRAND.test(label)) {
+  if (BRAND_FIELD.test(label)) {
+    if (facts.ownBrand) {
+      const own = facts.ownBrand, reason = '使用本店默认品牌'
+      if (!hasOptions(field)) return { value: own, reason }
+      const listed = (field.dataSource as Json[]).find(o => normalized(o.text) === normalized(own))
+      if (listed) return { value: { value: listed.value, text: listed.text }, reason }
+      if (field.customizable === true) return { value: { value: -1, text: own, custom: true }, reason }
+    }
     if (!hasOptions(field)) return { value: '无品牌', reason: '来源没有可用品牌，按无品牌填写' }
     const neutral = (field.dataSource as Json[]).filter(o => NEUTRAL_BRAND.test(String(o.text ?? '').trim())).sort((a, b) => Number(b.text === '无品牌') - Number(a.text === '无品牌'))[0]
     if (neutral) return { value: { value: neutral.value, text: neutral.text }, reason: '来源没有可用品牌，选择中性选项' }
@@ -136,7 +143,7 @@ async function patchFields(fields: Json[], system: string, payload: Json, facts:
   const out: Patch = { values: {}, filled: [], refused: [], diagnosis: '' }
   const forModel: Json[] = []
   for (const field of fields) {
-    const label = String(field.label || field.name), rule = ruled(field)
+    const label = String(field.label || field.name), rule = ruled(field, facts)
     if (!rule) { forModel.push(field); continue }
     if (rule.refused) { out.refused.push({ name: field.name, label, reason: rule.refused }); continue }
     out.values[field.name] = rule.value
@@ -160,7 +167,8 @@ async function patchFields(fields: Json[], system: string, payload: Json, facts:
 
 /** Fills the required category attributes still empty after the collected data and the grounded pass were applied. */
 export async function fillRequiredAttributes(schema: Json, values: Json, facts: AttributeFacts, pictures: string[]) {
-  const fields = fieldsOf(schema).filter(f => editable(f) && f.required && isEmpty(values.catProp?.[f.name]))
+  // The shop's own brand goes on the listing even where the field is optional.
+  const fields = fieldsOf(schema).filter(f => editable(f) && isEmpty(values.catProp?.[f.name]) && (f.required || (facts.ownBrand && BRAND_FIELD.test(String(f.label || '')))))
   if (!fields.length) return { values, filled: [] as FilledAttribute[], refused: [] as RefusedAttribute[] }
   const patch = await patchFields(fields, `你是1688商品类目属性填写员，根据商品标题、已采集属性、类目和图片填写 fields 列出的必填属性。只输出 JSON {"fields":[{"name":"字段name","values":["取值"],"evidence":"title","confidence":0.9,"reason":"依据"}],"cannot":[{"name":"字段name","reason":"缺什么"}]}。${RULES}`, { product: facts }, facts, pictures)
   return { values: { ...values, catProp: { ...values.catProp, ...patch.values } }, filled: patch.filled, refused: patch.refused }

@@ -7,11 +7,13 @@ import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
 import {
   cachedFindings, checkPrompt, download, editPrompt, flagged, imageUrl, productFacts, productImages, queueReplacements, readImage, removeImage,
-  resizeImage, screen, storeImage, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
+  resizeImage, screen, storeImage, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
 } from '../integrations/image-workshop.js'
 import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
 import { IMAGE_MODELS } from '../llm/qwen-image.js'
+import { brandById, defaultBrand } from '../integrations/brands.js'
 import { imageAlbumRoutes } from './image-album.js'
+import { brandRoutes } from './image-brands.js'
 
 const tenant = (request: FastifyRequest) => request.authUser.tenantId
 const idParams = z.object({ id: z.string().uuid() })
@@ -153,6 +155,8 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
       collectedProductId: z.string().uuid().optional(), title: z.string().trim().min(2).max(200).optional(), points: z.string().trim().max(400).optional(),
       references: z.array(source).min(1).max(4), types: z.array(z.enum(SUITE_TYPES)).min(1).max(6).default([...SUITE_TYPES]),
       model: z.enum(SUITE_MODELS).optional(), quality: z.enum(SUITE_QUALITIES).optional(), size: z.enum(['1:1', '3:4']).default('1:1'), resolution: z.enum(['1k', '2k']).default('1k'),
+      // Left out: the default brand. null: no brand on this suite.
+      brandId: z.string().uuid().nullable().optional(),
     }).strict().parse(request.body)
     if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY（电商套图使用 GPT-Image-2.5）。', 503)
     if (input.points) checkPrompt(input.points)
@@ -162,12 +166,14 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     if (!facts) throw new IntegrationError('TITLE_REQUIRED', '请选择采集商品，或填写商品名称。', 400)
     const refs: string[] = []
     for (const ref of input.references) refs.push((await usableSource(tenant(request), ref)).ref)
+    const brand = input.brandId === null ? null : input.brandId ? await brandById(tenant(request), input.brandId) : await defaultBrand(tenant(request))
+    if (input.brandId && !brand) throw new IntegrationError('NOT_FOUND', '品牌不存在。', 404)
     const batch = randomUUID(), model = input.model ?? settings.suite_model, quality = input.quality ?? settings.suite_quality
     const rows = []
     for (const type of [...new Set(input.types)] as SuiteType[]) rows.push((await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,created_by)
       VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9) RETURNING ${assetColumns}`,
-    [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, resolution: input.resolution, quality, title: facts.title }), suitePrompt(type, facts), request.authUser.sub])).rows[0])
-    await audit(request, 'image.suite', batch, { types: input.types, model, quality, collectedProductId: input.collectedProductId ?? null })
+    [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, resolution: input.resolution, quality, title: facts.title, ...suiteBrandOption(type, brand) }), suitePrompt(type, facts, suiteBrand(brand)), request.authUser.sub])).rows[0])
+    await audit(request, 'image.suite', batch, { types: input.types, model, quality, collectedProductId: input.collectedProductId ?? null, brandId: brand?.id ?? null })
     return { data: { batchId: batch, assets: await Promise.all(rows.map(present)) } }
   })
 
@@ -212,4 +218,5 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     return { ok: true }
   })
   await imageAlbumRoutes(app)
+  await brandRoutes(app)
 }

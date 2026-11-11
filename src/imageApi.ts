@@ -16,6 +16,7 @@ export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
 export type ImageSource = { url:string }|{ assetId:string }
+export type Brand = { id:string; name:string; aliases:string[]; is_default:boolean; logo_url:string|null; logo_width:number|null; logo_height:number|null; updated_at:string }
 
 export const suiteTypes:[SuiteType,string,string][] = [
   ['suite_white','白底图','纯白背景、居中完整，平台主图首选'],
@@ -37,12 +38,16 @@ export const screenProductImages = (id:string, details=false) => request<{data:P
 export const replaceFlagged = (id:string) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', {}))
 export const uploadImage = (content:string, collectedProductId?:string) => request<{data:ImageAsset}>(`${base}/uploads`, json('POST', { content, collectedProductId }))
 export const createEdit = (input:{source:ImageSource;operation:'white_bg'|'background'|'resize';collectedProductId?:string;scene?:string;model?:string;preset?:string;width?:number;height?:number;fit?:'pad'|'crop'}) => request<{data:ImageAsset}>(`${base}/edits`, json('POST', input))
-export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];model?:string;quality?:string;size?:'1:1'|'3:4';resolution?:'1k'|'2k'}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
+export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];model?:string;quality?:string;size?:'1:1'|'3:4';resolution?:'1k'|'2k';brandId?:string|null}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
 export function getAssets(params:{kind?:'edit'|'suite'|'upload';collectedProductId?:string;batchId?:string;ids?:string[];page?:number;pageSize?:number}) {
   const q = new URLSearchParams()
   Object.entries(params).forEach(([k,v]) => { if (v !== undefined && v !== '') q.set(k, Array.isArray(v) ? v.join(',') : String(v)) })
   return request<{data:ImageAsset[];total:number}>(`${base}/assets?${q}`)
 }
+export const getBrands = () => request<{data:Brand[]}>(`${base}/brands`)
+export const createBrand = (input:{name:string;aliases:string[];logoContent?:string;isDefault:boolean;rightsConfirmed:true}) => request<{data:Brand}>(`${base}/brands`, json('POST', input))
+export const updateBrand = (id:string, input:{name?:string;aliases?:string[];logoContent?:string;removeLogo?:boolean;isDefault?:true;rightsConfirmed?:boolean}) => request<{data:Brand}>(`${base}/brands/${id}`, json('PATCH', input))
+export const deleteBrand = (id:string) => request<{ok:true}>(`${base}/brands/${id}`, { method:'DELETE' })
 export const getAlbums = () => request<{data:AlbumShop[]}>(`${base}/albums`)
 export const uploadToAlbum = (id:string, input:{connectionId?:string;albumId?:string}) => request<{data:ImageAsset}>(`${base}/assets/${id}/photo`, json('POST', { ...input, confirmed:true }))
 export const applyAsset = (id:string, input:{connectionId?:string;albumId?:string;collectedProductId?:string;placement:'replace'|'append';index?:number}) =>

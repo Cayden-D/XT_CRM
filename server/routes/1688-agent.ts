@@ -10,7 +10,8 @@ import { inspectPublishingImages, prepareAgentFields, publishingImages } from '.
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
-import { attributeFacts, attributePictures, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
+import { defaultBrand, ownBrandNames } from '../integrations/brands.js'
+import { attributeFacts, attributePictures, BRAND_FIELD, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
 import { validatePublishBody } from './1688.js'
 
 type Publisher=(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,agent?:{jobId:string;settingsRevision:number;queue?:{id:string;workerId:string}})=>Promise<unknown>
@@ -89,17 +90,19 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
         const original=sourceById.get(variant.source_variant_id)
         return original?{...variant,attributes:{...variant.attributes,...collectedSkuAttributes(source,original)}}:variant
       })
-      const defaults=collectedCategoryDefaults(draft.platform_schema,source)
+      const defaults=collectedCategoryDefaults(draft.platform_schema,source),ownBrand=await defaultBrand(tenant)
+      // The collected brand is the source seller's; with a brand of its own the shop does not list under it.
+      if(ownBrand)for(const field of draft.platform_schema.data?.catProp?.fields?.dataSource||[])if(BRAND_FIELD.test(String(field.label||'')))delete defaults[field.name]
       const current=await fillPublishTemplate(tenant,draft.platform_schema,fillFromProductData(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,product.id)))
       const catProp={...(current.catProp||{})}
       for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
       let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)
       report={...report,title:formValues.title}
       const images=publishingImages(formValues)
-      const findings=await inspectPublishingImages(images);report={...report,images:findings}
+      const findings=await inspectPublishingImages(images,await ownBrandNames(tenant));report={...report,images:findings}
       const risky=findings.filter(i=>!i.readable||i.watermark||i.rightsRisk||i.uncertain)
       if(risky.length)throw new IntegrationError('AGENT_IMAGE_RISK',`图片检查未通过：${risky.map(i=>i.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或替换图片；不能通过编辑原图消除明确的公司水印或品牌 Logo。`,400)
-      const facts=attributeFacts(product,reviewed,source),pictures=attributePictures(formValues)
+      const facts=attributeFacts(product,reviewed,source,ownBrand?.name),pictures=attributePictures(formValues)
       const fill=await fillRequiredAttributes(draft.platform_schema,formValues,facts,pictures)
       formValues=fill.values
       const ai:AttributeFillReport={filled:fill.filled,refused:fill.refused,repairs:[]}

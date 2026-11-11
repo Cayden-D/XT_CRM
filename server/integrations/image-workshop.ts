@@ -6,6 +6,7 @@ import { IntegrationError } from './1688.js'
 import { inspectPublishingImages } from './1688-agent.js'
 import { imagePreviewClient, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
+import { brandById, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
 import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type SuiteModel, type SuiteQuality } from '../llm/apimart-image.js'
 
 /**
@@ -92,7 +93,7 @@ export function sourceUrl(raw: string) {
 }
 
 /** Screening results by URL; checks only what is not cached yet. Asset links are signed, so they are not cached. */
-export async function screen(tenantId: string, urls: string[], cache = true): Promise<Map<string, Finding>> {
+export async function screen(tenantId: string, urls: string[], cache = true, ownBrands?: string[]): Promise<Map<string, Finding>> {
   const result = new Map<string, Finding>()
   if (cache && urls.length) {
     const rows = (await db.query('SELECT url,readable,watermark,rights_risk,reason FROM image_inspections WHERE tenant_id=$1 AND url=ANY($2::text[])', [tenantId, urls])).rows
@@ -100,7 +101,7 @@ export async function screen(tenantId: string, urls: string[], cache = true): Pr
   }
   const missing = [...new Set(urls.filter(u => !result.has(u)))]
   if (missing.length) {
-    const findings = await inspectPublishingImages(missing)
+    const findings = await inspectPublishingImages(missing, ownBrands ?? await ownBrandNames(tenantId))
     for (const f of findings) {
       const finding = { readable: f.readable, watermark: f.watermark, rightsRisk: f.rightsRisk, reason: f.reason }
       result.set(f.url, finding)
@@ -155,8 +156,18 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
 }
 
 export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string }
-export function suitePrompt(type: SuiteType, facts: SuiteFacts) {
-  const attrs = Object.entries(facts.attributes).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
+/** The white main picture stays free of marks; every other picture carries the logo, placed exactly by `applyLogo`. */
+export const logoApplies = (type: SuiteType, brand: SuiteBrand | null | undefined) => Boolean(brand?.hasLogo) && type !== 'suite_white'
+export type SuiteBrand = { name: string; hasLogo: boolean }
+export function suitePrompt(type: SuiteType, facts: SuiteFacts, brand?: SuiteBrand | null) {
+  // A collected product's brand is the source seller's; with the shop's own brand chosen it must not reach the picture.
+  const known = brand ? { 品牌: brand.name, ...Object.fromEntries(Object.entries(facts.attributes).filter(([k]) => !k.includes('品牌'))) } : facts.attributes
+  const attrs = Object.entries(known).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
+  const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
+  const logoSpace = logoApplies(type, brand) ? '画面左上角约 22% 宽、14% 高的区域保持干净，不放文字、图标或商品主体，后期会放置品牌标识。' : ''
+  return `${suiteBody(type, facts, attrs)}${brandText}${logoSpace}`
+}
+function suiteBody(type: SuiteType, facts: SuiteFacts, attrs: string) {
   const base = `商品：${facts.title}${facts.category ? `（类目：${facts.category}）` : ''}。${attrs ? `已知参数：${attrs}。` : ''}${facts.skus.length ? `规格：${facts.skus.slice(0, 8).join('、')}。` : ''}参考图是该商品的实拍图，${KEEP}`
   const noFake = '不得编造未提供的参数、认证、销量、功效或获奖信息。'
   const text = '画面中的文字一律使用简体中文，字体清晰、排版整齐，不出现乱码。'
@@ -195,12 +206,31 @@ export async function albumJpeg(png: Buffer) {
   throw new IntegrationError('IMAGE_TOO_LARGE', '图片无法压缩到店铺相册 2MB 限制以内。', 400)
 }
 
+/** Puts the logo, unchanged, in the top-left corner on a light plate so it stays legible on any background. */
+export async function applyLogo(base: Buffer, logo: Buffer) {
+  const { width, height } = await sharp(base).metadata()
+  if (!width || !height) throw new IntegrationError('INVALID_IMAGE', '生成图片无法读取。', 502)
+  const short = Math.min(width, height), margin = Math.round(short * 0.03), pad = Math.round(short * 0.012)
+  const mark = await sharp(logo).resize({ width: Math.round(width * 0.18), height: Math.round(height * 0.1), fit: 'inside' }).png().toBuffer({ resolveWithObject: true })
+  const plateWidth = mark.info.width + pad * 2, plateHeight = mark.info.height + pad * 2, radius = Math.round(pad * 1.2)
+  const plate = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${plateWidth}" height="${plateHeight}"><rect width="${plateWidth}" height="${plateHeight}" rx="${radius}" ry="${radius}" fill="#ffffff" fill-opacity="0.92"/></svg>`)
+  return sharp(base).composite([{ input: plate, left: margin, top: margin }, { input: mark.data, left: margin + pad, top: margin + pad }]).png().toBuffer()
+}
+
+async function brandLogoOf(asset: Asset) {
+  const id = asset.options.brand?.id as string
+  const brand = await brandById(asset.tenant_id, id)
+  if (!brand?.logo_key) throw new IntegrationError('BRAND_MISSING', '生成时使用的品牌或 Logo 已被删除，请重新生成。', 409)
+  return brand.logo_key
+}
+
 // ---------- worker ----------
 type Asset = { id: string; tenant_id: string; operation: string; provider: string; model: string | null; reference_urls: string[]; source_url: string | null; options: Json; prompt: string | null; status: string; task_id: string | null; attempts: number; created_at: Date }
 const retryable = (error: unknown) => error instanceof IntegrationError && ['APIMART_RATE_LIMIT', 'APIMART_NETWORK', 'IMAGE_MODEL_NETWORK', 'IMAGE_MODEL_TIMEOUT', 'APIMART_FAILED'].includes(error.code)
 
 async function complete(asset: Asset, png: Buffer, cost?: number) {
-  const { png: normalized, width, height } = await toPng(png)
+  const { png: decoded, width, height } = await toPng(png)
+  const normalized = asset.options.brand?.logo ? await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id)) : decoded
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
   try { const url = await imageUrl(key, asset.tenant_id); finding = (await screen(asset.tenant_id, [url], false)).get(url) }
@@ -226,6 +256,7 @@ async function step(asset: Asset) {
       return
     }
     if (asset.status === 'pending') {
+      if (asset.options.brand?.logo) await brandLogoOf(asset) // before anything is paid for
       const refs = await Promise.all(asset.reference_urls.map(r => referenceUrl(asset.tenant_id, r)))
       const taskId = await submitImageTask({ model: asset.model as SuiteModel, prompt: asset.prompt!, imageUrls: refs, size: asset.options.size ?? '1:1', resolution: asset.options.resolution ?? '1k', quality: asset.options.quality ?? 'medium' })
       await db.query("UPDATE image_assets SET status='processing',task_id=$2,next_poll_at=now()+interval '8 seconds',lease_until=NULL,error=NULL,updated_at=now() WHERE id=$1", [asset.id, taskId])
@@ -262,6 +293,7 @@ export async function screenNextProduct() {
 /** Returns how many flagged main pictures there are and how many replacements were queued. */
 export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', model: SuiteModel, quality: SuiteQuality) {
   const facts = await productFacts(tenantId, productId)
+  const brand = await defaultBrand(tenantId)
   const findings = await screen(tenantId, facts.gallery)
   const bad = facts.gallery.map((url, index) => ({ url, index })).filter(g => flagged(findings.get(g.url)))
   const clean = facts.gallery.filter(url => !flagged(findings.get(url)))
@@ -273,11 +305,15 @@ export async function queueReplacements(tenantId: string, productId: string, act
     if (existing.has(index)) continue
     const type = SUITE_TYPES[Math.min(index, SUITE_TYPES.length - 1)]
     await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,replaces_index,options,prompt,trigger,created_by)
-      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality }), suitePrompt(type, facts), trigger, actorId])
+      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, ...suiteBrandOption(type, brand) }), suitePrompt(type, facts, suiteBrand(brand)), trigger, actorId])
     queued++
   }
   return { flagged: bad.length, queued, clean: clean.length }
 }
+
+export const suiteBrand = (brand: OwnBrand | null): SuiteBrand | null => brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
+/** What a queued picture remembers about the brand, so the worker can add the logo (also on a retry). */
+export const suiteBrandOption = (type: SuiteType, brand: OwnBrand | null) => brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, suiteBrand(brand)) } } : {}
 
 export function startImageWorker(onError: (error: unknown) => void = () => {}) {
   let stopped = false, ticking = false

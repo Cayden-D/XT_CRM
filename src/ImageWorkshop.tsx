@@ -7,8 +7,8 @@ import { getCollectedProducts, type CollectedProductCard, type SessionUser } fro
 import ApplyDialog from './ImageApply'
 import Pagination from './Pagination'
 import {
-  createEdit, createSuite, deleteAsset, downloadAsset, fileToBase64, flagged, getAssets, getImageSettings, getProductImages, openImageTool, replaceFlagged, resizePresets,
-  retryAsset, revertAsset, saveImageSettings, screenProductImages, suiteTypes, uploadImage, type ImageAsset, type ImageIntent, type ImageServices, type ImageSettings, type ImageSource,
+  createEdit, createSuite, deleteAsset, downloadAsset, fileToBase64, flagged, getAssets, getBrands, getImageSettings, getProductImages, openImageTool, replaceFlagged, resizePresets,
+  retryAsset, revertAsset, saveImageSettings, screenProductImages, suiteTypes, uploadImage, type Brand, type ImageAsset, type ImageIntent, type ImageServices, type ImageSettings, type ImageSource,
   type ProductImage, type ProductImages, type SuiteType,
 } from './imageApi'
 import './imageWorkshop.css'
@@ -219,12 +219,15 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
   const [picked, setPicked] = useState<Picked[]>([]), [title, setTitle] = useState(''), [points, setPoints] = useState('')
   const [types, setTypes] = useState<SuiteType[]>(suiteTypes.map(t => t[0])), [quality, setQuality] = useState(''), [model, setModel] = useState(''), [size, setSize] = useState<'1:1'|'3:4'>('1:1'), [resolution, setResolution] = useState<'1k'|'2k'>('1k')
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [refresh, setRefresh] = useState(0)
+  const [brands, setBrands] = useState<Brand[]>([]), [brandId, setBrandId] = useState('')
+  useEffect(() => { getBrands().then(r => { setBrands(r.data); setBrandId(r.data.find(b => b.is_default)?.id ?? '') }).catch(() => {}) }, [])
+  const brand = brands.find(b => b.id === brandId)
   const q = quality || settings?.suite_quality || 'medium'
   const estimate = types.length * costPerImage[q] * (resolution === '2k' ? 2 : 1)
   async function submit() {
     setBusy(true); setError('')
     try {
-      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, quality:quality || undefined, model:model || undefined, size, resolution })
+      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, quality:quality || undefined, model:model || undefined, size, resolution, brandId:brandId || null })
       setRefresh(n => n + 1)
     } catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
@@ -236,6 +239,11 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
       <label className="iw-field">卖点与参数（可选）<textarea rows={2} maxLength={400} value={points} onChange={e => setPoints(e.target.value)} placeholder="写在卖点图和规格图上的内容，如：12V 车充 / 30 秒充满 / 数显胎压 / 尺寸 15×7×5cm。只会使用这里和商品资料里的信息"/></label>
       <div className="iw-step"><span>2</span><h3>要生成的图</h3></div>
       <div className="iw-suite-types">{suiteTypes.map(([key, label, hint]) => <label key={key} className={types.includes(key) ? 'on' : ''}><input type="checkbox" checked={types.includes(key)} onChange={e => setTypes(e.target.checked ? suiteTypes.map(t => t[0]).filter(t => t === key || types.includes(t)) : types.filter(t => t !== key))}/><b>{label}</b><small>{hint}</small></label>)}</div>
+      {brands.length > 0 && <div className="iw-brand-pick">
+        {brand?.logo_url && <img src={brand.logo_url} alt={`${brand.name} Logo`}/>}
+        <label className="iw-field">品牌<select aria-label="套图品牌" value={brandId} onChange={e => setBrandId(e.target.value)}><option value="">不使用品牌</option>{brands.map(b => <option key={b.id} value={b.id}>{b.name}{b.is_default ? '（默认）' : ''}</option>)}</select></label>
+        {brand && <small>{brand.logo_url ? 'Logo 原样放在除白底图外每张图的左上角' : '未上传 Logo，品牌名只写在卖点图和规格图上'}</small>}
+      </div>}
       <div className="iw-row">
         <label className="iw-field">模型<select value={model} onChange={e => setModel(e.target.value)}><option value="">默认（{settings?.suite_model === 'gpt-image-2.5-sunburst' ? 'Sunburst' : 'Flare'}）</option><option value="gpt-image-2.5-flare">Flare · 更快</option><option value="gpt-image-2.5-sunburst">Sunburst · 细节更准</option></select></label>
         <label className="iw-field">质量<select value={quality} onChange={e => setQuality(e.target.value)}><option value="">默认（{settings?.suite_quality ?? 'medium'}）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>

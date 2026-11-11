@@ -32,6 +32,7 @@ export const sections: Section[] = [
   { id: 'images', label: '图片', icon: Images, tabs: [
     { id: 'edit', label: '图片编辑' },
     { id: 'suite', label: '电商套图' },
+    { id: 'brands', label: '品牌', can: u => has(u, 'integration:manage') },
   ] },
   { id: 'performance', label: '绩效', icon: Headset, tabs: [
     { id: 'comparison', label: '客服对比', can: perf },
