@@ -8,7 +8,7 @@ import { createDraftFromProduct } from './1688-drafts.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
-import { ensurePhoto } from './image-album.js'
+import { ensureAlbum, ensurePhoto } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
 
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
@@ -117,9 +117,10 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   if(failed||ordered.length<GENERATED.length)return {kind:'block',message:`AI 生图失败：${failed?.error||'部分图片缺失'}。请在采集商品的「商品图片」里重试后重新入队。`}
   const done=ordered.filter(r=>r.status==='completed').length
   if(done<ordered.length)return {kind:'wait',message:`AI 生图中：已生成 ${done}/${ordered.length} 张，完成后自动上传店铺相册并上架。`}
-  const album=(await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1',[job.connection_id])).rows[0]?.album_id
-  if(!album)return {kind:'block',message:'AI 新图已生成，但该店铺还没有设置相册。请在「图片」里把任意一张图上传到店铺相册一次，然后重新入队。'}
   const ctx={tenantId:job.tenant_id,actorId:actor.id,requestId:job.id}
+  let album:string
+  try{album=await ensureAlbum(ctx,job.connection_id)}
+  catch(error){return {kind:'block',message:`AI 新图已生成，但没能确定店铺相册：${(error instanceof Error?error.message:'相册接口调用失败').replace(/[。.]+$/,'')}。可在「图片」里手动上传一张图到店铺相册后重新入队。`}}
   const urls:string[]=[]
   for(const asset of ordered)urls.push(await ensurePhoto(ctx,asset,job.connection_id,album))
   const mains=urls.slice(0,SUITE_TYPES.length),details=urls.slice(SUITE_TYPES.length)

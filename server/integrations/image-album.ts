@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg'
 import { db } from '../db.js'
-import { IntegrationError, uploadPhoto } from './1688.js'
+import { callProductApi, IntegrationError, uploadPhoto } from './1688.js'
 import { publishingImages } from './1688-agent.js'
 import { albumJpeg, flagged, galleryOf, readImage, type Finding } from './image-workshop.js'
 
@@ -91,4 +91,46 @@ export async function applyAssetToProduct(ctx: AlbumContext, asset: Record<strin
     } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
   await audit(ctx, 'image.apply', asset.id, applied)
   return applied
+}
+
+/** Album that receives generated pictures when the shop has none chosen yet: found by name, otherwise created (private). */
+export const AUTO_ALBUM_NAME = '销途 AI 生图'
+type Album = { albumID?: unknown; name?: unknown }
+const platformError = (data: Record<string, unknown>) => {
+  const code = data.errCode ?? data.errorCode, message = data.errMsg ?? data.errorMsg
+  return code || message ? new IntegrationError(String(code || 'ALBUM_ERROR'), `1688 相册接口返回错误：${String(message || code)}`, 502) : null
+}
+export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
+  const chosen = (await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connectionId])).rows[0]?.album_id as string | undefined
+  if (chosen) return chosen
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
+    // One album per shop even when several jobs reach this point together.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`photobank-album:${connectionId}`])
+    const again = (await client.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connectionId])).rows[0]?.album_id as string | undefined
+    if (again) { await client.query('COMMIT'); return again }
+    const listed = await callProductApi(connectionId, ctx.tenantId, ctx.actorId, 'alibaba.photobank.album.getList', { webSite: '1688', albumType: 'CUSTOM' }, ctx.requestId) as Record<string, unknown>
+    const body = (listed.result && typeof listed.result === 'object' ? listed.result : listed) as Record<string, unknown>
+    const listError = platformError(body)
+    if (listError) throw listError
+    const albums = (Array.isArray(body.albumInfos) ? body.albumInfos : []) as Album[]
+    let albumId = albums.find(a => a?.name === AUTO_ALBUM_NAME && /^\d{1,20}$/.test(String(a.albumID ?? '')))?.albumID as string | number | undefined
+    let created = false
+    if (albumId == null) {
+      const made = await callProductApi(connectionId, ctx.tenantId, ctx.actorId, 'alibaba.photobank.album.add', { name: AUTO_ALBUM_NAME, description: '销途 CRM 自动上架生成的商品图片', authority: 0, webSite: '1688' }, ctx.requestId) as Record<string, unknown>
+      const answer = (made.result && typeof made.result === 'object' ? made.result : made) as Record<string, unknown>
+      const addError = platformError(answer)
+      if (addError) throw addError
+      albumId = answer.albumID as string | number | undefined
+      if (!/^\d{1,20}$/.test(String(albumId ?? ''))) throw new IntegrationError('ALBUM_UNKNOWN', '创建相册后平台没有返回相册编号，请到店铺相册核对。', 502)
+      created = true
+    }
+    await client.query(`INSERT INTO integration_1688_album_settings(connection_id,tenant_id,album_id,updated_by) VALUES($1,$2,$3,$4)
+      ON CONFLICT(connection_id) DO UPDATE SET album_id=excluded.album_id,updated_by=excluded.updated_by,updated_at=now()`, [connectionId, ctx.tenantId, String(albumId), ctx.actorId])
+    await client.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'image.album.auto','1688_connection',$3,$4,$5)",
+      [ctx.tenantId, ctx.actorId, connectionId, JSON.stringify({ albumId: String(albumId), name: AUTO_ALBUM_NAME, created }), ctx.requestId])
+    await client.query('COMMIT')
+    return String(albumId)
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
 }

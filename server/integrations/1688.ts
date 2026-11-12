@@ -109,10 +109,11 @@ export async function gateway(path: string, params: Record<string, string>, imag
     if(safeCode==='CHK_LOGISTICS_ITEM_NUM_ERROR')throw new IntegrationError(safeCode,'1688 件重尺校验未通过（CHK_LOGISTICS_ITEM_NUM_ERROR）：请核对物流件数及销售包装数据是否完整、符合平台规则。',400)
     if(safeCode.startsWith('gw.Qos'))throw new IntegrationError(safeCode,`1688 平台限流或当日调用额度已用完（${safeCode}），已保存进度，额度恢复后自动继续。`,429)
     // Publishing only: the reason is needed to correct the listing. Other endpoints keep the code alone (see OAuth above).
-    if(path.includes('alibaba.new.product.add')){
-      const raw=[nested.errorMessage,nested.errorMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
+    const album=path.includes('alibaba.photobank.album.')
+    if(path.includes('alibaba.new.product.add')||album){
+      const raw=[nested.errorMessage,nested.errorMsg,nested.errMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.errorMsg,data.errMsg,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
       const detail=raw?.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,300)
-      if(detail)throw new IntegrationError(safeCode,`1688 拒绝发布（${safeCode}）：${detail}`,400,detail)
+      if(detail)throw new IntegrationError(safeCode,album?`1688 相册接口返回错误（${safeCode}）：${detail}`:`1688 拒绝发布（${safeCode}）：${detail}`,400,detail)
       if(safeCode.startsWith('CHK_'))throw new IntegrationError(safeCode,`1688 校验未通过（${safeCode}），平台没有返回具体原因。`,400)
     }
     throw new IntegrationError(safeCode, `1688 接口调用失败（${safeCode}），请检查接口权限或重新授权。`)
@@ -244,7 +245,7 @@ export async function testMember(id: string, tenantId: string, actorId: string, 
 }
 
 export async function callProductApi(id: string, tenantId: string, actorId: string, name: string, input: Record<string, unknown>, requestId?: string) {
-  const allowed = ['alibaba.product.delete','alibaba.product.list.get','alibaba.product.get','alibaba.category.searchByKeyword','alibaba.category.get','alibaba.new.product.getSchema','alibaba.new.product.getSubSchema','alibaba.new.product.add','alibaba.product.modifyStock']
+  const allowed = ['alibaba.product.delete','alibaba.product.list.get','alibaba.product.get','alibaba.category.searchByKeyword','alibaba.category.get','alibaba.new.product.getSchema','alibaba.new.product.getSubSchema','alibaba.new.product.add','alibaba.product.modifyStock','alibaba.photobank.album.getList','alibaba.photobank.album.add']
   if (!allowed.includes(name)) throw new IntegrationError('API_NOT_SUPPORTED', '该接口尚未接入。', 400)
   const started = Date.now()
   try {
