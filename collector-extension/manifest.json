@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "销途 CRM · 1688/Alibaba 商品采集器",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "从 1688、Alibaba.com 采集商品并保存到销途 CRM。点击连接后在 CRM 中授权即可使用。",
   "permissions": ["storage"],
   "host_permissions": [

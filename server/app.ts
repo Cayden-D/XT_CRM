@@ -32,14 +32,19 @@ export async function buildApp() {
     requestIdHeader: 'x-request-id',
     genReqId: () => randomUUID(),
   })
-  await app.register(cors, {
+  const appCors = {
     origin: config.CORS_ORIGIN,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Collector-Key'],
     // Lets the browser read the server-chosen file name of CSV exports.
     exposedHeaders: ['Content-Disposition'],
-  })
+  }
+  // The collector calls these from 1688/Alibaba pages (or an extension); they take a collector key or a one-time verifier,
+  // never a cookie, so any origin may call them without credentials.
+  const collectorCors = { origin: true, credentials: false, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-Collector-Key'] }
+  const collectorPath = /^\/api\/product-collections\/(session|import|connect\/redeem)(\?|$)/
+  await app.register(cors, { delegator: (request, callback) => callback(null, collectorPath.test(request.url ?? '') ? collectorCors : appCors) })
   await app.register(jwt, { secret: config.JWT_SECRET })
 
   app.setErrorHandler((error, request, reply) => {

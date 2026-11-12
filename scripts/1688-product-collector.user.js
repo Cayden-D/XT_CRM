@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.3.0
+// @version      2.3.1
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -3031,7 +3031,9 @@
         });
         if (status === 401) {
             clearAuth();
-            throw new Error("登录已过期");
+            const expired = new Error("登录已过期");
+            expired.unauthorized = true;
+            throw expired;
         }
         if (status !== 200 || !body.data) {
             throw new Error(body.message || "验证采集密钥失败");
@@ -3050,24 +3052,22 @@
     }
     /** 确保已登录（内存 → 存储 → 弹窗登录） */
     async function ensureAuthenticated() {
-        if (authToken) {
+        // 只有服务器明确说凭证无效（401）才重新授权；网络或跨域失败时保留凭证，让后续请求报出真实错误，
+        // 否则每次失败都会弹出授权、陷入反复授权。
+        const check = async () => {
             try {
                 await getMe();
-                return true;
             }
-            catch {
-                clearAuth();
+            catch (error) {
+                if (error?.unauthorized)
+                    return false;
             }
-        }
-        if (loadAuthFromStorage()) {
-            try {
-                await getMe();
-                return true;
-            }
-            catch {
-                clearAuth();
-            }
-        }
+            return true;
+        };
+        if (authToken && await check())
+            return true;
+        if (loadAuthFromStorage() && await check())
+            return true;
         if (authEnsurer)
             return authEnsurer();
         return false;
@@ -3146,7 +3146,7 @@
                     collectorNote: product.collectorNote,
                     sourceCollectedAt: product.collectedAt,
                     collectorMode: "full-product",
-                    collectorVersion: "2.3.0",
+                    collectorVersion: "2.3.1",
                     rawData: product,
                 };
                 GM_xmlhttpRequest({

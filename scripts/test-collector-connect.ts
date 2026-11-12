@@ -40,6 +40,18 @@ try {
   await db.query("UPDATE product_collector_connects SET expires_at=now()-interval '1 second' WHERE challenge=$1", [late.challenge])
   assert.equal((await redeem(late.verifier)).statusCode, 202)
 
+  // Collector endpoints answer any origin without credentials; everything else keeps the CRM's own origin.
+  const preflight = (url: string, headers = 'content-type,x-collector-key') => app.inject({ method: 'OPTIONS', url, headers: { origin: 'https://detail.1688.com', 'access-control-request-method': 'POST', 'access-control-request-headers': headers } })
+  for (const path of ['import', 'session', 'connect/redeem']) {
+    const answer = await preflight(`${base}/${path}`)
+    assert.equal(answer.headers['access-control-allow-origin'], 'https://detail.1688.com', path)
+    assert.match(String(answer.headers['access-control-allow-headers']), /X-Collector-Key/i)
+    assert.equal(answer.headers['access-control-allow-credentials'], undefined, 'no cookies cross over')
+  }
+  for (const url of [`${base}/connect/approve`, `${base}?page=1`, '/api/users', '/api/auth/me']) assert.notEqual((await preflight(url, 'content-type,authorization')).headers['access-control-allow-origin'], 'https://detail.1688.com', url)
+  const imported = await app.inject({ method: 'POST', url: `${base}/import`, headers: { origin: 'https://detail.1688.com', 'x-collector-key': key }, payload: {} })
+  assert.equal(imported.headers['access-control-allow-origin'], 'https://detail.1688.com', 'the actual request is readable too')
+
   // The extension package: manifest, background, bridge, and the userscript behind the shim.
   const zip = await app.inject({ method: 'GET', url: `${base}/collector-extension.zip` })
   assert.equal(zip.statusCode, 200); assert.equal(zip.headers['content-type'], 'application/zip')
