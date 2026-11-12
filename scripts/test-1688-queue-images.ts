@@ -47,12 +47,13 @@ globalThis.fetch = async (input, init) => {
   if (url.includes('alibaba.photobank.album.getList')) {
     const form = init?.body as URLSearchParams
     assert.deepEqual([form.get('webSite'), form.get('albumType')], ['1688', 'CUSTOM'])
-    return reply(listFails ? { errorCode: 'ISP_ERROR', errorMsg: '相册服务暂不可用' } : { albumInfos: albums })
+    // Success carries an error code of "0" next to the data, as the live API answers.
+    return reply(listFails ? { errorCode: 'ISP_ERROR', errorMsg: '相册服务暂不可用' } : { albumInfos: albums, errorCode: '0', errorMsg: '' })
   }
   if (url.includes('alibaba.photobank.album.add')) {
     const form = init?.body as URLSearchParams
     assert.deepEqual([form.get('name'), form.get('authority'), form.get('webSite')], ['销途 AI 生图', '0', '1688'])
-    addCalls++; albums = [...albums, { albumID: 777, name: '销途 AI 生图' }]; return reply({ albumID: 777 })
+    addCalls++; albums = [...albums, { albumID: 777, name: '销途 AI 生图' }]; return reply({ albumID: 777, errCode: '0', errMsg: '' })
   }
   if (url.includes('alibaba.photobank.photo.add')) { uploadedTo.push(String((init?.body as FormData).get('albumID'))); albumUploads++; return reply({ image: { id: `photo-${albumUploads}`, url: `https://cbu01.alicdn.com/img/ibank/album-${albumUploads}.jpg` } }) }
   if (url.includes('alibaba.new.product.getSchema')) return reply({ result: { success: true, bizData: schema } })

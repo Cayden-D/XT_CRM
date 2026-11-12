@@ -96,9 +96,12 @@ export async function applyAssetToProduct(ctx: AlbumContext, asset: Record<strin
 /** Album that receives generated pictures when the shop has none chosen yet: found by name, otherwise created (private). */
 export const AUTO_ALBUM_NAME = '销途 AI 生图'
 type Album = { albumID?: unknown; name?: unknown }
+// The album APIs report success with an error code of "0" (or an empty one) next to the data.
+const OK_CODES = new Set(['', '0', 'success', 'SUCCESS'])
 const platformError = (data: Record<string, unknown>) => {
-  const code = data.errCode ?? data.errorCode, message = data.errMsg ?? data.errorMsg
-  return code || message ? new IntegrationError(String(code || 'ALBUM_ERROR'), `1688 相册接口返回错误：${String(message || code)}`, 502) : null
+  const code = String(data.errCode ?? data.errorCode ?? '').trim(), message = String(data.errMsg ?? data.errorMsg ?? '').trim()
+  if (OK_CODES.has(code) && (!message || OK_CODES.has(message))) return null
+  return new IntegrationError(code && !OK_CODES.has(code) ? code : 'ALBUM_ERROR', `1688 相册接口返回错误：${message || code}`, 502)
 }
 export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
   const chosen = (await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connectionId])).rows[0]?.album_id as string | undefined
