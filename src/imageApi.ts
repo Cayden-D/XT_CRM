@@ -8,7 +8,7 @@ export type ImageAsset = {
   source_url:string|null; replaces_index:number|null; options:Record<string,unknown>; status:'pending'|'processing'|'completed'|'failed'; width:number|null; height:number|null
   findings:Finding|null; error:string|null; cost:string|null; trigger:'manual'|'agent'; created_at:string; url:string|null; risky:boolean; product_title?:string|null
   photo_status:'uploading'|'uploaded'|'unknown'|null; photo_url:string|null; photo_connection_id:string|null; photo_album_id:string|null
-  applied_to:{ collectedProductId:string; index:number; placement:'replace'|'append'; previousUrl:string|null; productId:string|null }|null; applied_at:string|null
+  applied_to:{ collectedProductId:string; index:number; placement:'replace'|'append'|'detail'; previousUrl:string|null; productId:string|null }|null; applied_at:string|null
 }
 export type AlbumShop = { id:string; display_name:string; status:string; album_id:string|null }
 export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; enabled_at:string|null; revision:number }

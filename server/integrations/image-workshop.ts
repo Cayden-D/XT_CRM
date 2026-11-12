@@ -19,6 +19,11 @@ import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type Suite
 export const EDIT_OPERATIONS = ['white_bg', 'background', 'resize'] as const
 export const SUITE_TYPES = ['suite_white', 'suite_scene', 'suite_detail', 'suite_model', 'suite_selling', 'suite_spec'] as const
 export type SuiteType = typeof SUITE_TYPES[number]
+/** Detail pictures made for automatic listing (vertical, 3:4). */
+export const DETAIL_TYPES = ['detail_poster', 'detail_advantages', 'detail_features'] as const
+export type DetailType = typeof DETAIL_TYPES[number]
+export type GeneratedType = SuiteType | DetailType
+export const detailNames: Record<DetailType, string> = { detail_poster: '详情 · 主海报', detail_advantages: '详情 · 产品优势', detail_features: '详情 · 产品特点' }
 export const suiteNames: Record<SuiteType, string> = { suite_white: '白底图', suite_scene: '场景氛围图', suite_detail: '细节图', suite_model: '模特场景图', suite_selling: '卖点图', suite_spec: '规格尺寸图' }
 type Json = Record<string, any>
 export type Finding = { readable: boolean; watermark: boolean; rightsRisk: boolean; reason: string }
@@ -157,17 +162,17 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
 
 export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string }
 /** The white main picture stays free of marks; every other picture carries the logo, placed exactly by `applyLogo`. */
-export const logoApplies = (type: SuiteType, brand: SuiteBrand | null | undefined) => Boolean(brand?.hasLogo) && type !== 'suite_white'
+export const logoApplies = (type: GeneratedType, brand: SuiteBrand | null | undefined) => Boolean(brand?.hasLogo) && type !== 'suite_white'
 export type SuiteBrand = { name: string; hasLogo: boolean }
-export function suitePrompt(type: SuiteType, facts: SuiteFacts, brand?: SuiteBrand | null) {
+export function suitePrompt(type: GeneratedType, facts: SuiteFacts, brand?: SuiteBrand | null) {
   // A collected product's brand is the source seller's; with the shop's own brand chosen it must not reach the picture.
   const known = brand ? { 品牌: brand.name, ...Object.fromEntries(Object.entries(facts.attributes).filter(([k]) => !k.includes('品牌'))) } : facts.attributes
   const attrs = Object.entries(known).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
-  const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
+  const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec', 'detail_poster', 'detail_advantages', 'detail_features'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
   const logoSpace = logoApplies(type, brand) ? '画面左上角约 22% 宽、14% 高的区域保持干净，不放文字、图标或商品主体，后期会放置品牌标识。' : ''
   return `${suiteBody(type, facts, attrs)}${brandText}${logoSpace}`
 }
-function suiteBody(type: SuiteType, facts: SuiteFacts, attrs: string) {
+function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
   const base = `商品：${facts.title}${facts.category ? `（类目：${facts.category}）` : ''}。${attrs ? `已知参数：${attrs}。` : ''}${facts.skus.length ? `规格：${facts.skus.slice(0, 8).join('、')}。` : ''}参考图是该商品的实拍图，${KEEP}`
   const noFake = '不得编造未提供的参数、认证、销量、功效或获奖信息。'
   const text = '画面中的文字一律使用简体中文，字体清晰、排版整齐，不出现乱码。'
@@ -178,6 +183,9 @@ function suiteBody(type: SuiteType, facts: SuiteFacts, attrs: string) {
     case 'suite_model': return `${base}生成模特场景图：一位真实自然的亚洲模特在合适的生活或工作场景中正常使用或展示该商品，商品清晰可辨、比例真实，人物姿态自然，商业摄影风格。${CLEAN}`
     case 'suite_selling': return `${base}生成卖点图：商品放在画面一侧或中央，配 3–4 条简短卖点文字和简洁图标，卖点只能来自以下信息：${facts.points?.trim() || attrs || facts.title}。版式清爽、层次分明，适合 1688 主图。${text}${noFake}${CLEAN}`
     case 'suite_spec': return `${base}生成规格尺寸图：浅色干净背景，商品居中，用细线和箭头标注尺寸，并在一侧列出规格参数表。只能标注已知参数中出现的尺寸和规格，没有的数值不要标注、不要估算。${text}${noFake}${CLEAN}`
+    case 'detail_poster': return `${base}生成竖版详情页主海报：商品作为主角居中放大，背景有质感、与用途相符，顶部配一行醒目的商品名称和一句简短概括（只用已知信息），整体像电商详情页首屏。${text}${noFake}${CLEAN}`
+    case 'detail_advantages': return `${base}生成竖版详情页“产品优势”图：上方标题“产品优势”，下方用 3–4 个图标加短句的模块排列，每条优势只能来自以下信息：${facts.points?.trim() || attrs || facts.title}；配一张商品图。${text}${noFake}${CLEAN}`
+    case 'detail_features': return `${base}生成竖版详情页“产品特点”图：上方标题“产品特点”，用 2–3 个商品局部特写配简短说明，突出做工、材质或功能结构，说明只用已知信息。${text}${noFake}${CLEAN}`
   }
 }
 
@@ -233,7 +241,9 @@ async function complete(asset: Asset, png: Buffer, cost?: number) {
   const normalized = asset.options.brand?.logo ? await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id)) : decoded
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
-  try { const url = await imageUrl(key, asset.tenant_id); finding = (await screen(asset.tenant_id, [url], false)).get(url) }
+  // Made for automatic listing with AI images on: the owner chose to publish generated pictures without screening.
+  if (asset.options.unchecked) finding = { readable: true, watermark: false, rightsRisk: false, reason: '未检查：已开启 AI 生图自动上架，生成图不做水印/Logo 复检。' }
+  else try { const url = await imageUrl(key, asset.tenant_id); finding = (await screen(asset.tenant_id, [url], false)).get(url) }
   catch { finding = { readable: false, watermark: false, rightsRisk: false, reason: '生成结果未能完成复检，请人工确认后再使用。' } }
   await db.query("UPDATE image_assets SET status='completed',oss_key=$2,width=$3,height=$4,bytes=$5,findings=$6,cost=$7,error=NULL,lease_until=NULL,updated_at=now() WHERE id=$1",
     [asset.id, key, width, height, normalized.length, JSON.stringify(finding ?? null), cost ?? null])
@@ -283,7 +293,9 @@ async function claim(limit: number) {
 export async function screenNextProduct() {
   if (!apimartConfigured()) return false
   const p = (await db.query(`SELECT cp.id,cp.tenant_id,s.suite_model,s.suite_quality FROM collected_products cp JOIN image_workshop_settings s ON s.tenant_id=cp.tenant_id AND s.auto_replace
-    WHERE cp.images_screened_at IS NULL AND cp.collected_at>=s.enabled_at ORDER BY cp.collected_at LIMIT 1 FOR UPDATE OF cp SKIP LOCKED`)).rows[0]
+    WHERE cp.images_screened_at IS NULL AND cp.collected_at>=s.enabled_at
+      AND NOT EXISTS(SELECT 1 FROM integration_1688_collection_queue_jobs j WHERE j.collected_product_id=cp.id)
+    ORDER BY cp.collected_at LIMIT 1 FOR UPDATE OF cp SKIP LOCKED`)).rows[0]
   if (!p) return false
   await db.query('UPDATE collected_products SET images_screened_at=now() WHERE id=$1', [p.id])
   await queueReplacements(p.tenant_id, p.id, null, 'agent', p.suite_model, p.suite_quality)
@@ -313,7 +325,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
 
 export const suiteBrand = (brand: OwnBrand | null): SuiteBrand | null => brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
 /** What a queued picture remembers about the brand, so the worker can add the logo (also on a retry). */
-export const suiteBrandOption = (type: SuiteType, brand: OwnBrand | null) => brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, suiteBrand(brand)) } } : {}
+export const suiteBrandOption = (type: GeneratedType, brand: OwnBrand | null) => brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, suiteBrand(brand)) } } : {}
 
 export function startImageWorker(onError: (error: unknown) => void = () => {}) {
   let stopped = false, ticking = false

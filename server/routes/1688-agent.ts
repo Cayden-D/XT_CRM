@@ -68,7 +68,7 @@ export async function agent1688Routes(app:FastifyInstance,publish:Publisher){
   app.post('/drafts/:id/agent',{preHandler:[requirePermission('integration:publish'),requirePermission('product:read')]},request=>runAgentDraft(request,publish))
 }
 
-export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,publish:Publisher,queue?:{id:string;workerId:string}){
+export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,publish:Publisher,queue?:{id:string;workerId:string;skipImageCheck?:boolean}){
     const {id}=idSchema.parse(request.params),{revision}=z.object({revision:z.number().int().positive()}).parse(request.body)
     const tenant=request.authUser.tenantId
     const draft=(await db.query('SELECT * FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]
@@ -99,7 +99,8 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
       let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)
       report={...report,title:formValues.title}
       const images=publishingImages(formValues)
-      const findings=await inspectPublishingImages(images,await ownBrandNames(tenant));report={...report,images:findings}
+      // Pictures generated for this listing are published unchecked when the owner chose so (AI images on).
+      const findings=queue?.skipImageCheck?[]:await inspectPublishingImages(images,await ownBrandNames(tenant));report={...report,images:findings,...(queue?.skipImageCheck?{imagesUnchecked:true}:{})}
       const risky=findings.filter(i=>!i.readable||i.watermark||i.rightsRisk||i.uncertain)
       if(risky.length)throw new IntegrationError('AGENT_IMAGE_RISK',`图片检查未通过：${risky.map(i=>i.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或替换图片；不能通过编辑原图消除明确的公司水印或品牌 Logo。`,400)
       const facts=attributeFacts(product,reviewed,source,ownBrand?.name),pictures=attributePictures(formValues)

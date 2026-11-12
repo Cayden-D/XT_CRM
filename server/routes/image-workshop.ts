@@ -7,7 +7,7 @@ import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
 import {
   cachedFindings, checkPrompt, download, editPrompt, flagged, imageUrl, productFacts, productImages, queueReplacements, readImage, removeImage,
-  resizeImage, screen, storeImage, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
+  resizeImage, screen, storeImage, detailNames, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
 } from '../integrations/image-workshop.js'
 import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
 import { IMAGE_MODELS } from '../llm/qwen-image.js'
@@ -19,7 +19,7 @@ const tenant = (request: FastifyRequest) => request.authUser.tenantId
 const idParams = z.object({ id: z.string().uuid() })
 const source = z.object({ url: z.string().max(2000).optional(), assetId: z.string().uuid().optional() }).strict().refine(s => Boolean(s.url) !== Boolean(s.assetId), '请选择一张图片。')
 const RESIZE_PRESETS = { '800x800': [800, 800], '750x1000': [750, 1000], '1000x1000': [1000, 1000], '1080x1080': [1080, 1080], '1200x1200': [1200, 1200], '790x1000': [790, 1000] } as const
-const operationNames: Record<string, string> = { upload: '上传', white_bg: '白底图', background: '换背景', resize: '改尺寸', ...suiteNames }
+const operationNames: Record<string, string> = { upload: '上传', white_bg: '白底图', background: '换背景', resize: '改尺寸', ...suiteNames, ...detailNames }
 const audit = (request: FastifyRequest, action: string, entityId: string, data: object) => db.query(
   "INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,$3,'image_asset',$4,$5,$6)",
   [tenant(request), request.authUser.sub, action, entityId, JSON.stringify(data), request.id])

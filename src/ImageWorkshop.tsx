@@ -63,7 +63,7 @@ function AssetCard({asset, onChange, onRemove, onEdit, canApply, onApplied}:{ass
       {asset.product_title && <p className="iw-asset-title" title={asset.product_title}>{asset.product_title}</p>}
       {asset.status === 'completed' && asset.risky && <p className="iw-asset-risk"><ShieldAlert size={12}/>{asset.findings?.reason || '复检未完成'}，请核对后再使用</p>}
       {asset.width && <small>{asset.width}×{asset.height}{asset.model ? ` · ${asset.model}` : ''}</small>}
-      {asset.applied_to ? <p className="iw-asset-applied"><Check size={12}/>{asset.applied_to.placement === 'replace' ? `已替换主图 ${asset.applied_to.index + 1}` : `已追加为主图 ${asset.applied_to.index + 1}`}</p>
+      {asset.applied_to ? <p className="iw-asset-applied"><Check size={12}/>{asset.applied_to.placement === 'replace' ? `已替换主图 ${asset.applied_to.index + 1}` : asset.applied_to.placement === 'detail' ? `已用作详情图 ${asset.applied_to.index + 1}` : `已追加为主图 ${asset.applied_to.index + 1}`}</p>
         : asset.photo_status === 'uploaded' ? <p className="iw-asset-applied"><Check size={12}/>已上传店铺相册</p>
         : asset.photo_status === 'unknown' ? <p className="iw-asset-risk"><AlertCircle size={12}/>相册上传结果待核对</p> : null}
       {note && <p className="iw-asset-applied">{note}</p>}
@@ -307,7 +307,7 @@ export function ImageAutomationSettings({editable}:{editable:boolean}) {
   }
   return <section className="iw-settings">
     <h3><Wand2 size={18}/>AI 图片自动处理</h3>
-    <Note>开启后，Agent 会检查新采集商品的主图；发现明确的他人水印或知名品牌 Logo 时，<b>不修改原图</b>，而是只用该商品其余干净的图片作参考，为被标记的位置生成新图（GPT-Image-2.5），生成后再次检测。结果在采集商品详情的「商品图片」里，人工确认后使用。</Note>
+    <Note>开启后，进入<b>采集自动上架</b>的商品<b>不再检查原图</b>：直接以原图为参考，用 GPT-Image-2.5 生成 6 张主图（白底、场景、细节、模特、卖点、规格）和 3 张详情图（主海报、产品优势、产品特点），<b>生成图也不做水印/Logo 复检</b>，自动上传店铺相册后用于上架；SKU 图保持原样。生成失败时任务停下并写明原因。未进入自动上架队列的商品仍按原方式检查主图，并为带他人标识的位置生成替代图。</Note>
     {settings && <div className="iw-settings-grid">
       <label className="agent-switch"><input type="checkbox" role="switch" checked={settings.auto_replace} disabled={!editable || busy || (!settings.auto_replace && services?.apimart === false)} onChange={e => { if (e.target.checked) setConfirming(true); else void save({ autoReplace:false }) }}/><span>{settings.auto_replace ? '已开启' : '已关闭'}</span></label>
       <label>套图模型<select value={settings.suite_model} disabled={!editable || busy} onChange={e => void save({ suiteModel:e.target.value })}><option value="gpt-image-2.5-flare">Flare · 更快</option><option value="gpt-image-2.5-sunburst">Sunburst · 细节更准</option></select></label>
@@ -319,7 +319,7 @@ export function ImageAutomationSettings({editable}:{editable:boolean}) {
     {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
     {confirming && <div className="dialog-layer shop-dialog"><button className="drawer-scrim" aria-label="取消" onClick={() => setConfirming(false)}/><section className="shop-modal" role="dialog" aria-modal="true" aria-label="开启 AI 图片自动处理">
       <header><h2>开启 AI 图片自动处理</h2><button title="关闭" onClick={() => setConfirming(false)}><X size={18}/></button></header>
-      <div className="shop-modal-body"><p>每件新采集商品会把主图发送至阿里云百炼做水印/Logo 检测（约 1–2 次调用）；有被标记的主图时，按所选质量用 GPT-Image-2.5 生成替代图（APIMart 计费）。</p><p>检测是模型观察，不是侵权认定；替代图也需要人工确认商品和图片的使用权后再上架。</p>
+      <div className="shop-modal-body"><p>采集自动上架的每件商品会生成 9 张新图（medium 质量约 $0.12/件，APIMart 计费），并上传 9 张到店铺相册，耗时约几分钟。</p><p>原图和生成图都不再检查水印或品牌 Logo：参考图里的他人标识可能被模型照搬到新图并直接发布，请自行确认商品和图片的使用权。</p>
         <label className="shop-review-check"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}/>确认图片资料发送至模型服务并产生费用</label></div>
       <footer><button className="shop-button" onClick={() => setConfirming(false)}>取消</button><button className="shop-button primary" disabled={!agreed || busy} onClick={() => void save({ autoReplace:true }, true)}><Bot size={16}/>开启</button></footer></section></div>}
   </section>

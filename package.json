@@ -40,6 +40,7 @@
     "test:1688-title": "tsx scripts/test-1688-title.ts",
     "test:1688-agent": "tsx scripts/test-1688-agent.ts",
     "test:1688-queue": "tsx scripts/test-1688-queue.ts",
+    "test:1688-queue-images": "tsx scripts/test-1688-queue-images.ts",
     "test:collector-connect": "tsx scripts/test-collector-connect.ts",
     "test:1688-attribute-fill": "tsx scripts/test-1688-attribute-fill.ts",
     "test:1688-collector-attributes": "tsx scripts/test-1688-collector-attributes.ts",
