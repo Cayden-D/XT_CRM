@@ -14,6 +14,7 @@ import UsersAdminPage from './UsersAdminPage'
 import ChatInquiryPage from './ChatInquiryPage'
 import OrdersPage from './OrdersPage'
 import { ImageEditPage, ImageSuitePage } from './ImageWorkshop'
+import CollectorConnect from './CollectorConnect'
 import BrandsPage from './BrandsPage'
 import { OPEN_IMAGE_TOOL, type ImageIntent } from './imageApi'
 import AiAssistant from './AiAssistant'
@@ -121,6 +122,8 @@ export default function App() {
   if (session === undefined) return <div className="app-loading"><div className="brand-mark"><span /></div><p>正在恢复工作空间…</p></div>
   if (session === null) return <LoginPage onLogin={setSession} />
   const logout = () => { clearToken(); setSession(null); setAiOpen(false); resetAiFocus() }
+  // Opened by the 1688 collector to be approved; signing in (above) keeps the address, so it comes back here.
+  if (hash.startsWith('#/collector-connect')) return <CollectorConnect user={session} hash={hash} />
   const route = parseRoute(hash, session)
   const title = route.section.tabs.length > 1 ? `${route.section.label} · ${route.tab.label}` : route.section.label
   return <div className="app-shell">

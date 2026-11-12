@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.1.4
+// @version      2.3.0
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -3146,7 +3146,7 @@
                     collectorNote: product.collectorNote,
                     sourceCollectedAt: product.collectedAt,
                     collectorMode: "full-product",
-                    collectorVersion: "2.1.3",
+                    collectorVersion: "2.3.0",
                     rawData: product,
                 };
                 GM_xmlhttpRequest({
@@ -3166,7 +3166,7 @@
                         }
                         else if (response.status === 401) {
                             clearAuth();
-                            reject(new Error("采集密钥无效，请重新配置"));
+                            reject(new Error("采集器授权已失效，请重新连接 CRM"));
                         }
                         else {
                             reject(new Error(`HTTP ${response.status}: ${response.statusText}`));
@@ -4046,15 +4046,77 @@
         launcherAction = action;
         refreshAuthWidget?.();
     }
+    let launcherWake = null;
     function setLauncherState(label, state = "idle") {
         launcherBusy = state === "busy";
+        launcherWake?.();
         if (!launcherButton || !launcherActionLabel)
             return;
         launcherButton.disabled = launcherBusy;
         launcherButton.dataset.state = state;
         launcherActionLabel.textContent = label || launcherAction?.label || "打开采集助手";
     }
-    /** 登录弹窗，成功返回 true */
+    const CRM_ORIGIN_STORAGE_KEY = "cc_crm_origin";
+    function base64url(bytes) {
+        let text = "";
+        bytes.forEach((b) => { text += String.fromCharCode(b); });
+        return btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function getCrmOrigin() {
+        const stored = gmGet(CRM_ORIGIN_STORAGE_KEY);
+        if (stored)
+            return stored;
+        try {
+            return new URL(getApiBase()).origin;
+        }
+        catch {
+            return "https://xt.tlh666.cn";
+        }
+    }
+    /**
+     * 授权连接：采集器保存随机 verifier，只把它的 SHA-256（challenge）放进 CRM 授权页地址；
+     * 用户在已登录的 CRM 里点“授权”后，采集器用 verifier 换取采集凭证。凭证和 verifier 都不出现在网址里。
+     * 浏览器插件模式由插件后台完成整个流程，凭证不进入页面。
+     */
+    async function connectByApproval(crmOrigin, onWaiting, cancelled) {
+        const origin = crmOrigin.trim().replace(/\/+$/, "");
+        if (!/^https?:\/\/[^/]+$/.test(origin))
+            throw new Error("CRM 地址格式不正确，例如 https://xt.tlh666.cn");
+        gmSet(CRM_ORIGIN_STORAGE_KEY, origin);
+        gmSet(API_BASE_STORAGE_KEY, `${origin}/api/product-collections`);
+        const extension = globalThis.__CC_EXTENSION__;
+        if (extension) {
+            onWaiting(null);
+            const result = await extension.connect(getApiBase(), origin);
+            saveAuth(result.key, result.user);
+            return result.user;
+        }
+        const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+        const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+        const approveUrl = `${origin}/#/collector-connect?c=${challenge}`;
+        onWaiting(approveUrl);
+        window.open(approveUrl, "_blank");
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+            if (cancelled())
+                throw new Error("已取消");
+            const { status, body } = await gmRequest({
+                method: "POST",
+                url: `${getApiBase()}/connect/redeem`,
+                headers: { "Content-Type": "application/json" },
+                data: JSON.stringify({ verifier, client: "userscript" }),
+            });
+            if (status === 200 && body?.data?.key) {
+                saveAuth(body.data.key, body.data.user);
+                return body.data.user;
+            }
+            if (status !== 202)
+                throw new Error(body?.message || `授权失败（HTTP ${status}）`);
+            await new Promise((r) => setTimeout(r, 2000));
+        }
+        throw new Error("等待授权超时，请重新连接");
+    }
+    /** 连接弹窗：点“连接 CRM”打开授权页，授权后自动完成，成功返回 true */
     function showLoginModal() {
         return new Promise((resolve) => {
             const overlay = document.createElement("div");
@@ -4069,66 +4131,71 @@
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     `;
             panel.innerHTML = `
-      <h2 style="margin:0 0 8px;font-size:18px;color:#333;">🔐 连接销途 CRM</h2>
-      <p style="margin:0 0 16px;font-size:12px;color:#888;">在 CRM 的“1688 采集 → 配置采集器”中生成专用密钥</p>
-      <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">CRM API 地址</label>
-      <input id="cc-login-email" type="text" value="${getApiBase()}" placeholder="https://xt.tlh666.cn/api/product-collections"
-        style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d9d9d9;border-radius:6px;margin-bottom:12px;font-size:14px;" />
-      <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">采集密钥</label>
-      <input id="cc-login-password" type="password" placeholder="crm1688_..."
-        style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d9d9d9;border-radius:6px;margin-bottom:8px;font-size:14px;" />
+      <h2 style="margin:0 0 8px;font-size:18px;color:#333;">连接销途 CRM</h2>
+      <p id="cc-connect-hint" style="margin:0 0 16px;font-size:13px;color:#666;line-height:1.6;">点击“连接 CRM”会打开 CRM 授权页。在 CRM 中登录你的账号并点击“授权”，采集器会自动完成连接。</p>
+      <details style="margin-bottom:12px;font-size:12px;color:#888;"><summary style="cursor:pointer;">CRM 地址</summary>
+        <input id="cc-connect-origin" type="text" placeholder="https://xt.tlh666.cn"
+          style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d9d9d9;border-radius:6px;margin-top:8px;font-size:13px;" /></details>
       <div id="cc-login-error" style="color:#ff4d4f;font-size:12px;min-height:18px;margin-bottom:8px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
         <button id="cc-login-cancel" type="button"
           style="padding:8px 16px;border:1px solid #d9d9d9;border-radius:6px;background:#fff;cursor:pointer;">取消</button>
         <button id="cc-login-submit" type="button"
-          style="padding:8px 16px;border:none;border-radius:6px;background:#1677ff;color:#fff;cursor:pointer;">连接</button>
+          style="padding:8px 16px;border:none;border-radius:6px;background:#1677ff;color:#fff;cursor:pointer;">连接 CRM</button>
       </div>
     `;
             overlay.appendChild(panel);
             document.body.appendChild(overlay);
-            const emailInput = panel.querySelector("#cc-login-email");
-            const passwordInput = panel.querySelector("#cc-login-password");
+            const originInput = panel.querySelector("#cc-connect-origin");
+            const hintEl = panel.querySelector("#cc-connect-hint");
             const errorEl = panel.querySelector("#cc-login-error");
             const submitBtn = panel.querySelector("#cc-login-submit");
             const cancelBtn = panel.querySelector("#cc-login-cancel");
+            originInput.value = getCrmOrigin();
+            let stopped = false, running = false;
             const close = (result) => {
+                stopped = true;
                 overlay.remove();
                 resolve(result);
             };
-            const doLogin = async () => {
-                const email = emailInput.value.trim();
-                const password = passwordInput.value.trim();
-                if (!email || !password) {
-                    errorEl.textContent = "请输入 CRM API 地址和采集密钥";
+            const doConnect = async () => {
+                if (running)
                     return;
-                }
+                running = true;
                 submitBtn.disabled = true;
-                submitBtn.textContent = "连接中…";
+                submitBtn.textContent = "等待授权…";
                 errorEl.textContent = "";
                 try {
-                    await login(email, password);
+                    await connectByApproval(originInput.value || getCrmOrigin(), (url) => {
+                        hintEl.textContent = "已打开 CRM 授权页，请在那里点击“授权”。如果没有打开，请允许本页弹出窗口后重试。";
+                        if (url) {
+                            const again = document.createElement("a");
+                            again.href = url;
+                            again.target = "_blank";
+                            again.rel = "noopener";
+                            again.textContent = " 重新打开授权页";
+                            hintEl.appendChild(again);
+                        }
+                    }, () => stopped);
                     showToast(`已连接，${getAuthUser()?.username || "可以开始采集"}`);
                     refreshAuthWidget?.();
                     close(true);
                 }
                 catch (err) {
-                    errorEl.textContent = err?.message || "登录失败";
+                    if (stopped)
+                        return;
+                    errorEl.textContent = err?.message || "连接失败";
                     submitBtn.disabled = false;
-                    submitBtn.textContent = "连接";
+                    submitBtn.textContent = "重新连接";
+                    running = false;
                 }
             };
-            submitBtn.onclick = doLogin;
+            submitBtn.onclick = doConnect;
             cancelBtn.onclick = () => close(false);
-            passwordInput.onkeydown = (e) => {
-                if (e.key === "Enter")
-                    doLogin();
-            };
             overlay.onclick = (e) => {
                 if (e.target === overlay)
                     close(false);
             };
-            setTimeout(() => emailInput.focus(), 50);
         });
     }
     /** 右下角统一悬浮入口（采集动作 + 账号状态） */
@@ -4262,8 +4329,98 @@
             if (!wrap.contains(e.target))
                 setMenuOpen(false);
         });
+        // ─── 拖动与贴边吸附 ─────────────────────────────
+        // 松手后吸附到最近的左/右边缘，位置（边 + 高度比例）记在本地；空闲时收起成边缘的小图标，悬停或点击展开。
+        const POSITION_KEY = "cc_launcher_position";
+        const EDGE = 16, DOCK_DELAY = 2600, DRAG_THRESHOLD = 6;
+        let position = { side: "right", top: null };
+        try {
+            const saved = JSON.parse(gmGet(POSITION_KEY) || "null");
+            if (saved && (saved.side === "left" || saved.side === "right") && (saved.top === null || (saved.top >= 0 && saved.top <= 1)))
+                position = saved;
+        }
+        catch {
+            // 使用默认位置
+        }
+        const clampTop = (top) => Math.min(Math.max(EDGE, top), Math.max(EDGE, window.innerHeight - wrap.offsetHeight - EDGE));
+        const place = () => {
+            wrap.dataset.side = position.side;
+            wrap.style.bottom = "auto";
+            wrap.style.left = position.side === "left" ? `${EDGE}px` : "auto";
+            wrap.style.right = position.side === "right" ? `${EDGE}px` : "auto";
+            const top = position.top === null ? window.innerHeight - wrap.offsetHeight - 22 : position.top * window.innerHeight;
+            wrap.style.top = `${clampTop(top)}px`;
+        };
+        let dockTimer = null, dragging = null, swallowClick = false;
+        // 鼠标点过的按钮会保留焦点；只有键盘聚焦（:focus-visible）才让入口保持展开。
+        const busy = () => launcherBusy || menu.style.display !== "none" || dragging || wrap.matches(":hover") || Boolean(wrap.querySelector(":focus-visible"));
+        const scheduleDock = () => {
+            clearTimeout(dockTimer);
+            dockTimer = setTimeout(() => { if (!busy()) wrap.classList.add("cc-docked"); else scheduleDock(); }, DOCK_DELAY);
+        };
+        const wake = () => { wrap.classList.remove("cc-docked"); scheduleDock(); };
+        launcherWake = wake;
+        wrap.addEventListener("mouseenter", wake);
+        wrap.addEventListener("mouseleave", scheduleDock);
+        wrap.addEventListener("focusin", wake);
+        btn.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0 || launcherBusy)
+                return;
+            // 触屏上收起时，第一次点按只展开，不触发采集。
+            if (wrap.classList.contains("cc-docked") && event.pointerType !== "mouse")
+                swallowClick = true;
+            const rect = wrap.getBoundingClientRect();
+            dragging = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+            wake();
+        });
+        window.addEventListener("pointermove", (event) => {
+            if (!dragging)
+                return;
+            const dx = event.clientX - dragging.x, dy = event.clientY - dragging.y;
+            if (!dragging.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD)
+                return;
+            if (!dragging.moved) {
+                dragging.moved = true;
+                setMenuOpen(false);
+                wrap.classList.add("cc-dragging");
+            }
+            event.preventDefault();
+            const maxLeft = window.innerWidth - wrap.offsetWidth - 4;
+            wrap.style.right = "auto";
+            wrap.style.left = `${Math.min(Math.max(4, dragging.left + dx), Math.max(4, maxLeft))}px`;
+            wrap.style.top = `${clampTop(dragging.top + dy)}px`;
+        }, { passive: false });
+        const endDrag = () => {
+            if (!dragging)
+                return;
+            const moved = dragging.moved;
+            dragging = null;
+            wrap.classList.remove("cc-dragging");
+            if (!moved)
+                return;
+            swallowClick = true;
+            const rect = wrap.getBoundingClientRect();
+            position = { side: rect.left + rect.width / 2 < window.innerWidth / 2 ? "left" : "right", top: clampTop(rect.top) / window.innerHeight };
+            gmSet(POSITION_KEY, JSON.stringify(position));
+            place();
+            scheduleDock();
+        };
+        window.addEventListener("pointerup", endDrag);
+        window.addEventListener("pointercancel", endDrag);
+        // 拖动结束或触屏展开时吞掉随后的那次点击。
+        btn.addEventListener("click", (event) => {
+            if (!swallowClick)
+                return;
+            swallowClick = false;
+            event.stopImmediatePropagation();
+            event.preventDefault();
+        }, true);
+        window.addEventListener("resize", place);
+        btn.title = btn.title || "拖动可移动位置";
         refreshAuthWidget = update;
         update();
+        place();
+        scheduleDock();
     }
     /** 初始化：恢复登录态 + 挂载 UI + 注册 ensureAuth 回调 */
     async function initAuth() {
@@ -4359,6 +4516,22 @@
       inset 0 1px 0 rgba(255,255,255,.1);
   }
   .cc-launcher-btn:active { transform: translateY(0) scale(.985); }
+  .cc-launcher-btn { touch-action: none; user-select: none; -webkit-user-select: none; }
+  .cc-auth-widget { transition: top .28s cubic-bezier(.2,.8,.2,1), left .28s cubic-bezier(.2,.8,.2,1), right .28s cubic-bezier(.2,.8,.2,1); }
+  .cc-auth-widget.cc-dragging { transition: none; }
+  .cc-auth-widget.cc-dragging .cc-launcher-btn { cursor: grabbing; transform: scale(1.03); box-shadow: 0 26px 56px rgba(15,35,58,.36), 0 6px 14px rgba(15,35,58,.22); }
+  .cc-auth-widget[data-side="left"] { align-items: flex-start; }
+  .cc-auth-widget[data-side="left"] .cc-launcher-btn::after { inset: 0 0 0 auto; }
+  .cc-launcher-mark { cursor: grab; }
+  /* 贴边收起：只露出图标的一半，悬停、聚焦或点按时展开 */
+  .cc-auth-widget.cc-docked .cc-launcher-copy,
+  .cc-auth-widget.cc-docked .cc-launcher-rule,
+  .cc-auth-widget.cc-docked .cc-launcher-account { display: none; }
+  .cc-auth-widget.cc-docked .cc-launcher-btn { min-height: 52px; padding: 6px; border-radius: 16px; opacity: .9; }
+  .cc-auth-widget[data-side="right"].cc-docked .cc-launcher-btn { transform: translateX(calc(50% + 16px)); border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+  .cc-auth-widget[data-side="left"].cc-docked .cc-launcher-btn { transform: translateX(calc(-50% - 16px)); border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+  .cc-auth-widget.cc-docked .cc-launcher-btn::after { display: none; }
+  .cc-auth-widget.cc-docked .cc-launcher-btn[data-state="busy"] { transform: none; }
   .cc-launcher-btn:focus-visible {
     outline: 3px solid rgba(45,212,191,.42);
     outline-offset: 3px;
@@ -4506,7 +4679,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .cc-launcher-btn,
-    .cc-launcher-account { transition: none; }
+    .cc-launcher-account,
+    .cc-auth-widget { transition: none; }
   }
 `);
     const BATCH_QUEUE_KEY = "cc_batch_collect_queue";

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "销途 CRM · 1688/Alibaba 商品采集器",
+  "version": "2.3.0",
+  "description": "从 1688、Alibaba.com 采集商品并保存到销途 CRM。点击连接后在 CRM 中授权即可使用。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://*.1688.com/*", "https://*.alibaba.com/*", "https://*.alicdn.com/*", "https://*.videocdn.alibaba.com/*",
+    "https://itemcdn.tmall.com/*", "https://xt.tlh666.cn/*", "http://127.0.0.1/*", "http://localhost/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://*.1688.com/*", "https://*.alibaba.com/*"], "js": ["bridge.js"], "run_at": "document_start" },
+    { "matches": ["https://*.1688.com/*", "https://*.alibaba.com/*"], "js": ["collector.js"], "run_at": "document_idle", "world": "MAIN" }
+  ]
+}

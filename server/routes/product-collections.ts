@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
+import { collectorExtensionZip } from '../integrations/collector-extension.js'
 
 const idSchema=z.object({id:z.string().uuid()})
 const listSchema=z.object({search:z.string().trim().max(100).optional(),source:z.enum(['1688','alibaba']).optional(),status:z.enum(['collected','ai_processing','ai_completed','ready','published','failed']).optional(),
@@ -57,6 +58,35 @@ export async function productCollectionRoutes(app:FastifyInstance){
   app.get('/collector-script.user.js',async(_request,reply)=>{const script=await readFile(resolve(process.cwd(),'scripts','1688-product-collector.user.js'),'utf8');return reply.type('application/javascript; charset=utf-8').header('Content-Disposition','inline; filename="1688-product-collector.user.js"').send(script)})
 
   app.get('/session',async(request,reply)=>{const identity=await getCollectorIdentity(request,reply);if(!identity)return;const user=(await db.query(`SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL`,[identity.user_id,identity.tenant_id])).rows[0];if(!user)return reply.code(401).send({error:'INVALID_COLLECTOR_KEY',message:'采集密钥所属账号不可用。'});return{data:{id:user.id,email:user.email,username:user.display_name,displayName:user.display_name,teams:[]}}})
+
+  // Connect by approval: the signed-in user approves a challenge; the collector redeems the matching verifier for a key.
+  app.post('/connect/approve',{preHandler:requirePermission('collection:create')},async(request,reply)=>{
+    const input=z.object({challenge:z.string().regex(/^[A-Za-z0-9_-]{43}$/)}).strict().safeParse(request.body)
+    if(!input.success)return reply.code(400).send({error:'VALIDATION_ERROR',message:'授权链接无效，请在采集器中重新点击连接。'})
+    await db.query('DELETE FROM product_collector_connects WHERE expires_at<now()')
+    const row=(await db.query(`INSERT INTO product_collector_connects(challenge,tenant_id,user_id)VALUES($1,$2,$3) ON CONFLICT(challenge) DO NOTHING RETURNING challenge`,[input.data.challenge,request.authUser.tenantId,request.authUser.sub])).rows[0]
+    if(!row)return reply.code(409).send({error:'ALREADY_APPROVED',message:'这个授权请求已处理，请在采集器中重新点击连接。'})
+    await db.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,request_id)VALUES($1,$2,'collector.connect.approve','collector',$3)",[request.authUser.tenantId,request.authUser.sub,request.id])
+    return {data:{approved:true}}
+  })
+  app.post('/connect/redeem',async(request,reply)=>{
+    const input=z.object({verifier:z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),client:z.enum(['userscript','extension']).default('userscript')}).strict().safeParse(request.body)
+    if(!input.success)return reply.code(400).send({error:'VALIDATION_ERROR',message:'授权参数无效。'})
+    const challenge=createHash('sha256').update(input.data.verifier).digest('base64url')
+    const client=await db.connect()
+    try{
+      await client.query('BEGIN')
+      const grant=(await client.query(`UPDATE product_collector_connects SET redeemed_at=now() WHERE challenge=$1 AND redeemed_at IS NULL AND expires_at>now() RETURNING tenant_id,user_id`,[challenge])).rows[0]
+      if(!grant){await client.query('ROLLBACK');return reply.code(202).send({data:{pending:true}})}
+      const user=(await client.query(`SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL`,[grant.user_id,grant.tenant_id])).rows[0]
+      if(!user){await client.query('ROLLBACK');return reply.code(403).send({error:'USER_INACTIVE',message:'授权账号已停用。'})}
+      const plainKey=`crm1688_${randomBytes(24).toString('base64url')}`
+      await client.query(`INSERT INTO product_collector_keys(tenant_id,user_id,name,key_prefix,key_hash)VALUES($1,$2,$3,$4,$5)`,[grant.tenant_id,grant.user_id,input.data.client==='extension'?'浏览器插件':'油猴脚本',plainKey.slice(0,16),hashKey(plainKey)])
+      await client.query('COMMIT')
+      return {data:{key:plainKey,user:{id:user.id,email:user.email,username:user.display_name,displayName:user.display_name,teams:[]}}}
+    }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
+  })
+  app.get('/collector-extension.zip',async(_request,reply)=>reply.type('application/zip').header('Content-Disposition','attachment; filename="xiaotu-1688-collector.zip"').send(await collectorExtensionZip()))
 
   app.post('/access-key',{preHandler:requirePermission('collection:create')},async(request)=>{
     const plainKey=`crm1688_${randomBytes(24).toString('base64url')}`

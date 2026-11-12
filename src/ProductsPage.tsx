@@ -1,3 +1,4 @@
+import { BulkBar,PickBox,useSelection } from './BulkSelect'
 import { useCallback,useEffect,useState,type FormEvent } from 'react'
 import { AlertCircle,Box,Inbox,Pencil,Plus,RefreshCw,Search,SearchX,Trash2,X } from 'lucide-react'
 import Pagination,{ useDebounced } from './Pagination'
@@ -16,7 +17,7 @@ function blurb(product:Product){
 const productEmpty:ProductInput={sku:'',name:'',category:'',description:'',specifications:{},basePrice:0,status:'active',prices:[]}
 
 /** Internal product data (created from 1688 collection or by hand): specifications and tier prices used when publishing. */
-export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit=true}:{unlisted?:boolean;startCreating?:boolean;onStarted?:()=>void;canEdit?:boolean}={}){
+export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit=true,canDelete=true}:{unlisted?:boolean;startCreating?:boolean;onStarted?:()=>void;canEdit?:boolean;canDelete?:boolean}={}){
  const [products,setProducts]=useState<Product[]>([]),[facets,setFacets]=useState<ProductFacets>({all:0,active:0,draft:0,inactive:0}),[categories,setCategories]=useState<string[]>([]),[total,setTotal]=useState(0),[loaded,setLoaded]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[search,setSearch]=useState(''),[productForm,setProductForm]=useState<Product|null|undefined>(undefined),[deletingProduct,setDeletingProduct]=useState<Product|null>(null)
  const [dialog,setDialog]=useState<'templates'|'import'|null>(null),[missingPackage,setMissingPackage]=useState(false)
  const [status,setStatus]=useState<''|Product['status']>(''),[category,setCategory]=useState(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(24)
@@ -27,6 +28,7 @@ export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit
  useEffect(()=>{if(startCreating){setProductForm(null);onStarted?.()}},[startCreating,onStarted])
  useEffect(()=>{void load()},[load])
  const filtered=Boolean(query||status||category||missingPackage)
+ const selection=useSelection(products.map(p=>p.id))
  const changePage=(next:number)=>{setPage(next);document.querySelector('.catalog-head')?.scrollIntoView({behavior:'smooth',block:'start'})}
  async function removeProduct(item:Product){try{await deleteProduct(item.id);setNotice('产品已停用并移出目录');await load()}catch(cause){setError(cause instanceof Error?cause.message:'删除产品失败。')}finally{setDeletingProduct(null)}}
  return <>
@@ -44,7 +46,8 @@ export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit
   {!error&&loaded&&!products.length&&(filtered
    ?<section className="state-card compact"><SearchX size={26}/><h2>没有符合条件的产品</h2><p>换个关键词，或清除筛选条件。</p><button onClick={()=>{setSearch('');setStatus('');setCategory('');setMissingPackage(false)}}>清除筛选</button></section>
    :<section className="state-card"><Inbox size={28}/><h2>建立第一件产品</h2>{canEdit&&<button onClick={()=>setProductForm(null)}><Plus size={15}/> 新建产品</button>}</section>)}
-  {!error&&loaded&&products.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{products.map(product=>{const text=blurb(product);return <article key={product.id} className="goods-card">
+  {!error&&loaded&&canDelete&&<BulkBar selection={selection} items={products} name={item=>item.name} noun="产品" remove={item=>deleteProduct(item.id)} done={async message=>{setNotice(message);await load()}}/>}
+  {!error&&loaded&&products.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{products.map(product=>{const text=blurb(product);return <article key={product.id} className={`goods-card ${canDelete?'selectable':''} ${selection.has(product.id)?'picked':''}`}>{canDelete&&<PickBox selection={selection} id={product.id} label={product.name}/>}
    <button className="goods-media" onClick={()=>setProductForm(product)} aria-label={`编辑 ${product.name}`}><Box size={28}/>{product.images?.[0]&&<img src={product.images[0]} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>}
     {product.category&&<span className="goods-source">{product.category}</span>}<span className={`goods-stage product-${product.status}`}>{statusNames[product.status]}</span></button>
    <div className="goods-body">
@@ -55,7 +58,7 @@ export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit
     {product.package_weight_g==null&&<span className="goods-missing">缺件重尺</span>}
    </div>
    <footer className="goods-foot"><small className="goods-id" title={product.sku}>{product.sku}</small>
-    <div><button className="goods-icon" onClick={()=>setProductForm(product)} aria-label={`编辑 ${product.name}`} title="编辑"><Pencil size={14}/></button><button className="goods-icon" onClick={()=>setDeletingProduct(product)} aria-label={`删除 ${product.name}`} title="删除"><Trash2 size={14}/></button></div></footer>
+    <div><button className="goods-icon" onClick={()=>setProductForm(product)} aria-label={`编辑 ${product.name}`} title="编辑"><Pencil size={14}/></button>{canDelete&&<button className="goods-icon" onClick={()=>setDeletingProduct(product)} aria-label={`删除 ${product.name}`} title="删除"><Trash2 size={14}/></button>}</div></footer>
   </article>})}</section>}
   {!error&&loaded&&<Pagination page={page} pageSize={pageSize} total={total} onPage={changePage} onPageSize={setPageSize} unit="件"/>}
   {productForm!==undefined&&<ProductDrawer product={productForm} onClose={()=>setProductForm(undefined)} onSaved={async message=>{setProductForm(undefined);setNotice(message);await load()}}/>}

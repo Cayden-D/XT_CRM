@@ -1,3 +1,4 @@
+import { Lightbox } from './ImageWorkshop'
 import { buyerLabel } from './buyerLabel'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Note } from './ui'
@@ -47,9 +48,10 @@ export function WangwangButton({buyerId,setError,label}:{buyerId:string;setError
 
 /** Message timeline of one session: buyer text is masked by the platform; agent text is shown masked, with risk flags. */
 export function Timeline({data,focus}:{data:ChatDetail;focus?:string}) {
-  return <><ol className="perf-timeline">{data.messages.map(m=><li key={m.uuid} className={`${m.direction===1?'buyer':'agent'} ${m.uuid===focus?'focus':''}`}>
+  const [preview,setPreview]=useState<string|null>(null)
+  return <>{preview&&<Lightbox src={preview} close={()=>setPreview(null)}>聊天图片</Lightbox>}<ol className="perf-timeline">{data.messages.map(m=><li key={m.uuid} className={`${m.direction===1?'buyer':'agent'} ${m.uuid===focus?'focus':''}`}>
     <time>{clock(m.sent_at)}</time><span>{m.text_masked&&!(m.text_masked==='[图片]'&&m.image_urls?.length)?<q>{m.text_masked}</q>:m.image_urls?.length?null:`${m.direction===1?'买家':'客服'}${nonText(m)?'发送了图片/卡片等':`消息${m.length?`（${m.length} 字）`:''}`}`}
-      {m.image_urls?.length?<span className="perf-images">{m.image_urls.map(url=><a key={url} href={url} target="_blank" rel="noopener noreferrer" title="查看原图"><img src={url} alt={`${m.direction===1?'买家':'客服'}发送的图片`} loading="lazy" referrerPolicy="no-referrer"/></a>)}</span>:null}</span>
+      {m.image_urls?.length?<span className="perf-images">{m.image_urls.map(url=><button key={url} type="button" title="放大查看" aria-label="放大查看图片" onClick={()=>setPreview(url)}><img src={url} alt={`${m.direction===1?'买家':'客服'}发送的图片`} loading="lazy" referrerPolicy="no-referrer"/></button>)}</span>:null}</span>
     {m.message_types.filter(t=>t!=='正常消息').map(t=>t==='其他消息'?<em key={t} title={OTHER_HINT}>内容不可见</em>:<em key={t}>{t}</em>)}{m.keywords.map(k=><em key={k.word} className="keyword">{k.word}</em>)}
     {(m.flags??[]).filter(f=>f!=='short'&&f!=='image').map(f=><em key={f} className={(OFFSITE_FLAGS as readonly string[]).includes(f)?'risk':'keyword'}>{flagNames[f]??f}</em>)}</li>)}</ol>
   {!data.messages.length&&<p className="shop-note">该会话没有消息记录。</p>}</>

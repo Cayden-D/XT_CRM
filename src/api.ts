@@ -1,5 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:3001'
 export const COLLECTOR_SCRIPT_URL = `${API_BASE}/api/product-collections/collector-script.user.js`
+export const COLLECTOR_EXTENSION_URL = `${API_BASE}/api/product-collections/collector-extension.zip`
 const TOKEN_KEY = 'ai_crm_access_token'
 
 export type SessionUser = {

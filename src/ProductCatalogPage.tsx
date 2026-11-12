@@ -18,6 +18,6 @@ export default function ProductCatalogPage({ user }: { user: SessionUser }) {
     </div>
     {view === 'platform'
       ? <PlatformCatalog user={user} onAdd={canCreate ? () => { setCreating(true); setView('unlisted') } : undefined} />
-      : <ProductLibrary unlisted canEdit={canCreate} startCreating={creating} onStarted={() => setCreating(false)} />}
+      : <ProductLibrary unlisted canEdit={canCreate} canDelete={can(user, 'product:delete')} startCreating={creating} onStarted={() => setCreating(false)} />}
   </div>
 }
