@@ -204,7 +204,8 @@ async function processJob(job:QueueJob){
     failed+=Math.max(0,skuPictures.length-MAX_SKU_PICTURES)
     report.skuPictures={uploaded:rehosted.size,failed}
   }
-  const skuPicture=(url:string|null)=>{const kept=variantImage(url);return kept?(rehosted.get(kept)??kept):null}
+  // A picture that did not make it into the album is left off: another shop's picture on a sale value is not accepted.
+  const skuPicture=(url:string|null)=>{const kept=variantImage(url);return kept?(rehosted.get(kept)??null):null}
   const client=await db.connect()
   let product:Json
   try{

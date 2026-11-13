@@ -67,6 +67,32 @@ export function numberCustomValues<T extends {saleProp?:unknown;skuTable?:unknow
   const rows=Array.isArray(values.skuTable)?(values.skuTable as SkuRow[]).map(row=>Array.isArray(row?.sku_props)?{...row,sku_props:row.sku_props.map(p=>Number(p.value)<0&&numbers.has(`${p.name}\u0000${p.text}`)?{...p,value:numbers.get(`${p.name}\u0000${p.text}`)!}:p)}:row):values.skuTable
   return {...values,saleProp:nextProp,skuTable:rows}
 }
+/**
+ * The sale part of the publish body in exactly the shape of the platform's own example: custom values numbered, SKU rows
+ * naming only id/name/label/value/text, no readonly picture column, no per-SKU price when quoting by quantity (quotationType
+ * 2, or none given with a quantity quote), a picture on a sale value only as a shop-album path, and the "custom" list present. Extra keys on SKU rows were a
+ * likely reason the platform dropped every specification.
+ */
+export function platformSaleValues<T extends Record<string,any>>(values:T):T{
+  const numbered=numberCustomValues(values) as Record<string,any>
+  if(!numbered.saleProp||typeof numbered.saleProp!=='object')return numbered as T
+  const quote=String(numbered.quotationType?.value??''),byQuantity=quote==='2'||(!quote&&Array.isArray(numbered.priceRange)&&numbered.priceRange.length>0)
+  const saleProp:Record<string,unknown>={}
+  for(const [name,choices] of Object.entries(numbered.saleProp as Record<string,unknown>)){
+    saleProp[name]=Array.isArray(choices)&&name!=='custom'?choices.map((choice:any)=>{
+      if(!choice||typeof choice!=='object')return choice
+      const imgUrl=typeof choice.imgUrl==='string'?platformImagePath(choice.imgUrl):''
+      return {value:choice.value,text:choice.text,...(choice.custom?{custom:true}:{}),...(/^img\/ibank\//.test(imgUrl)?{imgUrl}:{})}
+    }):choices
+  }
+  if(!Array.isArray(saleProp.custom))saleProp.custom=[]
+  const skuTable=Array.isArray(numbered.skuTable)?numbered.skuTable.map((row:any)=>{
+    if(!row||!Array.isArray(row.sku_props))return row
+    const {sku_picture_url:_picture,sku_price,...rest}=row
+    return {...rest,sku_props:row.sku_props.map((p:any)=>({id:p.id,name:p.name,label:p.label,value:p.value,text:p.text})),...(!byQuantity&&sku_price!=null?{sku_price}:{})}
+  }):numbered.skuTable
+  return {...numbered,saleProp,skuTable} as unknown as T
+}
 export function mapReviewedVariants(dimensions:SaleDimension[],variants:ReviewedVariant[],mapping:Record<string,string>) {
   if(Object.keys(mapping).some(key=>!dimensions.some(d=>d.name===key)))throw new Error('映射包含未知平台属性。')
   const active=dimensions.filter(d=>mapping[d.name])

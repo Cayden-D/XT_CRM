@@ -124,7 +124,8 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
         const claimed=await db.query("UPDATE integration_1688_agent_jobs SET status='publishing',report=$2,updated_at=now() WHERE id=$1 AND status='analyzing' RETURNING id",[job.id,JSON.stringify(report)])
         if(!claimed.rows.length)throw new IntegrationError('AGENT_STOPPED','任务已取消，本次未发布。',409)
         try{
-          await publish({...request,params:{id},body:{revision:currentRevision,confirmed:true}},{jobId:job.id,settingsRevision:settings.revision,queue})
+          const sent=await publish({...request,params:{id},body:{revision:currentRevision,confirmed:true}},{jobId:job.id,settingsRevision:settings.revision,queue}) as {data?:{warning?:string}}|undefined
+          if(sent?.data?.warning)report={...report,skuWarning:sent.data.warning}
           break
         }catch(error){
           // Only a definite rejection leaves the draft 'failed'; anything that may have reached the shop is never sent again.
@@ -144,7 +145,7 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
         }
       }
       const summary=[ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:''].filter(Boolean).join('，')
-      await db.query("UPDATE integration_1688_agent_jobs SET status='published',report=$2,message=$3,updated_at=now() WHERE id=$1",[job.id,JSON.stringify(report),`已提交平台；审核状态以平台为准。${summary?`${summary}，可在任务详情核对。`:''}`])
+      await db.query("UPDATE integration_1688_agent_jobs SET status='published',report=$2,message=$3,updated_at=now() WHERE id=$1",[job.id,JSON.stringify(report),`已提交平台；审核状态以平台为准。${summary?`${summary}，可在任务详情核对。`:''}${report.skuWarning?`注意：${report.skuWarning}`:''}`])
     }catch(error){
       const state=(await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]?.status
       const status=state==='unknown'||state==='submitting'?'unknown':error instanceof IntegrationError?'blocked':'failed'

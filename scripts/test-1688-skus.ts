@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { buildSkuRows, mapReviewedVariants, numberCustomValues, platformImagePath, skuKey, type SaleDimension } from '../shared/1688-skus.js'
+import { buildSkuRows, mapReviewedVariants, numberCustomValues, platformImagePath, platformSaleValues, skuKey, type SaleDimension } from '../shared/1688-skus.js'
 import { validatePublishBody } from '../server/routes/1688.js'
 import { collectedSkuAttributes } from '../server/integrations/1688-collected-skus.js'
 
@@ -55,4 +55,11 @@ assert.equal(platformImagePath('https://img.alicdn.com/imgextra/a.jpg'),'https:/
 const editorDraft={saleProp:{'p-3216':[{value:-1,text:'红',custom:true},{value:-1,text:'蓝',custom:true}]},skuTable:[{sku_props:[{id:3216,name:'p-3216',label:'颜色',value:-1,text:'红'}],sku_amountOnSale:1},{sku_props:[{id:3216,name:'p-3216',label:'颜色',value:-1,text:'蓝'}],sku_amountOnSale:1}]}
 const renumbered=numberCustomValues(editorDraft)
 assert.deepEqual([(renumbered.saleProp as any)['p-3216'].map((c:any)=>c.value),(renumbered.skuTable as any[]).map(r=>r.sku_props[0].value)],[[-1,-2],[-1,-2]],'an editor draft with -1 everywhere is renumbered at publish')
-console.log(JSON.stringify({salePictures:'ok',customNumbering:'ok',cartesianGeneration:'ok',unknownStock:'ok',stableCombinationRetention:'ok',duplicateChoiceGuard:'ok',enumGuard:'ok',requiredDimensions:'ok',combinationLimit:'ok',reviewedVariantMapping:'ok',sparseCombinations:'ok',duplicateMappingGuard:'ok',missingAttributeGuard:'ok',publishConsistency:'ok',collectedDimensionRecovery:'ok'}))
+// The body sent to the platform has the example's shape: bare SKU properties, no readonly picture, price only when quoting by SKU.
+const sent=platformSaleValues({quotationType:{value:2},...withPictures}) as any
+assert.deepEqual(sent.skuTable[0],{sku_props:[{id:3216,name:'p-3216',label:'颜色',value:-1,text:'黑色'},{id:450,name:'p-450',label:'尺码',value:-3,text:'S'}],sku_amountOnSale:1,sku_cargoNumber:'',sku_status:1})
+assert.deepEqual(sent.saleProp.custom,[])
+assert.equal(platformSaleValues({quotationType:{value:1},...withPictures}).skuTable[0].sku_price,10,'quoting by SKU keeps the price')
+const foreign=platformSaleValues({saleProp:{'p-3216':[{value:-1,text:'红',custom:true,imgUrl:'https://img.alicdn.com/imgextra/a.jpg'}]},skuTable:[]}) as any
+assert.deepEqual(foreign.saleProp['p-3216'][0],{value:-1,text:'红',custom:true},'a picture outside the album is not sent')
+console.log(JSON.stringify({platformShape:'ok',salePictures:'ok',customNumbering:'ok',cartesianGeneration:'ok',unknownStock:'ok',stableCombinationRetention:'ok',duplicateChoiceGuard:'ok',enumGuard:'ok',requiredDimensions:'ok',combinationLimit:'ok',reviewedVariantMapping:'ok',sparseCombinations:'ok',duplicateMappingGuard:'ok',missingAttributeGuard:'ok',publishConsistency:'ok',collectedDimensionRecovery:'ok'}))

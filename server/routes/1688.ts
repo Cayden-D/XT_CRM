@@ -14,7 +14,7 @@ import { catalogRoutes } from './1688-catalog.js'
 import { agent1688Routes } from './1688-agent.js'
 import { agentImageRoutes } from './1688-images.js'
 import { collectionQueueRoutes } from './1688-queue.js'
-import { buildSkuRows, mapReviewedVariants, numberCustomValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
+import { buildSkuRows, mapReviewedVariants, platformSaleValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
 import { createDraftFromProduct } from '../integrations/1688-drafts.js'
 import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
@@ -105,6 +105,25 @@ async function saveListing(tenantId: string, connectionId: string, info: Json, p
   if (!saved.rows.length) throw new IntegrationError('BINDING_CONFLICT', '平台商品已关联其他正式产品，不能覆盖。', 409)
 }
 
+/**
+ * Reads the new listing back and says so when the platform kept fewer SKUs than were sent (it accepts a body and silently
+ * drops specifications it does not like). Best effort: a failed read changes nothing about the published result.
+ */
+async function checkPublishedSkus(row: Json, request: Pick<FastifyRequest,'authUser'|'id'>, offerId: string, sent: number) {
+  if (!sent) return ''
+  try {
+    const result = await callProductApi(row.connection_id, request.authUser.tenantId, request.authUser.sub, 'alibaba.product.get', { productID: offerId, webSite: '1688' }, request.id)
+    const info = result.productInfo as Json
+    if (!info || typeof info !== 'object' || String(info.productID) !== offerId) return ''
+    await saveListing(request.authUser.tenantId, row.connection_id, info, row.product_id).catch(() => {})
+    const kept = Array.isArray(info.skuInfos) ? info.skuInfos.length : 0
+    if (kept >= sent) return ''
+    const warning = `平台商品只有 ${kept} 个 SKU，提交了 ${sent} 个，请在 1688 后台核对规格。`
+    await db.query('UPDATE integration_1688_publish_drafts SET last_error_code=$2,updated_at=now() WHERE id=$1', [row.id, 'SKU_DROPPED'])
+    return warning
+  } catch { return '' }
+}
+
 export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>, agent?:{jobId:string;settingsRevision:number;queue?:{id:string;workerId:string}}) {
     const { id } = idSchema.parse(request.params)
     const { revision } = z.object({ revision: z.number().int().positive(), confirmed: z.literal(true) }).parse(request.body)
@@ -140,8 +159,8 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     }catch(error){await claim.query('ROLLBACK');throw error}finally{claim.release()}
     let platformResponded = false
     try {
-      // As the platform's own example has it: custom sale values numbered -1, -2, …, and the minimum order equal to the first quantity tier.
-      const formValues: Json = numberCustomValues(row.data_body.formValues || {})
+      // As the platform's own example has it: sale values and SKU rows in its shape, and the minimum order equal to the first quantity tier.
+      const formValues: Json = platformSaleValues(row.data_body.formValues || {})
       const tiers = Array.isArray(formValues.priceRange) ? formValues.priceRange.filter((r: Json) => Number.isInteger(r?.pricerange_beginAmount)) : []
       if (row.platform_schema?.data?.beginAmount && tiers.length && String(formValues.quotationType?.value ?? '2') === '2') formValues.beginAmount = Math.min(...tiers.map((r: Json) => r.pricerange_beginAmount))
       const args: Json = { scene: row.scene, dataBody: { ...row.data_body, formValues } }
@@ -156,7 +175,8 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
       await db.query("UPDATE integration_1688_publish_drafts SET status='published',offer_id=$2,last_error_code=NULL,updated_at=now() WHERE id=$1", [id, offerId])
       await saveListing(request.authUser.tenantId, row.connection_id, { productID: offerId, subject: row.data_body.formValues.title, status: value.offerStatus || 'submitted', image: { images: row.data_body.formValues.primaryPicture.imageList.map((image: Json) => image.url) } }, row.product_id)
       await audit(request.authUser.tenantId, request.authUser.sub, row.connection_id, '1688.publish', request.id)
-      return { data: { offerId, status: 'published' } }
+      const warning = await checkPublishedSkus(row, request, offerId, Array.isArray(formValues.skuTable) ? formValues.skuTable.length : 0)
+      return { data: { offerId, status: 'published', ...(warning ? { warning } : {}) } }
     } catch (error) {
       const unknown = platformResponded || !(error instanceof IntegrationError) || ['NETWORK_ERROR','INVALID_RESPONSE','PUBLISH_UNKNOWN','INVALID_SCHEMA','EMPTY_SCHEMA'].includes(error.code)
       await db.query('UPDATE integration_1688_publish_drafts SET status=$2,last_error_code=$3,updated_at=now() WHERE id=$1', [id, unknown ? 'unknown' : 'failed', error instanceof IntegrationError ? error.code : 'INTERNAL_ERROR'])
