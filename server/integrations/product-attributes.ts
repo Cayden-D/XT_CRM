@@ -3,6 +3,7 @@ import { db } from '../db.js'
 import { logisticsOfferInfo, parseSizeMm, parseWeightGrams, specificationsOf, type Measurement, type ProductAttribute } from '../../shared/product-attributes.js'
 import { validateLogistics } from '../../shared/1688-logistics.js'
 import { attributeCategoryDefaults } from './1688-collected-attributes.js'
+import { collectedPackageRows, packageMeasurement } from '../../shared/collected-package.js'
 
 type Json = Record<string, any>
 type Queryable = Pick<PoolClient, 'query'>
@@ -21,6 +22,20 @@ export async function loadProductData(tenantId: string, productId: string, clien
   const measurement = (await client.query<Measurement>('SELECT * FROM product_measurements WHERE product_id=$1 AND tenant_id=$2 AND variant_id IS NULL', [productId, tenantId])).rows[0] ?? null
   const attributes = (await client.query<ProductAttribute & { id: string }>('SELECT id,def_id,label,value,unit,group_name,position,source,confirmed_at FROM product_attributes WHERE product_id=$1 AND tenant_id=$2 ORDER BY position,label', [productId, tenantId])).rows
   return { measurement, attributes }
+}
+
+/**
+ * A product made from a collected listing takes the source's 件重尺 as its packaged measurements, so listings use the
+ * source's weight and size before the shop template. Attributes are backfilled first (that step skips products that
+ * already have measurements). Nothing is overwritten.
+ */
+export async function saveCollectedPackage(client: Queryable, tenantId: string, productId: string, actorId: string | null, rawData: unknown) {
+  const measurement = packageMeasurement(collectedPackageRows(rawData))
+  if (!measurement) return null
+  await backfillFromSpecifications(client, tenantId, productId)
+  await client.query(`INSERT INTO product_measurements(tenant_id,product_id,updated_by,package_weight_g,package_length_mm,package_width_mm,package_height_mm)VALUES($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT (product_id) WHERE variant_id IS NULL DO NOTHING`, [tenantId, productId, actorId, measurement.package_weight_g, measurement.package_length_mm, measurement.package_width_mm, measurement.package_height_mm])
+  return measurement
 }
 
 export async function saveProjection(client: Queryable, tenantId: string, productId: string) {

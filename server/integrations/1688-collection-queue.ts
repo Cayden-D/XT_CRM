@@ -5,6 +5,7 @@ import { config } from '../config.js'
 import { IntegrationError } from './1688.js'
 import { inspectPublishingImages, publishingImages } from './1688-agent.js'
 import { createDraftFromProduct } from './1688-drafts.js'
+import { saveCollectedPackage } from './product-attributes.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
@@ -218,6 +219,9 @@ async function processJob(job:QueueJob){
     // The source listing's ladder ("¥39.00 (2 pieces) / ¥35.00 (10 pieces)") becomes the product's quantity price tiers.
     for(const tier of ladderTiers(source.attributes?.['阶梯价格']))await client.query('INSERT INTO product_prices(tenant_id,product_id,min_quantity,unit_price)VALUES($1,$2,$3,$4)',[job.tenant_id,product.id,tier.quantity,tier.price])
     for(const variant of variants)await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[job.tenant_id,product.id,variant.id,variant.position,variant.label,JSON.stringify({...variant.attributes,...collectedSkuAttributes(source,variant)}),skuPicture(variant.image_url),Number(variant.price),Number(variant.stock)])
+    // The source's 件重尺 becomes the product's packaged weight and size (used before the shop template).
+    const packaged=await saveCollectedPackage(client,job.tenant_id,product.id,actor.id,source.raw_data)
+    if(packaged)report.package={weightG:packaged.package_weight_g,sizeMm:packaged.package_length_mm?[packaged.package_length_mm,packaged.package_width_mm,packaged.package_height_mm]:null}
     await client.query("UPDATE collected_products SET product_id=$2,processing_status='ready',updated_at=now() WHERE id=$1",[source.id,product.id])
     await client.query("UPDATE integration_1688_collection_queue_jobs SET phase='materializing',product_id=$2,report=$3::jsonb,updated_at=now() WHERE id=$1 AND worker_id=$4 AND status='processing'",[job.id,product.id,JSON.stringify(report),job.worker_id])
     await client.query('COMMIT')

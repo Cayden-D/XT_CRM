@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.3.1
+// @version      2.3.2
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -1261,6 +1261,7 @@
             priceMin: priceBounds.priceMin,
             priceMax: priceBounds.priceMax,
             collectorNote: saleNum ? `月销 ${saleNum}` : undefined,
+            packageInfo: extractPackageInfo(data),
             collectedAt: new Date().toISOString(),
         };
     }
@@ -1635,6 +1636,26 @@
                 urls.push(absolutizeUrl(big));
         }
         return uniqueUrls(urls.filter(isImageUrl));
+    }
+    /**
+     * 商品件重尺（详情页「商品件重尺」表）：context.result.data.productPackInfo.fields.pieceWeightScale.pieceWeightScaleInfo，
+     * 每行一个 SKU：skuId、sku1/sku2 规格文字、长宽高(cm)、体积(cm³)、重量(g)。
+     */
+    function extractPackageInfo(data) {
+        let scale = getContextModuleFields(data, "productPackInfo")?.pieceWeightScale;
+        if (!Array.isArray(scale?.pieceWeightScaleInfo)) {
+            try { scale = getPageWindow().context?.result?.global?.globalData?.model?.detailDescription?.pieceWeightScale; } catch { scale = undefined; }
+        }
+        const rows = Array.isArray(scale?.pieceWeightScaleInfo) ? scale.pieceWeightScaleInfo : [];
+        const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+        return rows.map((row) => ({
+            skuId: row?.skuId != null ? String(row.skuId) : null,
+            spec: [row?.sku1, row?.sku2, row?.sku3].filter((v) => typeof v === "string" && v).join(" / ") || null,
+            lengthCm: num(row?.length),
+            widthCm: num(row?.width),
+            heightCm: num(row?.height),
+            weightG: num(row?.weight),
+        })).filter((row) => row.weightG).slice(0, 500);
     }
     function extractAttributesFromProduct(product) {
         const attributes = {};
@@ -3146,7 +3167,7 @@
                     collectorNote: product.collectorNote,
                     sourceCollectedAt: product.collectedAt,
                     collectorMode: "full-product",
-                    collectorVersion: "2.3.1",
+                    collectorVersion: "2.3.2",
                     rawData: product,
                 };
                 GM_xmlhttpRequest({

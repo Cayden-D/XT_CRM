@@ -22,7 +22,7 @@ const objects = new Map<string, Buffer>()
 
 const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
-const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
+const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
@@ -75,8 +75,8 @@ try {
   const imageSettings = (on: boolean) => db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,enabled_at,revision) VALUES($1,$2,'gpt-image-2.5-flare','medium',now(),1)
     ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace`, [tenant, on])
   const collect = async () => {
-    const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by)
-      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,$8,'101',$7) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor, JSON.stringify({ 阶梯价格: '¥39.00 (2 pieces) / ¥35.00 (10 pieces) / ¥30.00 (50 pieces) / ¥28.00 (100 pieces)' })])).rows[0]
+    const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by,raw_data)
+      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,$8,'101',$7,$9) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor, JSON.stringify({ 阶梯价格: '¥39.00 (2 pieces) / ¥35.00 (10 pieces) / ¥30.00 (50 pieces) / ¥28.00 (100 pieces)' }), JSON.stringify({ packageInfo: [{ skuId: '1', spec: '黑色', lengthCm: 3, widthCm: 3, heightCm: 4, weightG: 75 }, { skuId: '2', spec: '白色', lengthCm: 3, widthCm: 3, heightCm: 4.5, weightG: 80 }] })])).rows[0]
     await db.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,label,attributes,image_url,price,stock)VALUES($1,$2,0,'黑色','{"颜色":"黑色"}',$3,39,10)`, [tenant, source.id, cdn('sku-mark')])
     return source.id as string
   }
@@ -137,6 +137,9 @@ try {
   assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-10.jpg' }])
   assert.equal(published.formValues.skuTable[0].sku_props[0].value, -1)
   assert.equal(published.formValues.beginAmount, 2, 'the minimum order matches the first quantity tier')
+  // The source's 件重尺 (heaviest SKU, sides longest first) is used, not the shop template.
+  assert.deepEqual(published.formValues.officialLogistics.offerInfo, { weight: 80, length: 4.5, width: 3, height: 3, volume: 40.5 })
+  assert.deepEqual(state.report.package, { weightG: 80, sizeMm: [45, 30, 30] })
   assert.deepEqual(state.report.skuPictures, { uploaded: 1, failed: 0 })
   assert.equal(visionCalls, before, 'nothing was screened: originals, generated pictures and the final check all skipped')
   assert.equal(state.report.imagesUnchecked, true)
@@ -150,7 +153,7 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

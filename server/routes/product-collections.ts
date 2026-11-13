@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
 import { collectorExtensionZip } from '../integrations/collector-extension.js'
+import { saveCollectedPackage } from '../integrations/product-attributes.js'
 
 const idSchema=z.object({id:z.string().uuid()})
 const listSchema=z.object({search:z.string().trim().max(100).optional(),source:z.enum(['1688','alibaba']).optional(),status:z.enum(['collected','ai_processing','ai_completed','ready','published','failed']).optional(),
@@ -49,6 +50,7 @@ export async function productCollectionRoutes(app:FastifyInstance){
       const images=[...new Set([source.main_image_url,...source.gallery_images].filter(Boolean))]
       const product=(await client.query(`INSERT INTO products(tenant_id,sku,name,category,description,specifications,base_price,base_currency,status,images,detail_images,video_url)VALUES($1,$2,$3,$4,$5,$6,$7,'CNY','active',$8,$9,$10)RETURNING id,sku,name`,[request.authUser.tenantId,d.sku,d.name,d.category||null,d.description,JSON.stringify(d.specifications),d.basePrice,JSON.stringify(images),JSON.stringify(source.detail_images),source.video_url])).rows[0]
       for(const variant of variants){const value=reviewed.get(variant.id)!;await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[request.authUser.tenantId,product.id,variant.id,variant.position,variant.label,JSON.stringify(variant.attributes),variant.image_url,value.price,value.stock])}
+      await saveCollectedPackage(client,request.authUser.tenantId,product.id,request.authUser.sub,source.raw_data)
       await client.query("UPDATE collected_products SET product_id=$2,processing_status='ready',updated_at=now() WHERE id=$1",[source.id,product.id])
       await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'collection.promote','product',$3,$4,$5)`,[request.authUser.tenantId,request.authUser.sub,product.id,JSON.stringify({sourceId:source.id,sku:d.sku,reviewed:true,variantCount:variants.length}),request.id])
       await client.query('COMMIT')
