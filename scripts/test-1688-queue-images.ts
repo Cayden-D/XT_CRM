@@ -77,6 +77,8 @@ try {
   const tenant = (await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id', ['队列图片测试', `queue-img-${randomUUID().slice(0, 8)}`])).rows[0].id
   tenants.push(tenant)
   const actor = (await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'采集员','active')RETURNING id", [tenant, `${randomUUID()}@fixture.local`])).rows[0].id
+  // Listing collected products costs team credits; this team has enough for the whole test.
+  await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor, tenant])
   const connection = await saveConnection(tenant, actor, { aliId: `queue-img-${randomUUID()}`, access_token: 'fixture', expires_in: 36000 })
   await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
@@ -97,6 +99,14 @@ try {
     return job(sourceId)
   }
   const drain = async () => { for (let i = 0; i < 3; i++) { await db.query("UPDATE image_assets SET next_poll_at=now() WHERE status IN ('pending','processing')"); await workshop.runImageWorkerOnce() } }
+
+  // A team without the listing's credits stops before anything is generated or uploaded.
+  await db.query('UPDATE team_ai_settings SET credits=5 WHERE owner_user_id=$1', [actor])
+  await imageSettings(true)
+  const poor = await run(await collect())
+  assert.equal(poor.status, 'blocked'); assert.match(poor.message, /团队积分不足.*当前剩余 5/)
+  assert.equal(submits, 0, 'no picture generated without credits')
+  await db.query('UPDATE team_ai_settings SET credits=1000 WHERE owner_user_id=$1', [actor])
 
   // Image processing off: the old behaviour, with a hint.
   await imageSettings(false)
@@ -170,6 +180,9 @@ try {
   assert.deepEqual(state.report.skuPictures, { uploaded: 1, failed: 0 })
   assert.equal(visionCalls, before, 'nothing was screened: originals, generated pictures and the final check all skipped')
   assert.equal(state.report.imagesUnchecked, true)
+  // Listed: the team paid 10 credits for it.
+  assert.equal((await db.query('SELECT credits FROM team_ai_settings WHERE owner_user_id=$1', [actor])).rows[0].credits, 990)
+  assert.deepEqual((await db.query("SELECT reason,delta FROM team_credit_ledger WHERE owner_user_id=$1", [actor])).rows, [{ reason: 'publish', delta: -10 }])
   // The collected ladder is the quantity quote (three tiers at most); the platform's description structure is kept.
   assert.deepEqual(published.formValues.priceRange, [{ pricerange_beginAmount: 2, pricerange_price: 39 }, { pricerange_beginAmount: 10, pricerange_price: 35 }, { pricerange_beginAmount: 50, pricerange_price: 30 }])
   assert.deepEqual([published.formValues.description.smartDetail, published.formValues.description.sizeTableDescriptionBlackIdList], [{ kept: true }, '[1]'])
@@ -180,7 +193,7 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

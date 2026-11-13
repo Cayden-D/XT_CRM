@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { config } from '../config.js'
 
 export const QWEN_MODELS=['qwen3.8-flash','qwen3.7-flash','qwen3.7-plus','qwen3.6-plus'] as const
@@ -13,6 +14,10 @@ export class LlmConfigurationError extends Error{}
 export class LlmRequestError extends Error{constructor(message:string,public status:number,public details?:unknown){super(message)}}
 
 export function isQwenModel(value:string):value is QwenModel{return QWEN_MODELS.includes(value as QwenModel)}
+/** The text model of the team a piece of work runs for (set by the super administrator); calls without a model use it. */
+const teamModel=new AsyncLocalStorage<QwenModel>()
+export const withTextModel=<T>(model:QwenModel,work:()=>Promise<T>)=>teamModel.run(model,work)
+export const currentTextModel=():QwenModel=>teamModel.getStore()??config.QWEN_DEFAULT_MODEL
 
 export async function generateQwenText(input:{messages:LlmMessage[];model?:QwenModel;temperature?:number;maxTokens?:number;json?:boolean}):Promise<LlmResult>{
   const result=await chatQwen(input)
@@ -23,7 +28,7 @@ export async function generateQwenText(input:{messages:LlmMessage[];model?:QwenM
 /** One chat completion; with `tools` the model may answer with tool calls instead of text. */
 export async function chatQwen(input:{messages:LlmMessage[];model?:QwenModel;temperature?:number;maxTokens?:number;json?:boolean;tools?:LlmTool[];timeoutMs?:number}):Promise<LlmChatResult>{
   if(!config.DASHSCOPE_API_KEY)throw new LlmConfigurationError('尚未配置 DASHSCOPE_API_KEY。')
-  const model=input.model??config.QWEN_DEFAULT_MODEL
+  const model=input.model??teamModel.getStore()??config.QWEN_DEFAULT_MODEL
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),input.timeoutMs??config.QWEN_TIMEOUT_MS)
   try{
     const response=await fetch(`${config.DASHSCOPE_BASE_URL.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${config.DASHSCOPE_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages:input.messages,temperature:input.temperature??0.4,max_tokens:input.maxTokens??2000,...(input.json?{response_format:{type:'json_object'},enable_thinking:false}:{}),...(input.tools?.length?{tools:input.tools,tool_choice:'auto',parallel_tool_calls:true}:{})}),signal:controller.signal})
@@ -42,7 +47,7 @@ export async function chatQwen(input:{messages:LlmMessage[];model?:QwenModel;tem
  */
 export async function streamQwen(input:{messages:LlmMessage[];model?:QwenModel;temperature?:number;maxTokens?:number;tools?:LlmTool[];timeoutMs?:number;onText:(text:string)=>void}):Promise<LlmChatResult>{
   if(!config.DASHSCOPE_API_KEY)throw new LlmConfigurationError('尚未配置 DASHSCOPE_API_KEY。')
-  const model=input.model??config.QWEN_DEFAULT_MODEL
+  const model=input.model??teamModel.getStore()??config.QWEN_DEFAULT_MODEL
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),input.timeoutMs??config.QWEN_TIMEOUT_MS)
   try{
     const response=await fetch(`${config.DASHSCOPE_BASE_URL.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${config.DASHSCOPE_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages:input.messages,temperature:input.temperature??0.4,max_tokens:input.maxTokens??2000,stream:true,stream_options:{include_usage:true},enable_thinking:false,...(input.tools?.length?{tools:input.tools,tool_choice:'auto',parallel_tool_calls:true}:{})}),signal:controller.signal})

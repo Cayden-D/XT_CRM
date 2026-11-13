@@ -1,3 +1,4 @@
+import { teamOf } from '../integrations/teams.js'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { hasPermission, requireAuth, requirePermission } from '../auth.js'
@@ -100,7 +101,8 @@ export async function inquiryReviewRoutes(app: FastifyInstance) {
   app.post('/inquiry-review/sessions/:id/analyze', { preHandler: requirePermission('performance:review') }, async (request, reply) => {
     const { id } = idParams.parse(request.params)
     await sessionFor(request, id)
-    const settings = await reviewSettings(tenant(request))
+    // Analysed with the text model of the requesting account's team.
+    const settings = { ...(await reviewSettings(tenant(request))), model: (await teamOf(tenant(request), request.authUser.sub)).textModel }
     try {
       const result = await analyzeSession(tenant(request), id, null, settings)
       if (!result.review) throw new IntegrationError('REVIEW_DECIDED', '这个会话已经由主管确认过，不会重新分析。', 409)
@@ -253,12 +255,12 @@ export async function inquiryReviewRoutes(app: FastifyInstance) {
   app.get('/inquiry-review/settings', { preHandler: requireReviewRead }, async request => {
     const { connectionId } = z.object({ connectionId: z.string().uuid().optional() }).parse(request.query)
     const runs = connectionId ? (await db.query('SELECT id,review_date::text AS review_date,status,stats,error_message,created_at,finished_at FROM chat_review_runs WHERE tenant_id=$1 AND connection_id=$2 ORDER BY review_date DESC LIMIT 14', [tenant(request), connectionId])).rows : []
-    return { data: { ...(await reviewSettings(tenant(request))), models: QWEN_MODELS, runs } }
+    return { data: { ...(await reviewSettings(tenant(request))), runs } }
   })
   app.put('/inquiry-review/settings', { preHandler: requirePermission('performance:manage') }, async request => {
-    const d = z.object({ enabled: z.boolean(), dailySessionLimit: z.number().int().min(0).max(2000), minRealChars: z.number().int().min(1).max(1000), model: z.enum(QWEN_MODELS) }).strict().parse(request.body)
+    const d = z.object({ enabled: z.boolean(), dailySessionLimit: z.number().int().min(0).max(2000), minRealChars: z.number().int().min(1).max(1000), model: z.string().optional() }).strict().parse(request.body)
     await reviewSettings(tenant(request))
-    await db.query('UPDATE chat_review_settings SET enabled=$2,daily_session_limit=$3,min_real_chars=$4,model=$5,updated_at=now() WHERE tenant_id=$1', [tenant(request), d.enabled, d.dailySessionLimit, d.minRealChars, d.model])
+    await db.query('UPDATE chat_review_settings SET enabled=$2,daily_session_limit=$3,min_real_chars=$4,updated_at=now() WHERE tenant_id=$1', [tenant(request), d.enabled, d.dailySessionLimit, d.minRealChars])
     await audit(request, 'performance.review.settings', 'chat_review_settings', tenant(request), d)
     return { data: await reviewSettings(tenant(request)) }
   })

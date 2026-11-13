@@ -1,3 +1,4 @@
+import { defaultTeam } from './teams.js'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { db } from '../db.js'
@@ -266,7 +267,8 @@ export async function enqueueReviewRun(tenantId: string, connectionId: string, d
 /** One claimed run: products and figures always; the model only when the shop has turned it on, within the daily limit. */
 async function processRun(run: { id: string; tenant_id: string; connection_id: string; review_date: string }, workerId: string) {
   const date = run.review_date
-  const settings = await reviewSettings(run.tenant_id)
+  // Scheduled runs belong to no one in particular: the super administrator's team model.
+  const settings = { ...(await reviewSettings(run.tenant_id)), model: (await defaultTeam(run.tenant_id)).textModel }
   await ensureSettings(run.tenant_id)
   await refreshSessionProducts(run.tenant_id, run.connection_id, date, date)
   const stats = { candidates: 0, analyzed: 0, failed: 0, inputTokens: 0, outputTokens: 0, aiEnabled: settings.enabled, briefs: 0 }

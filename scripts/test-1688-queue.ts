@@ -26,6 +26,8 @@ globalThis.fetch=async(input,init)=>{
 }
 try{
   const actor=(await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'队列测试','active') RETURNING id,email::text,display_name",[tenant,`${randomUUID()}@fixture.local`])).rows[0]
+  // Listing collected products costs team credits; this team has enough for the whole test.
+  await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor.id, tenant])
   const token=app.jwt.sign({sub:actor.id,tenantId:tenant,email:actor.email,displayName:actor.display_name,roles:[],permissions:['*']})
   const request=(method:'GET'|'PUT'|'POST',path:string,payload?:object)=>app.inject({method,url:`/api/integrations/1688${path}`,headers:{authorization:`Bearer ${token}`},...(payload?{payload}:{})})
   disableQueue=async()=>{const setting=(await request('GET','/agent/queue')).json().data.settings.find((item:any)=>item.id===connection.id);assert.equal((await request('PUT',`/connections/${connection.id}/agent-queue-settings`,{enabled:false,revision:setting.revision,confirmed:true})).statusCode,200)}

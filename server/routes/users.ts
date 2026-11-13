@@ -3,6 +3,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { forgetAccount, hasPermission, requireAuth } from '../auth.js'
+import { IntegrationError } from '../integrations/1688.js'
+import { CREDITS_PER_LISTING, IMAGE_MODEL_CHOICES, listTeams, teamOf, TEXT_MODEL_CHOICES, updateTeam } from '../integrations/teams.js'
+import { IMAGE_MODEL_NAMES } from '../llm/apimart-image.js'
 
 /**
  * 账户管理 (super administrator only, permission user:manage): open accounts, change roles, disable/enable and reset
@@ -64,9 +67,34 @@ const revoke = async (userId: string) => { await db.query('UPDATE users SET sess
 export async function userRoutes(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AccountError) return reply.code(error.statusCode).send({ error: error.code, message: error.message })
+    if (error instanceof IntegrationError) return reply.code(error.statusCode).send({ error: error.code, message: error.message })
     if (error instanceof z.ZodError) { const issue = error.issues[0]; return reply.code(400).send({ error: 'VALIDATION_ERROR', message: issue?.code === 'custom' || issue?.message?.match(/[一-龥]/) ? issue.message : `请求参数不正确${issue?.path.length ? `（${issue.path.join('.')}）` : ''}。` }) }
     request.log.error(error)
     return reply.code(500).send({ error: 'INTERNAL_SERVER_ERROR', message: '服务器处理请求时发生错误。' })
+  })
+
+  // 团队额度与模型 (super administrator): each team's text/image model and credits.
+  const superOnly = async (request: FastifyRequest, reply: import('fastify').FastifyReply) => {
+    await requireAuth(request, reply)
+    if (reply.sent) return
+    if (!fullAccess(request)) return reply.code(403).send({ error: 'FORBIDDEN', message: '只有超级管理员可以调整团队模型和额度。' })
+  }
+  app.get('/teams', { preHandler: superOnly }, async request => ({
+    data: await listTeams(tenant(request)), perListing: CREDITS_PER_LISTING,
+    textModels: TEXT_MODEL_CHOICES, imageModels: IMAGE_MODEL_CHOICES.map(id => ({ id, name: IMAGE_MODEL_NAMES[id] })),
+  }))
+  app.patch('/teams/:id', { preHandler: superOnly }, async request => {
+    const { id } = idParams.parse(request.params)
+    const input = z.object({
+      textModel: z.enum(TEXT_MODEL_CHOICES).optional(), imageModel: z.enum(IMAGE_MODEL_CHOICES).optional(),
+      delta: z.number().int().min(-1_000_000).max(1_000_000).refine(v => v !== 0, '调整积分不能为 0。').optional(), note: z.string().trim().max(200).optional(),
+    }).strict().refine(v => v.textModel || v.imageModel || v.delta, '没有要保存的修改。').parse(request.body)
+    return { data: await updateTeam(tenant(request), id, request.authUser.sub, input) }
+  })
+  // The signed-in account's own team: credits left and what a listing costs.
+  app.get('/team', { preHandler: requireAuth }, async request => {
+    const team = await teamOf(tenant(request), request.authUser.sub)
+    return { data: { name: team.ownerName, unlimited: team.unlimited, credits: team.credits, perListing: CREDITS_PER_LISTING } }
   })
 
   app.get('/assignable', { preHandler: requireAuth }, async request => {

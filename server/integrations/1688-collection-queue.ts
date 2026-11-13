@@ -6,6 +6,7 @@ import { IntegrationError } from './1688.js'
 import { inspectPublishingImages, publishingImages } from './1688-agent.js'
 import { createDraftFromProduct } from './1688-drafts.js'
 import { saveCollectedPackage } from './product-attributes.js'
+import { requireListingCredits } from './teams.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
@@ -174,10 +175,14 @@ async function processJob(job:QueueJob){
   const actor=await activeActor(job)
   const allowed=(await db.query(`SELECT 1 FROM integration_1688_collection_queue_settings q JOIN integration_1688_agent_settings a ON a.connection_id=q.connection_id JOIN integration_1688_connections c ON c.id=q.connection_id WHERE q.connection_id=$1 AND q.tenant_id=$2 AND q.enabled AND a.enabled AND c.status='connected'`,[job.connection_id,job.tenant_id])).rows[0]
   if(!allowed)throw new IntegrationError('QUEUE_DISABLED','队列或 Agent 模式已关闭，任务未发布。',409)
+  // The team must have the listing's credits before any paid work starts; they are taken when the listing is submitted.
+  const team=await requireListingCredits(job.tenant_id,actor.id)
   const variants=(await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 AND tenant_id=$2 ORDER BY position',[source.id,job.tenant_id])).rows
   const images=checkedSource(source,variants)
   const previous=job.report||{}
-  const auto=await autoImages(job.tenant_id)
+  const settings=await autoImages(job.tenant_id)
+  // Pictures are made with the team's image model (set by the super administrator).
+  const auto=settings&&{...settings,suite_model:team.imageModel}
   let report:Json
   let variantImage=(url:string|null)=>url
   if(auto&&!previous.generatedImages){

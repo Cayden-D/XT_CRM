@@ -123,13 +123,12 @@ function ReviewSettingsPanel({ user, connectionId, setError }: { user: SessionUs
   if (!settings) return null
   const yesterday = new Date(Date.now() + 8 * 3_600_000 - 86_400_000).toISOString().slice(0, 10)
   const update = (patch: Partial<ReviewSettings>) => { setSettings({ ...settings, ...patch }); setSaved('') }
-  async function save() { setBusy(true); try { await saveReviewSettings({ enabled: settings!.enabled, dailySessionLimit: settings!.daily_session_limit, minRealChars: settings!.min_real_chars, model: settings!.model }); setSaved('已保存'); await load() } catch (cause) { setError(message(cause)) } finally { setBusy(false) } }
+  async function save() { setBusy(true); try { await saveReviewSettings({ enabled: settings!.enabled, dailySessionLimit: settings!.daily_session_limit, minRealChars: settings!.min_real_chars }); setSaved('已保存'); await load() } catch (cause) { setError(message(cause)) } finally { setBusy(false) } }
   async function run() { setBusy(true); try { await queueReviewRun(connectionId, yesterday); setSaved(`已排队复盘 ${yesterday}`); await load() } catch (cause) { setError(message(cause)) } finally { setBusy(false) } }
   return <section className="review-settings" aria-label="AI 复盘设置">
     <label className="review-check"><input type="checkbox" disabled={!canManage} checked={settings.enabled} onChange={e => update({ enabled: e.target.checked })} />每天早上 6 点自动分析昨天的会话（把客服遮盖后的文字发给阿里云百炼）</label>
     <div><label>每天最多<input type="number" min={0} max={2000} disabled={!canManage} value={settings.daily_session_limit} onChange={e => update({ daily_session_limit: Number(e.target.value) })} />个会话</label>
-      <label>至少<input type="number" min={1} max={1000} disabled={!canManage} value={settings.min_real_chars} onChange={e => update({ min_real_chars: Number(e.target.value) })} />字真实文字才分析</label>
-      <label>模型<select disabled={!canManage} value={settings.model} onChange={e => update({ model: e.target.value })}>{settings.models.map(m => <option key={m}>{m}</option>)}</select></label></div>
+      <label>至少<input type="number" min={1} max={1000} disabled={!canManage} value={settings.min_real_chars} onChange={e => update({ min_real_chars: Number(e.target.value) })} />字真实文字才分析</label></div>
     {canManage && <div className="review-actions"><button className="shop-button primary" disabled={busy} onClick={() => void save()}>保存</button><button className="shop-button" disabled={busy} onClick={() => void run()}>立即复盘昨天</button>{saved && <span className="shop-note">{saved}</span>}</div>}
     {settings.runs.length > 0 && <div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>日期</th><th>状态</th><th>分析/候选</th><th>失败</th><th>Token（入/出）</th></tr></thead><tbody>{settings.runs.map(r => <tr key={r.id}><td>{r.review_date}</td><td>{({ queued: '排队中', running: '进行中', succeeded: '完成', failed: '失败' } as Record<string, string>)[r.status]}{r.error_message && <small>{r.error_message}</small>}</td><td>{r.stats.analyzed ?? 0}/{r.stats.candidates ?? 0}</td><td>{r.stats.failed ?? 0}</td><td>{r.stats.inputTokens ?? 0}/{r.stats.outputTokens ?? 0}</td></tr>)}</tbody></table></div>}
   </section>

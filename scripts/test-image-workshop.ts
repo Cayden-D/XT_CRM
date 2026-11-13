@@ -103,13 +103,16 @@ try {
   const removal = await call('POST', '/edits', { source: { url: cdn('side') }, operation: 'background', scene: '去掉水印换成木桌' })
   assert.deepEqual([removal.statusCode, removal.json().error], [400, 'IMAGE_RIGHTS'])
 
-  // 白底图: queued, then the worker calls Qwen with the source picture, stores the result privately and screens it again.
-  const edit = (await call('POST', '/edits', { source: { url: cdn('side') }, operation: 'white_bg', collectedProductId: p1 })).json().data
-  assert.deepEqual([edit.status, edit.provider, edit.url], ['pending', 'qwen', null])
-  await drain()
-  const [qwenCall] = calls.qwen
-  assert.deepEqual([qwenCall.model, qwenCall.image, qwenCall.watermark], ['qwen-image-3.0', cdn('side'), false])
-  assert.match(qwenCall.prompt, /纯白色/)
+  // 白底图: queued, then the worker sends the source picture to GPT-Image (the team's image model), stores the result
+  // privately and screens it again. No Qwen image model is used any more.
+  const edit = (await call('POST', '/edits', { source: { url: cdn('side') }, operation: 'white_bg', collectedProductId: p1, model: 'qwen-image-3.0' })).json().data
+  assert.deepEqual([edit.status, edit.provider, edit.model, edit.url], ['pending', 'apimart', 'gpt-image-2.5-flare', null])
+  for (let i = 0; i < 3; i++) await drain()
+  const [editCall] = calls.submit
+  assert.deepEqual([editCall.model, editCall.size, editCall.image_urls], ['gpt-image-2.5-flare', '1:1', [cdn('side')]], 'a model sent by the page is ignored')
+  assert.match(editCall.prompt, /纯白色/)
+  assert.equal(calls.qwen.length, 0)
+  calls.submit.length = 0
   const done = (await call('GET', `/assets?ids=${edit.id}`)).json().data[0]
   assert.deepEqual([done.status, done.width, done.risky], ['completed', 1024, false])
   assert.ok(done.url.startsWith('https://images.example.com/'), 'signed link on the configured domain')
@@ -238,7 +241,7 @@ try {
   assert.equal((await call('DELETE', `/assets/${resized.id}`)).statusCode, 200)
   assert.ok(!objects.has(`image-workshop/${tenant}/${resized.id}.png`))
 
-  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', qwenEdit: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
+  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, original)

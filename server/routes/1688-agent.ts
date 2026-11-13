@@ -3,7 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { config } from '../config.js'
-import { generateQwenText, LlmRequestError } from '../llm/qwen.js'
+import { currentTextModel, generateQwenText, LlmRequestError, withTextModel } from '../llm/qwen.js'
+import { teamOf } from '../integrations/teams.js'
 import { requirePermission } from '../auth.js'
 import { IntegrationError } from '../integrations/1688.js'
 import { inspectPublishingImages, prepareAgentFields, publishingImages } from '../integrations/1688-agent.js'
@@ -68,7 +69,12 @@ export async function agent1688Routes(app:FastifyInstance,publish:Publisher){
   app.post('/drafts/:id/agent',{preHandler:[requirePermission('integration:publish'),requirePermission('product:read')]},request=>runAgentDraft(request,publish))
 }
 
+/** Runs with the text model of the requesting account's team. */
 export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,publish:Publisher,queue?:{id:string;workerId:string;skipImageCheck?:boolean}){
+  const team=await teamOf(request.authUser.tenantId,request.authUser.sub)
+  return withTextModel(team.textModel,()=>agentDraft(request,publish,queue))
+}
+async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,publish:Publisher,queue?:{id:string;workerId:string;skipImageCheck?:boolean}){
     const {id}=idSchema.parse(request.params),{revision}=z.object({revision:z.number().int().positive()}).parse(request.body)
     const tenant=request.authUser.tenantId
     const draft=(await db.query('SELECT * FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]
@@ -81,7 +87,7 @@ export async function runAgentDraft(request:Pick<FastifyRequest,'params'|'body'|
     const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[draft.product_id,tenant])).rows
     let job
     try{job=(await db.query("INSERT INTO integration_1688_agent_jobs(tenant_id,connection_id,draft_id,actor_id,settings_revision,draft_revision,status)VALUES($1,$2,$3,$4,$5,$6,'analyzing')RETURNING *",[tenant,draft.connection_id,id,request.authUser.sub,settings.revision,revision])).rows[0]}catch(error){if((error as {code?:string}).code==='23505')throw new IntegrationError('AGENT_BUSY','已有 Agent 任务，请查看任务或发布核对结果，不要重复提交。',409);throw error}
-    let report:Record<string,unknown>={model:'qwen3.8-flash',imageRepairAvailable:true}
+    let report:Record<string,unknown>={model:currentTextModel(),imageRepairAvailable:true}
     try{
       const source=(await db.query('SELECT * FROM collected_products WHERE tenant_id=$1 AND product_id=$2 ORDER BY updated_at DESC LIMIT 1',[tenant,product.id])).rows[0]||null
       const sourceVariants=source?(await db.query('SELECT id,label,attributes FROM collected_product_variants WHERE tenant_id=$1 AND collected_product_id=$2',[tenant,source.id])).rows:[]

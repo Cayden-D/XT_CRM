@@ -17,6 +17,7 @@ import { collectionQueueRoutes } from './1688-queue.js'
 import { buildSkuRows, mapReviewedVariants, platformSaleValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
 import { createDraftFromProduct, MIN_WHOLESALE, wholesaleRanges } from '../integrations/1688-drafts.js'
+import { chargeListing, refundListing } from '../integrations/teams.js'
 import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
 
 const idSchema = z.object({ id: z.string().uuid() })
@@ -139,6 +140,7 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     const missing = validatePublishBody(row.platform_schema, row.data_body)
     if (missing.length) throw new IntegrationError('MISSING_FIELDS', `请补全：${missing.join('、')}`, 400)
     const claim = await db.connect()
+    let chargedTeam: string | null = null
     try {
       await claim.query('BEGIN')
       await claim.query('SELECT id FROM integration_1688_connections WHERE id=$1 AND tenant_id=$2 FOR UPDATE',[row.connection_id,request.authUser.tenantId])
@@ -156,6 +158,8 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
       if(binding)throw new IntegrationError('PRODUCT_ALREADY_BOUND','该产品已关联平台商品，不能再新建发布。',409)
       const claimed = await claim.query("UPDATE integration_1688_publish_drafts SET status='submitting',updated_at=now() WHERE id=$1 AND tenant_id=$2 AND revision=$3 AND status IN ('draft','failed') RETURNING id", [id, request.authUser.tenantId, revision])
       if (!claimed.rows.length) throw new IntegrationError('DRAFT_CONFLICT', '草稿已变更或正在提交，不能重复发布。', 409)
+      // A collected product costs the team credits; taken here so a shortage leaves the draft untouched.
+      chargedTeam = await chargeListing(claim, request.authUser.tenantId, request.authUser.sub, row.product_id, id)
       await claim.query('COMMIT')
     }catch(error){await claim.query('ROLLBACK');throw error}finally{claim.release()}
     let platformResponded = false
@@ -183,6 +187,8 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     } catch (error) {
       const unknown = platformResponded || !(error instanceof IntegrationError) || ['NETWORK_ERROR','INVALID_RESPONSE','PUBLISH_UNKNOWN','INVALID_SCHEMA','EMPTY_SCHEMA'].includes(error.code)
       await db.query('UPDATE integration_1688_publish_drafts SET status=$2,last_error_code=$3,updated_at=now() WHERE id=$1', [id, unknown ? 'unknown' : 'failed', error instanceof IntegrationError ? error.code : 'INTERNAL_ERROR'])
+      // Refused for certain: nothing was listed, so the credits go back. An unknown outcome keeps them (it may be listed).
+      if (chargedTeam && !unknown) await refundListing(request.authUser.tenantId, chargedTeam, request.authUser.sub, id).catch(() => {})
       throw error
     }
 }

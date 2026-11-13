@@ -134,7 +134,8 @@ async function askModel(system: string, payload: Json, pictures: string[]) {
   const content: LlmMessage['content'] = pictures.length
     ? [{ type: 'text', text: JSON.stringify(payload) }, ...pictures.map(url => ({ type: 'image_url' as const, image_url: { url } }))]
     : JSON.stringify(payload)
-  const result = await generateQwenText({ model: 'qwen3.8-flash', temperature: 0, json: true, maxTokens: 4000, messages: [{ role: 'system', content: system }, { role: 'user', content } as LlmMessage] })
+  // With pictures the multimodal default reads them; text alone goes to the team's model.
+  const result = await generateQwenText({ model: pictures.length ? 'qwen3.8-flash' : undefined, temperature: 0, json: true, maxTokens: 4000, messages: [{ role: 'system', content: system }, { role: 'user', content } as LlmMessage] })
   if (result.finishReason !== 'stop') return null
   try { const parsed = proposalSchema.safeParse(JSON.parse(result.content)); return parsed.success ? parsed.data : null } catch { return null }
 }

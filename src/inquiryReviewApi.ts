@@ -23,7 +23,7 @@ export type CoachingItem = { id: string; title: string; detail: string | null; s
 export type AgentBrief = { agent: { id: string; login_id: string; is_main: boolean; user_name: string | null }; stats: { today: DayStats; previousDays: number; previousDailyAverage: { inquiries: number; paid: number; no_order: number; no_reply: number } }; summary: string | null; supervisorNote: string | null
   reviews: { id: string; session_id: string; chat_date: string; status: string; ai_loss_code: string | null; final_loss_code: string | null; ai_findings: Finding[]; final_findings: Finding[] | null; ai_coaching: string | null; reviewer_note: string | null; published_at: string | null; agent_response: string | null }[]
   trend: { date: string; today: DayStats }[]; items: CoachingItem[]; canReview: boolean; own: boolean }
-export type ReviewSettings = { enabled: boolean; daily_session_limit: number; min_real_chars: number; model: string; models: string[]; runs: { id: string; review_date: string; status: string; stats: { candidates?: number; analyzed?: number; failed?: number; inputTokens?: number; outputTokens?: number; briefs?: number }; error_message: string | null; finished_at: string | null }[] }
+export type ReviewSettings = { enabled: boolean; daily_session_limit: number; min_real_chars: number; model?: string; runs: { id: string; review_date: string; status: string; stats: { candidates?: number; analyzed?: number; failed?: number; inputTokens?: number; outputTokens?: number; briefs?: number }; error_message: string | null; finished_at: string | null }[] }
 
 export const getWorklist = (connectionId: string, from: string, to: string, status: string, agentId?: string) => request<{ data: WorklistRow[]; totals: WorklistTotals; lossNames: LossNames }>(`${base}/inquiry-review/worklist?${period(connectionId, from, to, { status, ...(agentId ? { agentId } : {}) })}`)
 export const getReviewDetail = (id: string) => request<{ data: ReviewDetail; lossNames: LossNames }>(`${base}/inquiry-review/sessions/${id}`)
@@ -39,5 +39,5 @@ export const saveBriefNote = (agentId: string, date: string, note: string) => se
 export const createCoachingItem = (body: { agentId: string; reviewId?: string | null; title: string; dueDate?: string | null }) => send('POST', '/coaching-items', body)
 export const updateCoachingItem = (id: string, status: CoachingItem['status']) => send('PATCH', `/coaching-items/${id}`, { status })
 export const getReviewSettings = (connectionId: string) => request<{ data: ReviewSettings }>(`${base}/inquiry-review/settings?${new URLSearchParams({ connectionId })}`)
-export const saveReviewSettings = (body: { enabled: boolean; dailySessionLimit: number; minRealChars: number; model: string }) => send('PUT', '/inquiry-review/settings', body)
+export const saveReviewSettings = (body: { enabled: boolean; dailySessionLimit: number; minRealChars: number }) => send('PUT', '/inquiry-review/settings', body)
 export const queueReviewRun = (connectionId: string, date: string) => send('POST', '/inquiry-review/runs', { connectionId, date })

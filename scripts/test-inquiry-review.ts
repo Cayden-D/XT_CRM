@@ -116,8 +116,12 @@ try {
   assert.ok(off.briefs >= 2)
   assert.equal((await db.query('SELECT stats->$2->>$3 AS n FROM chat_agent_daily_briefs WHERE agent_id=$1 AND brief_date=$4', [agent, 'today', 'no_reply', D])).rows[0].n, '1')
 
+  // Scheduled reviews use the super administrator's team text model (there is no model choice in the settings any more).
+  const superRole = (await db.query(`INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,'super_admin','超级管理员','["*"]') RETURNING id`, [tenant])).rows[0].id
+  await db.query('INSERT INTO user_roles(user_id,role_id) VALUES($1,$2)', [boss, superRole])
+  await db.query("INSERT INTO team_ai_settings(owner_user_id,tenant_id,text_model) VALUES($1,$2,'qwen3.7-flash')", [boss, tenant])
   // Settings: only managers change them.
-  const settings = { enabled: true, dailySessionLimit: 10, minRealChars: 20, model: 'qwen3.7-flash' }
+  const settings = { enabled: true, dailySessionLimit: 10, minRealChars: 20 }
   assert.equal((await call('PUT', '/inquiry-review/settings', auth(boss, ['performance:read', 'performance:review']), settings)).statusCode, 403)
   assert.equal((await call('PUT', '/inquiry-review/settings', supervisor, settings)).statusCode, 200)
 

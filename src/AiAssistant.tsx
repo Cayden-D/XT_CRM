@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Bot, CalendarClock, Check, ChevronLeft, Command, Database, History, LoaderCircle, Mic, Plus, Send, Sparkles, Tag, Trash2, UserRoundCog, X } from 'lucide-react'
-import { ApiError, confirmAiAction, deleteAiConversation, getAiConversation, getAiConversations, getAiModels, rejectAiAction, streamAiMessage, type AiAction, type AiConversation, type AiMessage, type AiModel } from './api'
+import { ApiError, confirmAiAction, deleteAiConversation, getAiConversation, getAiConversations, getAiModels, rejectAiAction, streamAiMessage, type AiAction, type AiConversation, type AiMessage } from './api'
 import { DATA_CHANGED, useAiFocus } from './aiFocus'
 
 const toolNames: Record<string, string> = {
@@ -81,14 +81,13 @@ function ActionCard({ action, onChange }: { action: AiAction; onChange: (next: A
 
 export default function AiAssistant({ open, close, initialPrompt, userName, page, pageTitle }: { open: boolean; close: () => void; initialPrompt: string; userName: string; page: string; pageTitle: string }) {
   const [value, setValue] = useState(''), [messages, setMessages] = useState<AiMessage[]>([]), [conversationId, setConversationId] = useState<string | null>(null)
-  const [model, setModel] = useState<AiModel>('qwen3.8-flash'), [models, setModels] = useState<AiModel[]>(['qwen3.8-flash', 'qwen3.7-flash', 'qwen3.7-plus', 'qwen3.6-plus'])
   const [configured, setConfigured] = useState(true), [sending, setSending] = useState(false), [error, setError] = useState('')
   const [view, setView] = useState<'chat' | 'history'>('chat'), [history, setHistory] = useState<AiConversation[]>([]), [hasMore, setHasMore] = useState(false), [loadingHistory, setLoadingHistory] = useState(false)
   // The answer being streamed: its text so far, and the data the model is reading meanwhile.
   const [draft, setDraft] = useState(''), [reading, setReading] = useState<string[]>([])
   const focus = useAiFocus(), chatRef = useRef<HTMLDivElement>(null)
   useEffect(() => { if (initialPrompt) setValue(initialPrompt) }, [initialPrompt])
-  useEffect(() => { getAiModels().then(result => { setModel(result.data.defaultModel); setModels(result.data.models); setConfigured(result.data.configured) }).catch(() => {}) }, [])
+  useEffect(() => { getAiModels().then(result => { setConfigured(result.data.configured) }).catch(() => {}) }, [])
   useEffect(() => { chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: 'smooth' }) }, [messages, sending])
   // While text streams in, follow it only if the reader is already at the bottom.
   useEffect(() => { const el = chatRef.current; if (el && draft && el.scrollHeight - el.scrollTop - el.clientHeight < 80) el.scrollTop = el.scrollHeight }, [draft])
@@ -98,7 +97,7 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
     setMessages(current => [...current, { id: `pending-${Date.now()}`, role: 'user', content: message, input_tokens: null, output_tokens: null, latency_ms: null, created_at: new Date().toISOString() }])
     setSending(true); setDraft(''); setReading([])
     try {
-      const result = await streamAiMessage({ message, conversationId, model, context: { page, pageTitle, ...focus } }, {
+      const result = await streamAiMessage({ message, conversationId, context: { page, pageTitle, ...focus } }, {
         onStart: setConversationId,
         onText: text => setDraft(current => current + text),
         // Text before a tool round is only the model announcing the lookup; the answer starts after it.
@@ -121,7 +120,6 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
     try {
       const result = (await getAiConversation(id)).data
       setMessages(result.messages); setConversationId(id); setView('chat')
-      if (result.conversation.model_name && models.includes(result.conversation.model_name as AiModel)) setModel(result.conversation.model_name as AiModel)
     } catch (cause) { setError(cause instanceof ApiError ? cause.message : '无法打开对话。') } finally { setLoadingHistory(false) }
   }
   async function removeConversation(item: AiConversation) {
@@ -157,7 +155,7 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
       {messages.map(message => <div className={`chat-message ${message.role}`} key={message.id}>{message.role === 'assistant' && <div className="bot-dot"><Sparkles size={14} /></div>}<div>
         {message.role === 'assistant' ? <Markdown text={message.content} /> : <p>{message.content}</p>}
         {message.actions?.map(action => <ActionCard key={action.id} action={action} onChange={updateAction} />)}
-        {message.role === 'assistant' && <small>{message.tools?.length ? <span className="ai-tools"><Database size={10} />已查询：{[...new Set(message.tools.map(t => toolNames[t.name] ?? t.name))].join('、')}</span> : null}{message.latency_ms != null && `${(message.latency_ms / 1000).toFixed(1)} 秒 · ${model}`}</small>}
+        {message.role === 'assistant' && <small>{message.tools?.length ? <span className="ai-tools"><Database size={10} />已查询：{[...new Set(message.tools.map(t => toolNames[t.name] ?? t.name))].join('、')}</span> : null}{message.latency_ms != null && `${(message.latency_ms / 1000).toFixed(1)} 秒`}</small>}
       </div></div>)}
       {sending && <div className="chat-message assistant"><div className="bot-dot">{draft ? <Sparkles size={14} /> : <LoaderCircle className="spin" size={14} />}</div><div>
         {draft ? <Markdown text={draft} /> : <p>{reading.length ? `正在查询：${reading.map(n => toolNames[n] ?? n).join('、')}…` : '正在思考…'}</p>}
@@ -165,7 +163,7 @@ export default function AiAssistant({ open, close, initialPrompt, userName, page
       </div></div>}
       {error && <div className="ai-error">{error}</div>}
     </div>}
-    <div className="composer"><div className="model-row"><span>模型</span><select value={model} onChange={e => setModel(e.target.value as AiModel)}>{models.map(item => <option key={item}>{item}</option>)}</select></div>
+    <div className="composer">
       <div className="composer-box"><textarea value={value} onChange={e => setValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} placeholder="直接说出你想做的事…" />
         <div><button aria-label="语音输入" disabled title="暂不支持语音输入"><Mic size={18} /></button><span>写操作需你确认后才会保存</span><button className="send" aria-label="发送" disabled={sending || !value.trim()} onClick={() => void send()}><Send size={17} /></button></div></div>
       <small>AI 生成内容可能有误，请核对关键业务数据。</small></div>

@@ -5,14 +5,15 @@ import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
 import { IntegrationError, uploadPhoto } from '../integrations/1688.js'
 import { inspectPublishingImages, publishingImages } from '../integrations/1688-agent.js'
-import { generateQwenImage, generatedImageUrl, IMAGE_MODELS } from '../llm/qwen-image.js'
+import { generateAndWait, resultUrl } from '../llm/apimart-image.js'
+import { teamOf } from '../integrations/teams.js'
 import { agentImagePreviewUrl, persistAgentImage, readAgentImage, removeAgentImage, requireImageStorage } from '../integrations/oss-images.js'
 
 const params=z.object({id:z.string().uuid()})
 const photoLimit=2*1024*1024
 const blocked=(findings:Array<{readable:boolean;watermark:boolean;rightsRisk:boolean;uncertain:boolean}>)=>!findings.length||findings.some(f=>!f.readable||f.watermark||f.rightsRisk||f.uncertain)
 async function downloadGeneratedImage(raw:string){
-  const url=generatedImageUrl(raw)
+  const url=resultUrl(raw)
   const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(30_000)})
   if(!response.ok||!response.body)throw new IntegrationError('IMAGE_DOWNLOAD_FAILED','生成图片已失效或无法读取，请重新生成。',502)
   if(Number(response.headers.get('content-length')||0)>10_000_000)throw new IntegrationError('IMAGE_TOO_LARGE','生成图超过安全下载上限。',400)
@@ -46,7 +47,7 @@ export async function agentImageRoutes(app:FastifyInstance){
   })
   app.post('/drafts/:id/agent-images',{preHandler:requirePermission('integration:publish')},async request=>{
     const {id}=params.parse(request.params)
-    const input=z.object({revision:z.number().int().positive(),mode:z.enum(['generate','edit']),model:z.enum(IMAGE_MODELS),prompt:z.string().trim().min(8).max(2000),sourceIndex:z.number().int().min(0).max(20).optional(),confirmed:z.literal(true)}).parse(request.body)
+    const input=z.object({revision:z.number().int().positive(),mode:z.enum(['generate','edit']),model:z.string().optional(),prompt:z.string().trim().min(8).max(2000),sourceIndex:z.number().int().min(0).max(20).optional(),confirmed:z.literal(true)}).parse(request.body)
     if(/(?:去|除|删|擦|消).{0,6}(?:水印|商标|版权|logo)|(?:remove|erase|hide).{0,15}(?:watermark|copyright|logo|brand)/i.test(input.prompt))throw new IntegrationError('IMAGE_RIGHTS','不能通过 AI 移除水印、商标或版权标识，请先提供有使用权的原图。',400)
     const draft=(await db.query('SELECT d.id,d.tenant_id,d.revision,d.status,d.data_body,c.status AS connection_status FROM integration_1688_publish_drafts d JOIN integration_1688_connections c ON c.id=d.connection_id WHERE d.id=$1 AND d.tenant_id=$2',[id,request.authUser.tenantId])).rows[0]
     if(!draft)throw new IntegrationError('NOT_FOUND','草稿不存在。',404)
@@ -63,15 +64,17 @@ export async function agentImageRoutes(app:FastifyInstance){
       const sourceFindings=await inspectPublishingImages([sourceUrl])
       if(blocked(sourceFindings))throw new IntegrationError('IMAGE_SOURCE_RISK','原图无法读取，或存在明确的公司水印/知名品牌 Logo；请更换有使用权的原图。',400)
     }
-    const generatedUrl=await generateQwenImage({model:input.model,prompt:input.prompt,sourceUrl})
+    // GPT-Image with the team's image model; an edit sends the source picture as the reference.
+    const model=(await teamOf(request.authUser.tenantId,request.authUser.sub)).imageModel
+    const generatedUrl=await generateAndWait({model,prompt:input.prompt,imageUrls:sourceUrl?[sourceUrl]:[]})
     let findings
     try{findings=await inspectPublishingImages([generatedUrl])}catch{findings=[{url:generatedUrl,readable:false,watermark:false,rightsRisk:false,uncertain:true,reason:'生成结果未能完成图片复检，请重新生成或人工处理。'}]}
     const png=await downloadGeneratedImage(generatedUrl)
     await prepareImage(png)
     const key=await persistAgentImage(request.authUser.tenantId,id,png)
     let preview
-    try{preview=(await db.query("INSERT INTO integration_1688_agent_images(tenant_id,draft_id,actor_id,draft_revision,mode,source_url,prompt,model,generated_url,oss_key,persisted_at,findings,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),$11::jsonb,now()+interval '23 hours') RETURNING id,mode,model,prompt,findings,status,created_at,expires_at",[request.authUser.tenantId,id,request.authUser.sub,input.revision,input.mode,sourceUrl||null,input.prompt,input.model,generatedUrl,key,JSON.stringify(findings)])).rows[0]}catch(error){await removeAgentImage(key,request.authUser.tenantId,id).catch(()=>{});throw error}
-    await db.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'1688.agent.image.generate','1688_agent_image',$3,$4,$5)",[request.authUser.tenantId,request.authUser.sub,preview.id,JSON.stringify({mode:input.mode,model:input.model,draftId:id,risky:blocked(findings)}),request.id])
+    try{preview=(await db.query("INSERT INTO integration_1688_agent_images(tenant_id,draft_id,actor_id,draft_revision,mode,source_url,prompt,model,generated_url,oss_key,persisted_at,findings,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),$11::jsonb,now()+interval '23 hours') RETURNING id,mode,model,prompt,findings,status,created_at,expires_at",[request.authUser.tenantId,id,request.authUser.sub,input.revision,input.mode,sourceUrl||null,input.prompt,model,generatedUrl,key,JSON.stringify(findings)])).rows[0]}catch(error){await removeAgentImage(key,request.authUser.tenantId,id).catch(()=>{});throw error}
+    await db.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'1688.agent.image.generate','1688_agent_image',$3,$4,$5)",[request.authUser.tenantId,request.authUser.sub,preview.id,JSON.stringify({mode:input.mode,model,draftId:id,risky:blocked(findings)}),request.id])
     return {data:{...preview,url:await agentImagePreviewUrl(key,request.authUser.tenantId,id),storage:'oss',risky:blocked(findings)}}
   })
   app.post('/drafts/:id/agent-images/:imageId/apply',{preHandler:requirePermission('integration:publish')},async request=>{

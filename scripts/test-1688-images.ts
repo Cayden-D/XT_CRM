@@ -4,6 +4,9 @@ import sharp from 'sharp'
 
 process.env.DASHSCOPE_API_KEY='image-fixture-key'
 process.env.DASHSCOPE_BASE_URL='https://image-fixture.invalid/compatible-mode/v1'
+process.env.APIMART_API_KEY='image-fixture-apimart'
+process.env.APIMART_BASE_URL='https://apimart.fixture.invalid/v1'
+process.env.APIMART_POLL_MS='0'
 process.env.OSS_REGION='oss-cn-beijing'
 process.env.OSS_BUCKET='image-fixture-bucket'
 process.env.OSS_ACCESS_KEY_ID='image-fixture-id'
@@ -29,11 +32,13 @@ let concurrent:((value:void)=>void)|null=null
 const response=(data:any)=>new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}})
 globalThis.fetch=async(input,init)=>{
   const url=String(input)
-  if(url==='https://image-fixture.invalid/compatible-mode/v1/images/generations'){
-    generated++;const body=JSON.parse(String(init?.body));assert.equal(body.model,'qwen-image-3.0');assert.equal(body.size,'1024x1024');assert.equal(body.n,1);assert.equal(body.watermark,false)
-    assert.ok(!Object.hasOwn(body,'image')||['https://cbu01.alicdn.com/img/source.png','https://cbu01.alicdn.com/img/generated.jpg'].includes(body.image))
-    return response({data:[{url:resultUrl}],created:123})
+  // GPT-Image (the team's image model): submit, then the task is read until it is done. An edit sends the source as reference.
+  if(url==='https://apimart.fixture.invalid/v1/images/generations'){
+    generated++;const body=JSON.parse(String(init?.body));assert.equal(body.model,'gpt-image-2.5-flare');assert.equal(body.n,1)
+    assert.ok(!Object.hasOwn(body,'image_urls')||body.image_urls.every((u:string)=>['https://cbu01.alicdn.com/img/source.png','https://cbu01.alicdn.com/img/generated.jpg'].includes(u)))
+    return response({code:200,data:[{status:'submitted',task_id:`task_${generated}`}]})
   }
+  if(url.startsWith('https://apimart.fixture.invalid/v1/tasks/'))return response({code:200,data:{status:'completed',result:{images:[{url:[resultUrl]}]}}})
   if(url==='https://image-fixture.invalid/compatible-mode/v1/chat/completions'){
     vision++;const body=JSON.parse(String(init?.body)),image=body.messages.at(-1).content[1].image_url.url
     return response({model:'qwen3.8-flash',choices:[{finish_reason:'stop',message:{content:JSON.stringify({images:[{index:0,readable:true,companyWatermark:{detected:blocked&&image===resultUrl,name:blocked&&image===resultUrl?'测试店铺有限公司':'',confidence:blocked&&image===resultUrl?0.99:0},famousBrandLogo:{detected:riskySource&&image.includes('generated.jpg'),name:riskySource&&image.includes('generated.jpg')?'Nike':'',confidence:riskySource&&image.includes('generated.jpg')?0.99:0}}]})}}]})

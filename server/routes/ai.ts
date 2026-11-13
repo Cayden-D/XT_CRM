@@ -1,3 +1,4 @@
+import { teamOf } from '../integrations/teams.js'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
@@ -48,8 +49,9 @@ type Prepared={conversationId:string;requested:QwenModel;input:z.infer<typeof ch
 /** Validates the turn and records the user's message (in a new conversation if none is given). */
 async function prepareChat(request:FastifyRequest):Promise<Prepared|{status:number;body:object}>{
   const input=chatSchema.safeParse(request.body);if(!input.success)return{status:400,body:{error:'VALIDATION_ERROR',message:'消息格式不正确。',details:input.error.flatten()}}
-  const requested=input.data.model??config.QWEN_DEFAULT_MODEL;if(!isQwenModel(requested))return{status:400,body:{error:'UNSUPPORTED_MODEL',message:'所选模型不在允许列表中。'}}
   const {tenantId,sub:userId}=request.authUser
+  // The team's text model, set by the super administrator; a model sent by the page is ignored.
+  const requested=(await teamOf(tenantId,userId)).textModel
   const client=await db.connect();let conversationId=input.data.conversationId??null
   try{
     await client.query('BEGIN')

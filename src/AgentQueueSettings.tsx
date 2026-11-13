@@ -2,7 +2,7 @@ import {useCallback,useEffect,useRef,useState} from 'react'
 import {AlertCircle,Bot,ChevronLeft,ChevronRight,FileText,LoaderCircle,RefreshCw,Search,X} from 'lucide-react'
 import {getAgentQueue,getPublishDraft,retryAgentQueueJob,type AgentAiFill,type AgentQueueJob,type AgentQueueSetting,type PublishDraft} from './1688Api'
 import {DraftEditor} from './1688Page'
-import type {SessionUser} from './api'
+import {request,type SessionUser} from './api'
 import {navigate} from './navigation'
 import './1688.css'
 const evidenceNames:Record<string,string>={title:'标题',attributes:'采集属性',image:'图片',inferred:'AI 判断',default:'其它选项',rule:'固定规则'}
@@ -20,6 +20,9 @@ export default function AgentQueueSettings({user}:{user:SessionUser}){
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('')
  const [page,setPage]=useState(1),[pageSize,setPageSize]=useState(20),[total,setTotal]=useState(0),[status,setStatus]=useState(''),[shopId,setShopId]=useState(''),[search,setSearch]=useState(''),[query,setQuery]=useState(''),[detail,setDetail]=useState<AgentQueueJob|null>(null)
  const sequence=useRef(0)
+ // The team's credits: each collected product listed costs perListing.
+ const [credits,setCredits]=useState<{unlimited:boolean;credits:number;perListing:number}|null>(null)
+ useEffect(()=>{request<{data:{unlimited:boolean;credits:number;perListing:number}}>('/api/users/team').then(r=>setCredits(r.data)).catch(()=>{})},[])
  const [draft,setDraft]=useState<{data:PublishDraft;shop:string}|null>(null),[opening,setOpening]=useState('')
  const has=(p:string)=>(user.permissions||[]).some(v=>v==='*'||v===p||v===`${p.split(':')[0]}:*`)
  const canRead=has('integration:read'),canRetry=has('integration:publish')&&has('collection:read')
@@ -33,6 +36,7 @@ export default function AgentQueueSettings({user}:{user:SessionUser}){
  if(!canRead)return <div className="shop-page"><p role="alert">当前账号没有查看上架队列的权限。</p></div>
  return <div className="shop-page queue-page">
   <form className="queue-filters" onSubmit={e=>{e.preventDefault();setPage(1);setQuery(search.trim())}}><label className="queue-search"><Search size={17}/><input aria-label="搜索队列商品" placeholder="搜索商品标题" maxLength={100} value={search} onChange={e=>setSearch(e.target.value)}/></label><select aria-label="任务状态" value={status} onChange={e=>{setStatus(e.target.value);setPage(1)}}><option value="">全部状态</option>{Object.entries(names).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select>{shops.length>1&&<select aria-label="目标店铺" value={shopId} onChange={e=>{setShopId(e.target.value);setPage(1)}}><option value="">全部店铺</option>{shops.map(shop=><option key={shop.id} value={shop.id}>{shop.display_name}</option>)}</select>}<button className="shop-button" type="submit">搜索</button><button type="button" className="ui-link queue-auto" onClick={()=>navigate('settings/automation')}><Bot size={15}/>自动上架{shops.some(s=>s.enabled)?'已开启':'未开启'}</button><button type="button" className="shop-icon" title="刷新" aria-label="刷新队列" disabled={busy||loading} onClick={()=>void load()}><RefreshCw size={16}/></button></form>
+  {credits&&!credits.unlimited&&<p className={`queue-credits ${credits.credits<credits.perListing?'low':''}`}>团队积分 <b>{credits.credits}</b> · 采集商品上架成功每件扣 {credits.perListing} 积分{credits.credits<credits.perListing?'，积分不足，新任务会停下，请联系超级管理员调整额度':''}</p>}
   {error&&<p className="shop-local-error" role="alert"><AlertCircle size={16}/>{error}<button className="shop-button" disabled={loading} onClick={()=>void load()}>重试加载</button></p>}
   <section className="queue-card" aria-label="上架任务列表" aria-busy={loading}>
    <div className="queue-table-wrap"><table className="queue-table"><colgroup><col style={{width:'27%'}}/><col style={{width:'16%'}}/><col style={{width:'13%'}}/><col style={{width:'25%'}}/><col style={{width:'12%'}}/><col style={{width:'7%'}}/></colgroup><thead><tr><th>商品</th><th>店铺</th><th>状态</th><th>最近结果</th><th>更新时间</th><th>操作</th></tr></thead><tbody>{!loading&&!error&&jobs.map(job=><tr key={job.id}><td><button className="queue-title queue-clamp" title={job.title} onClick={()=>setDetail(job)}>{job.title}</button></td><td><span className="queue-clamp" title={job.display_name}>{job.display_name}</span></td><td><span className={`queue-state queue-state-${job.status}`}>{names[job.status]}</span></td><td><span className="queue-clamp queue-result">{job.message||'等待下一步处理'}</span></td><td><time className="queue-time">{new Date(job.updated_at).toLocaleDateString('zh-CN')}<br/>{new Date(job.updated_at).toLocaleTimeString('zh-CN',{hour12:false})}</time></td><td><div className="queue-actions"><button className="queue-detail-button" aria-label={`查看任务 ${job.title}`} onClick={()=>setDetail(job)}>详情</button>{job.draft_id&&<button className="queue-detail-button" aria-label={`查看 ${job.title} 的发布草稿`} disabled={Boolean(opening)} onClick={()=>void openDraft(job)}>{opening===job.id?<LoaderCircle size={13} className="spin"/>:'草稿'}</button>}</div></td></tr>)}</tbody></table></div>

@@ -99,6 +99,8 @@ try {
   // Through the real route and the mocked platform.
   for (let i = 0; i < 2; i++) tenants.push((await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id', ['属性填充测试', `attr-${randomUUID()}`])).rows[0].id)
   const tenant = tenants[0], actor = (await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'属性测试','active')RETURNING id", [tenant, `${randomUUID()}@fixture.local`])).rows[0].id
+  // Listing collected products costs team credits; this team has enough for the whole test.
+  await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor, tenant])
   const token = app.jwt.sign({ sub: actor, tenantId: tenant, email: 't', displayName: 't', permissions: ['*'], roles: [] })
   const request = (method: 'GET' | 'POST' | 'PUT', path: string, payload?: object) => app.inject({ method, url: `/api/integrations/1688${path}`, headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) })
   const connection = await saveConnection(tenant, actor, { aliId: `attr-${randomUUID()}`, access_token: 'fixture-access', expires_in: 36000 })

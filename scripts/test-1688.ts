@@ -56,6 +56,8 @@ try{
   for(let i=0;i<2;i++)tenantIds.push((await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id',['1688 isolated integration test',`test-1688-${marker}-${i}`])).rows[0].id)
   const tenantId=tenantIds[0]
   const actor=(await db.query("INSERT INTO users(tenant_id,email,password_hash,display_name,status)VALUES($1,$2,'unused','测试账号','active')RETURNING id",[tenantId,`1688-${marker}@integration.local`])).rows[0].id
+  // Listing collected products costs team credits; this team has enough for the whole test.
+  await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor, tenantId])
   const token=(tenant:string,permissions:string[])=>app.jwt.sign({sub:actor,tenantId:tenant,email:'test',displayName:'测试账号',roles:[],permissions})
   const headers={authorization:`Bearer ${token(tenantId,['*'])}`}
   const request=(method:'GET'|'POST'|'PATCH',url:string,payload?:object,auth=headers)=>app.inject({method,url,headers:auth,...(payload?{payload}:{})})
