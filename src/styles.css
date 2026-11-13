@@ -67,7 +67,9 @@ button:focus-visible, textarea:focus-visible { outline:3px solid rgba(58,122,221
 .product-draft { background:#fff5e7; color:#a76c17; }.product-inactive { background:#f0f2f2; color:#7b8490; }
 .quote-table td:first-child strong,.quote-table td:first-child small { display:block; }.quote-table .cell-sub { margin-top:4px; color:#8e97a3; font-size:9px; }
 .row-actions { display:flex; justify-content:flex-end; gap:2px; }
-.product-drawer { width:min(720px,100vw); }
+/* Product detail and product form: wide enough to read attributes, SKUs and measurements side by side; a strip of the page stays visible to close it. */
+.product-drawer { width:min(960px,100vw); }
+@media (min-width:761px) { .product-drawer { max-width:calc(100vw - 64px); } }
 .product-drawer form { overflow:auto; }
 .product-drawer .form-grid { overflow:visible; }
 .price-tiers { margin:0 24px 22px; padding:17px; border:1px solid #dae1ea; border-radius:10px; background:#fff; }
