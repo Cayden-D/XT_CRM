@@ -13,11 +13,14 @@ process.env.OSS_ACCESS_KEY_ID = 'workshop-fixture-id'
 process.env.OSS_ACCESS_KEY_SECRET = 'workshop-fixture-secret'
 process.env.OSS_CUSTOM_DOMAIN = 'https://images.example.com'
 const { default: OSS } = await import('ali-oss')
-const original = { put: OSS.prototype.put, get: OSS.prototype.get, delete: OSS.prototype.delete }
+const original = { put: OSS.prototype.put, get: OSS.prototype.get, delete: OSS.prototype.delete, multipartUpload: OSS.prototype.multipartUpload }
+const multipart: { key: string; size: number; options: any }[] = []
 const objects = new Map<string, Buffer>()
 ;(OSS.prototype as any).put = async (key: string, bytes: Buffer, options: any) => { assert.equal(options.headers['x-oss-object-acl'], 'private'); objects.set(key, bytes); return {} }
 ;(OSS.prototype as any).get = async (key: string) => { assert.ok(objects.has(key), `missing object ${key}`); return { content: objects.get(key) } }
 ;(OSS.prototype as any).delete = async (key: string) => { objects.delete(key); return {} }
+// Large pictures go up in parts (512 KB each), as Alibaba's OSS guide advises against connection timeouts.
+;(OSS.prototype as any).multipartUpload = async (key: string, bytes: Buffer, options: any) => { multipart.push({ key, size: bytes.length, options }); objects.set(key, bytes); return {} }
 
 const [{ buildApp }, { db }, workshop, { saveConnection }] = await Promise.all([import('../server/app.js'), import('../server/db.js'), import('../server/integrations/image-workshop.js'), import('../server/integrations/1688.js')])
 const app = await buildApp(), originalFetch = globalThis.fetch, tenants: string[] = []
@@ -116,6 +119,12 @@ try {
   assert.equal(calls.qwen.length, 0)
   calls.submit.length = 0
   // (its result link redirected once to the CDN copy and was still saved; see `done` below)
+  // A large picture (here random noise, a few MB as PNG) is saved in 512 KB parts with the same private headers.
+  const noise = await sharp(Buffer.from(Array.from({ length: 1200 * 1200 * 3 }, () => Math.floor(Math.random() * 256))), { raw: { width: 1200, height: 1200, channels: 3 } }).png().toBuffer()
+  assert.ok(noise.length > 1024 * 1024)
+  const bigKey = await workshop.storeImage(tenant, randomUUID(), noise)
+  assert.deepEqual([multipart.length, multipart[0].key, multipart[0].size, multipart[0].options.partSize, multipart[0].options.headers['x-oss-object-acl'], multipart[0].options.mime, multipart[0].options.timeout], [1, bigKey, noise.length, 512 * 1024, 'private', 'image/png', 120_000])
+  assert.ok(objects.has(`image-workshop/${tenant}/${edit.id}.png`), 'small pictures stay a single upload')
   const done = (await call('GET', `/assets?ids=${edit.id}`)).json().data[0]
   assert.deepEqual([done.status, done.width, done.risky], ['completed', 1024, false])
   assert.ok(done.url.startsWith('https://images.example.com/'), 'signed link on the configured domain')
@@ -244,7 +253,7 @@ try {
   assert.equal((await call('DELETE', `/assets/${resized.id}`)).statusCode, 200)
   assert.ok(!objects.has(`image-workshop/${tenant}/${resized.id}.png`))
 
-  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
+  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, original)

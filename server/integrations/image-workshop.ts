@@ -4,7 +4,7 @@ import { config } from '../config.js'
 import { db } from '../db.js'
 import { IntegrationError } from './1688.js'
 import { inspectPublishingImages } from './1688-agent.js'
-import { imagePreviewClient, requireImageStorage } from './oss-images.js'
+import { imagePreviewClient, putPrivateImage, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
 import { brandById, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
 import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type SuiteModel, type SuiteQuality } from '../llm/apimart-image.js'
@@ -53,7 +53,7 @@ export async function storeImage(tenantId: string, id: string, png: Buffer) {
   const key = keyOf(tenantId, id)
   let last: unknown
   for (let attempt = 1; attempt <= OSS_PUT_ATTEMPTS; attempt++) {
-    try { await requireImageStorage().put(key, png, { mime: 'image/png', headers: { 'x-oss-object-acl': 'private', 'Cache-Control': 'private, max-age=3600' } }); return key }
+    try { await putPrivateImage(key, png, { 'x-oss-object-acl': 'private', 'Cache-Control': 'private, max-age=3600' }); return key }
     catch (error) {
       if (error instanceof IntegrationError) throw error
       last = error

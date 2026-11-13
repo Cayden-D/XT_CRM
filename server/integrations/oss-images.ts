@@ -10,7 +10,21 @@ let previewClient:OSS|undefined
 
 export function requireImageStorage(){
   if(!config.OSS_REGION||!config.OSS_BUCKET||!config.OSS_ACCESS_KEY_ID||!config.OSS_ACCESS_KEY_SECRET)throw new IntegrationError('OSS_NOT_CONFIGURED','请先在服务器配置私有 OSS Bucket 与访问凭据。',503)
-  return client??=new OSS({region:config.OSS_REGION,bucket:config.OSS_BUCKET,accessKeyId:config.OSS_ACCESS_KEY_ID,accessKeySecret:config.OSS_ACCESS_KEY_SECRET,authorizationV4:true,secure:true,timeout:120_000})
+  // retryMax (network errors are retried by the SDK) is supported by ali-oss 6.x but missing from its type definitions.
+  const options={region:config.OSS_REGION,bucket:config.OSS_BUCKET,accessKeyId:config.OSS_ACCESS_KEY_ID,accessKeySecret:config.OSS_ACCESS_KEY_SECRET,authorizationV4:true,secure:true,timeout:120_000,retryMax:3}
+  return client??=new OSS(options)
+}
+
+/**
+ * Saves a private picture. Large pictures go up in small parts (as Alibaba's OSS guide advises against
+ * ConnectionTimeoutError): a slow or unstable link then only has to carry 512 KB at a time, and a failed part is sent again
+ * on its own. Small pictures stay a single request.
+ */
+export const OSS_PART_SIZE=512*1024,OSS_SINGLE_PUT_LIMIT=1024*1024,OSS_REQUEST_TIMEOUT=120_000
+export async function putPrivateImage(key:string,bytes:Buffer,headers:Record<string,string>,mime='image/png'){
+  const client=requireImageStorage(),options={mime,headers,timeout:OSS_REQUEST_TIMEOUT}
+  if(bytes.length<=OSS_SINGLE_PUT_LIMIT)return client.put(key,bytes,options)
+  return client.multipartUpload(key,bytes,{...options,partSize:OSS_PART_SIZE,parallel:3})
 }
 
 export function imagePreviewClient(){
@@ -27,7 +41,7 @@ function imageKey(key:string,tenantId:string,draftId:string){
 export async function persistAgentImage(tenantId:string,draftId:string,png:Buffer){
   const key=`${prefix}${tenantId}/${draftId}/${randomUUID()}.png`
   try{
-    await requireImageStorage().put(key,png,{mime:'image/png',headers:{'x-oss-object-acl':'private','x-oss-forbid-overwrite':'true','Cache-Control':'private, max-age=3600'}})
+    await putPrivateImage(key,png,{'x-oss-object-acl':'private','x-oss-forbid-overwrite':'true','Cache-Control':'private, max-age=3600'})
   }catch{throw new IntegrationError('OSS_IMAGE_UPLOAD','图片持久化到 OSS 失败，未创建预览。',502)}
   return key
 }
