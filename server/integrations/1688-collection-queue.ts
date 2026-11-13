@@ -27,6 +27,12 @@ import { publishDraft } from '../routes/1688.js'
 
 type Json=Record<string,any>
 type QueueJob={id:string;tenant_id:string;connection_id:string;collected_product_id:string;actor_id:string;source_updated_at:Date;attempts:number;worker_id:string;draft_id:string|null;report:Json|null}
+/** Ladder price text written by the collector; up to three increasing tiers (what a 1688 quantity quote takes). */
+export function ladderTiers(text:unknown){
+  if(typeof text!=='string')return []
+  const tiers=[...text.matchAll(/¥\s*(\d+(?:\.\d+)?)\s*\((\d+)\s*pieces?\)/gi)].map(m=>({price:Number(m[1]),quantity:Number(m[2])})).filter(t=>t.price>0&&Number.isInteger(t.quantity)&&t.quantity>0).sort((a,b)=>a.quantity-b.quantity)
+  return tiers.filter((t,i)=>i===0||t.quantity>tiers[i-1].quantity).slice(0,3)
+}
 const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))
 const sourceSku=(source:Json)=>`COL-${createHash('sha256').update(`${source.tenant_id}:${source.source}:${source.source_product_id}`).digest('hex').slice(0,24).toUpperCase()}`
 
@@ -192,6 +198,8 @@ async function processJob(job:QueueJob){
     const description=`<p>${escapeHtml(source.title)}</p>${images.details.map(url=>`<p><img src="${escapeHtml(url)}" alt="商品详情"></p>`).join('')}`
     const price=Math.min(...variants.map(v=>Number(v.price)))
     product=(await client.query(`INSERT INTO products(tenant_id,sku,name,category,description,specifications,base_price,base_currency,status,images,detail_images)VALUES($1,$2,$3,$4,$5,$6,$7,'CNY','active',$8,$9) RETURNING *`,[job.tenant_id,sourceSku(source),source.title.slice(0,200),source.category_path?.slice(0,120)||null,description,JSON.stringify(source.attributes||{}),price,JSON.stringify([...new Set([images.main,...images.gallery])]),JSON.stringify(images.details)])).rows[0]
+    // The source listing's ladder ("¥39.00 (2 pieces) / ¥35.00 (10 pieces)") becomes the product's quantity price tiers.
+    for(const tier of ladderTiers(source.attributes?.['阶梯价格']))await client.query('INSERT INTO product_prices(tenant_id,product_id,min_quantity,unit_price)VALUES($1,$2,$3,$4)',[job.tenant_id,product.id,tier.quantity,tier.price])
     for(const variant of variants)await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[job.tenant_id,product.id,variant.id,variant.position,variant.label,JSON.stringify({...variant.attributes,...collectedSkuAttributes(source,variant)}),variantImage(variant.image_url),Number(variant.price),Number(variant.stock)])
     await client.query("UPDATE collected_products SET product_id=$2,processing_status='ready',updated_at=now() WHERE id=$1",[source.id,product.id])
     await client.query("UPDATE integration_1688_collection_queue_jobs SET phase='materializing',product_id=$2,report=$3::jsonb,updated_at=now() WHERE id=$1 AND worker_id=$4 AND status='processing'",[job.id,product.id,JSON.stringify(report),job.worker_id])

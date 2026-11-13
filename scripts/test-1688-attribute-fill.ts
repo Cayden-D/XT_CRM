@@ -148,6 +148,11 @@ try {
   assert.equal(await draftStatus(target.id), 'failed')
   repairQueue = []
 
+  // Refused without a reason: the platform's own answer is kept in the message for diagnosis.
+  publishCalls = 0; rejections = [{ code: 'CHK_WHOLESALE_PRICE_RANGE_BEGIN_LIMIT' }]; repairAnswers = []
+  const silent = await run(await draft())
+  assert.equal(silent.status, 'blocked'); assert.match(silent.message, /平台原始返回：.*CHK_WHOLESALE_PRICE_RANGE_BEGIN_LIMIT/)
+
   // Not about the listing's content: never sent twice.
   publishCalls = 0; rejections = [{ code: 'isv.permission-denied' }]
   assert.equal((await run(await draft())).status, 'blocked'); assert.equal(publishCalls, 1)

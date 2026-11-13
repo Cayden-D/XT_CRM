@@ -114,7 +114,9 @@ export async function gateway(path: string, params: Record<string, string>, imag
       const raw=[nested.errorMessage,nested.errorMsg,nested.errMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.errorMsg,data.errMsg,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
       const detail=raw?.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,300)
       if(detail)throw new IntegrationError(safeCode,album?`1688 相册接口返回错误（${safeCode}）：${detail}`:`1688 拒绝发布（${safeCode}）：${detail}`,400,detail)
-      if(safeCode.startsWith('CHK_'))throw new IntegrationError(safeCode,`1688 校验未通过（${safeCode}），平台没有返回具体原因。`,400)
+      // No readable reason: keep a short copy of the answer itself (a publish response carries no credentials).
+      const answer=JSON.stringify(data).replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,400)
+      if(safeCode.startsWith('CHK_'))throw new IntegrationError(safeCode,`1688 校验未通过（${safeCode}），平台没有返回具体原因。平台原始返回：${answer}`,400,answer)
     }
     throw new IntegrationError(safeCode, `1688 接口调用失败（${safeCode}），请检查接口权限或重新授权。`)
   }

@@ -22,7 +22,7 @@ const objects = new Map<string, Buffer>()
 
 const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
-const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true } }, catProp: { fields: { label: '属性', dataSource: [] } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
+const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
@@ -74,7 +74,7 @@ try {
     ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace`, [tenant, on])
   const collect = async () => {
     const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by)
-      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,'{}','101',$7) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor])).rows[0]
+      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,$8,'101',$7) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor, JSON.stringify({ 阶梯价格: '¥39.00 (2 pieces) / ¥35.00 (10 pieces) / ¥30.00 (50 pieces) / ¥28.00 (100 pieces)' })])).rows[0]
     await db.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,label,attributes,image_url,price,stock)VALUES($1,$2,0,'黑色','{"颜色":"黑色"}',$3,39,10)`, [tenant, source.id, cdn('sku-mark')])
     return source.id as string
   }
@@ -132,6 +132,10 @@ try {
   assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, cdn('sku-mark'), 'SKU pictures stay as collected')
   assert.equal(visionCalls, before, 'nothing was screened: originals, generated pictures and the final check all skipped')
   assert.equal(state.report.imagesUnchecked, true)
+  // The collected ladder is the quantity quote (three tiers at most); the platform's description structure is kept.
+  assert.deepEqual(published.formValues.priceRange, [{ pricerange_beginAmount: 2, pricerange_price: 39 }, { pricerange_beginAmount: 10, pricerange_price: 35 }, { pricerange_beginAmount: 50, pricerange_price: 30 }])
+  assert.deepEqual([published.formValues.description.smartDetail, published.formValues.description.sizeTableDescriptionBlackIdList], [{ kept: true }, '[1]'])
+  assert.match(published.formValues.description.detailList[0].content, /album-7\.jpg[\s\S]*album-9\.jpg/, 'the generated detail pictures are in the text')
   assert.equal(albumUploads, 9, 'nothing is uploaded twice')
   // A shop that already has the album (e.g. settings lost) finds it by name instead of creating another.
   await db.query('DELETE FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])

@@ -6,6 +6,12 @@ import { collectedCategoryDefaults } from './1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from './product-attributes.js'
 
 type Json=Record<string,any>
+/** The platform's description value with the picture-and-text part filled in; its other parts (smart detail, size-table settings) are kept. */
+function withDetail(platform:unknown,content:string){
+  const base=platform&&typeof platform==='object'&&!Array.isArray(platform)?platform as Json:{}
+  const list=Array.isArray(base.detailList)&&base.detailList.length?base.detailList:[{id:'0',title:'图文详情',isRequired:true}]
+  return {...base,detailList:list.map((item:Json,index:number)=>index===0?{...item,content,contentUrl:null}:item)}
+}
 export async function createDraftFromProduct(input:{tenantId:string;actorId:string;requestId:string;connectionId:string;product:Json;catId:string;scene:'cbu'|'popular'|'industry'|'processing';reuse?:boolean}){
   const {tenantId,actorId,requestId,connectionId,product,catId,scene}=input
   if(input.reuse){
@@ -19,7 +25,9 @@ export async function createDraftFromProduct(input:{tenantId:string;actorId:stri
   const source=(await db.query('SELECT * FROM collected_products WHERE tenant_id=$1 AND product_id=$2 ORDER BY updated_at DESC LIMIT 1',[tenantId,product.id])).rows[0]||null
   const category=collectedCategoryDefaults(schema,source)
   const maxImages=Number(schema.data.primaryPicture?.fields?.maxItems||10)
-  const formValues={...defaults,title:product.name,primaryPicture:{imageList:(product.images||[]).slice(0,maxImages).map((url:string)=>({url}))},description:{detailList:[{id:'0',title:'图文详情',content:product.description||'',isRequired:true}]},...(schema.data.priceRange?{priceRange:[{pricerange_beginAmount:1,pricerange_price:Number(product.base_price)}]}:{}),...(Object.keys(category).length?{catProp:{...(defaults.catProp||{}),...category}}:{})}
+  // Quantity tiers of the product (from the collected ladder or entered by hand), lowest quantity first; at most three.
+  const tiers=(await db.query('SELECT min_quantity,unit_price FROM product_prices WHERE product_id=$1 AND tenant_id=$2 AND customer_level IS NULL ORDER BY min_quantity LIMIT 3',[product.id,tenantId])).rows
+  const formValues={...defaults,title:product.name,primaryPicture:{imageList:(product.images||[]).slice(0,maxImages).map((url:string)=>({url}))},description:withDetail(defaults.description,product.description||''),...(schema.data.priceRange?{priceRange:tiers.length?tiers.map(t=>({pricerange_beginAmount:Number(t.min_quantity),pricerange_price:Number(t.unit_price)})):[{pricerange_beginAmount:1,pricerange_price:Number(product.base_price)}]}:{}),...(Object.keys(category).length?{catProp:{...(defaults.catProp||{}),...category}}:{})}
   const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[product.id,tenantId])).rows
   const dimensions=saleDimensions(schema)
   const mapping=Object.fromEntries(dimensions.filter(d=>variants.length&&variants.every(v=>typeof v.attributes?.[d.label]==='string'&&v.attributes[d.label].trim())).map(d=>[d.name,d.label]))
