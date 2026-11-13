@@ -144,20 +144,23 @@ try {
   assert.deepEqual([upload.operation, upload.status, upload.width], ['upload', 'completed', 1200])
   assert.equal((await call('POST', '/uploads', { content: Buffer.from('not an image').toString('base64') })).statusCode, 400)
 
-  // 电商套图: flagged references are refused; six tasks are submitted with the references, polled, stored and screened.
+  // 电商套图: flagged references are refused; seven tasks (with the 1688 首图) are submitted with the references, polled, stored and screened.
   assert.equal((await call('POST', '/suites', { collectedProductId: p1, references: [{ url: cdn('main') }, { url: cdn('logo-1') }] })).statusCode, 400)
   const suite = (await call('POST', '/suites', { collectedProductId: p1, points: '30 秒充满 / 数显胎压', references: [{ url: cdn('main') }, { assetId: upload.id }] })).json().data
-  assert.equal(suite.assets.length, 6)
+  assert.equal(suite.assets.length, 7)
   await drain()
-  assert.equal(calls.submit.length, 6)
+  assert.equal(calls.submit.length, 7)
   assert.deepEqual([calls.submit[0].model, calls.submit[0].quality, calls.submit[0].size, calls.submit[0].output_format, calls.submit[0].n], ['gpt-image-2.5-flare', 'medium', '1:1', 'png', 1])
   assert.equal(calls.submit[0].image_urls[0], cdn('main'))
   assert.ok(calls.submit[0].image_urls[1].startsWith('https://images.example.com/'), 'uploaded reference is sent as a signed link')
   const selling = calls.submit.find(s => s.prompt.includes('生成卖点图'))
   assert.match(selling.prompt, /30 秒充满/); assert.match(selling.prompt, /不得编造/)
   assert.match(calls.submit.find(s => s.prompt.includes('规格尺寸图')).prompt, /15×7×5cm/)
+  // The 1688 首图 is made to catch the eye: the core terms in large type, a clean corner left for the logo.
+  const hero = calls.submit.find(s => s.prompt.includes('1688 批发商品首图')).prompt
+  assert.match(hero, /工厂直供、现货速发、支持定制/); assert.match(hero, /最显眼的位置/)
   await drain() // first poll: still processing
-  assert.equal((await call('GET', `/assets?batchId=${suite.batchId}`)).json().data.filter((a: any) => a.status === 'processing').length, 6)
+  assert.equal((await call('GET', `/assets?batchId=${suite.batchId}`)).json().data.filter((a: any) => a.status === 'processing').length, 7)
   await drain() // second poll: completed
   const suiteDone = (await call('GET', `/assets?batchId=${suite.batchId}`)).json().data
   assert.deepEqual([suiteDone.every((a: any) => a.status === 'completed'), Number(suiteDone[0].cost)], [true, 0.01317])
@@ -181,7 +184,7 @@ try {
   assert.equal(subs.length, 2)
   assert.ok(subs.every(s => s.image_urls.every((u: string) => !u.includes('mark') && !u.includes('logo'))), 'flagged pictures are never sent as references')
   const slots = (await db.query('SELECT replaces_index,operation FROM image_assets WHERE collected_product_id=$1 AND replaces_index IS NOT NULL ORDER BY replaces_index', [p1])).rows
-  assert.deepEqual(slots.map(r => [r.replaces_index, r.operation]), [[2, 'suite_detail'], [4, 'suite_selling']])
+  assert.deepEqual(slots.map(r => [r.replaces_index, r.operation]), [[2, 'suite_scene'], [4, 'suite_white']], 'chosen by 1688 position')
   assert.equal((await call('POST', `/products/${p1}/replace-flagged`, {})).json().data.queued, 0)
   const allBad = await product([cdn('mark-a'), cdn('logo-b')])
   assert.equal((await call('POST', `/products/${allBad}/replace-flagged`, {})).statusCode, 409)

@@ -8,7 +8,7 @@ import { createDraftFromProduct } from './1688-drafts.js'
 import { saveCollectedPackage } from './product-attributes.js'
 import { requireListingCredits } from './teams.js'
 import { ownBrandNames } from './brands.js'
-import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
+import { DETAIL_TYPES, LISTING_MAIN_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
 import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
@@ -18,7 +18,7 @@ import { apimartConfigured } from '../llm/apimart-image.js'
 // SKU pictures stay as collected. A failure stops the job with its reason; nothing falls back to the originals.
 // The wait outlasts the image worker's own retries (generation up to 20 min, saving again for up to 60 min).
 const IMAGE_WAIT_MS=90*60_000,MAX_AUTO_RESUMES=3,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4,MAX_STORAGE_REVIVALS=3
-const GENERATED:GeneratedType[]=[...SUITE_TYPES,...DETAIL_TYPES]
+const GENERATED:GeneratedType[]=[...LISTING_MAIN_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
   const row=(await db.query('SELECT auto_replace,suite_model,suite_quality FROM image_workshop_settings WHERE tenant_id=$1',[tenantId])).rows[0]
@@ -119,7 +119,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   if(!state.imageBatch){
     // A batch from an earlier attempt that never failed is reused, so a retry does not pay twice.
     const reusable=(await db.query(`SELECT batch_id FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2 AND options->>'unchecked'='true' AND applied_to IS NULL
-      GROUP BY batch_id HAVING count(*)=$3 AND bool_and(status<>'failed') ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length])).rows[0]
+      GROUP BY batch_id HAVING count(*)=$3 AND count(DISTINCT operation) FILTER (WHERE operation=ANY($4))=$3 AND bool_and(status<>'failed') ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED])).rows[0]
     if(reusable)state.imageBatch=reusable.batch_id
     else{
       const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
@@ -129,7 +129,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
         VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,'agent',$9)`,[job.tenant_id,source.id,batch,type,settings.suite_model,JSON.stringify(refs),
         JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',resolution:'1k',quality:settings.suite_quality,unchecked:true,...suiteBrandOption(type,brand)}),suitePrompt(type,facts,suiteBrand(brand)),actor.id])
       state.imageBatch=batch
-      return {kind:'wait',message:`正在用 AI 生成 ${SUITE_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}
+      return {kind:'wait',message:`正在用 AI 生成 ${LISTING_MAIN_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}
     }
   }
   const rows=(await db.query('SELECT * FROM image_assets WHERE batch_id=$1 AND tenant_id=$2',[state.imageBatch,job.tenant_id])).rows
@@ -159,7 +159,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
     if(rounds>=MAX_UPLOAD_ROUNDS)return {kind:'block',message:`AI 新图上传店铺相册 ${rounds} 轮仍未成功（已上传 ${urls.length}/${ordered.length} 张）：${reason}。请稍后重新入队。`}
     return {kind:'wait',message:`有图片上传店铺相册未确认（已上传 ${urls.length}/${ordered.length} 张）：${reason}。稍后自动重试第 ${rounds+1} 轮并继续上架。`}
   }
-  const mains=urls.slice(0,SUITE_TYPES.length),details=urls.slice(SUITE_TYPES.length)
+  const mains=urls.slice(0,LISTING_MAIN_TYPES.length),details=urls.slice(LISTING_MAIN_TYPES.length)
   const client=await db.connect()
   try{
     await client.query('BEGIN')

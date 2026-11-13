@@ -17,14 +17,24 @@ import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type Suite
  *  - Generated pictures are screened again before they are offered for use.
  */
 export const EDIT_OPERATIONS = ['white_bg', 'background', 'resize'] as const
-export const SUITE_TYPES = ['suite_white', 'suite_scene', 'suite_detail', 'suite_model', 'suite_selling', 'suite_spec'] as const
+export const SUITE_TYPES = ['suite_hero', 'suite_white', 'suite_scene', 'suite_detail', 'suite_model', 'suite_selling', 'suite_spec'] as const
 export type SuiteType = typeof SUITE_TYPES[number]
+/**
+ * Main pictures of an automatic 1688 listing, in listing order. 1688 is wholesale: the first picture decides the click, so
+ * it is an eye-catching 首图 with the shop's core terms, not a white background; the white picture goes fifth, the last
+ * one 1688 shows (its own rule: a white last picture gets more exposure).
+ */
+export const LISTING_MAIN_TYPES = ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white', 'suite_model'] as const
+/** The shop's core terms on the 首图. */
+export const HERO_BADGES = ['工厂直供', '现货速发', '支持定制']
+/** The logo, with its plate, never exceeds this square in the top-left corner. */
+export const LOGO_MAX_PX = 200
 /** Detail pictures made for automatic listing (vertical, 3:4). */
 export const DETAIL_TYPES = ['detail_poster', 'detail_advantages', 'detail_features'] as const
 export type DetailType = typeof DETAIL_TYPES[number]
 export type GeneratedType = SuiteType | DetailType
 export const detailNames: Record<DetailType, string> = { detail_poster: '详情 · 主海报', detail_advantages: '详情 · 产品优势', detail_features: '详情 · 产品特点' }
-export const suiteNames: Record<SuiteType, string> = { suite_white: '白底图', suite_scene: '场景氛围图', suite_detail: '细节图', suite_model: '模特场景图', suite_selling: '卖点图', suite_spec: '规格尺寸图' }
+export const suiteNames: Record<SuiteType, string> = { suite_hero: '1688 首图', suite_white: '白底图', suite_scene: '场景氛围图', suite_detail: '细节图', suite_model: '模特场景图', suite_selling: '卖点图', suite_spec: '规格尺寸图' }
 type Json = Record<string, any>
 export type Finding = { readable: boolean; watermark: boolean; rightsRisk: boolean; reason: string }
 export const flagged = (f: Finding | null | undefined) => Boolean(f && (!f.readable || f.watermark || f.rightsRisk))
@@ -194,7 +204,7 @@ export function suitePrompt(type: GeneratedType, facts: SuiteFacts, brand?: Suit
   const known = brand ? { 品牌: brand.name, ...Object.fromEntries(Object.entries(facts.attributes).filter(([k]) => !k.includes('品牌'))) } : facts.attributes
   const attrs = Object.entries(known).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
   const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec', 'detail_poster', 'detail_advantages', 'detail_features'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
-  const logoSpace = logoApplies(type, brand) ? '画面左上角约 22% 宽、14% 高的区域保持干净，不放文字、图标或商品主体，后期会放置品牌标识。' : ''
+  const logoSpace = logoApplies(type, brand) ? '画面左上角约 16% 宽、16% 高的区域保持干净，不放文字、图标或商品主体，后期会放置品牌标识。' : ''
   return `${suiteBody(type, facts, attrs)}${brandText}${logoSpace}`
 }
 function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
@@ -202,6 +212,7 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
   const noFake = '不得编造未提供的参数、认证、销量、功效或获奖信息。'
   const text = '画面中的文字一律使用简体中文，字体清晰、排版整齐，不出现乱码。'
   switch (type) {
+    case 'suite_hero': return `${base}生成 1688 批发商品首图（决定点击率，必须抓眼球）：商品主体放大、清晰，占画面约 55%–65%，背景用与商品相配的高对比色或渐变，光感强、色彩饱和、有冲击力。在画面最显眼的位置（如右上角大号标签或底部通栏醒目色块）用大号粗体中文写出这几项核心优势，一字不差：${HERO_BADGES.join('、')}；可再加一句不超过 10 个字的商品名称短语。文字少而大，手机缩略图里也能一眼看清。${text}除上述核心优势外，${noFake}${CLEAN}`
     case 'suite_white': return `${base}生成电商白底主图：纯白背景（#FFFFFF），商品完整居中占画面约 80%，正面或 45° 最佳展示角度，柔和自然投影，高清摄影质感，不加任何文字。${CLEAN}`
     case 'suite_scene': return `${base}生成场景氛围图：把商品放在最符合其用途的真实使用环境中，环境干净有质感，光线自然温暖，商品是视觉焦点，不加文字。${CLEAN}`
     case 'suite_detail': return `${base}生成细节特写图：近距离微距展示商品最能体现做工与材质的部位（如表面纹理、接口、缝线、按键或结构细节），浅景深，质感清晰，可加 1–2 个简短的中文细节标注（只用已知信息）。${text}${noFake}${CLEAN}`
@@ -244,7 +255,9 @@ export async function applyLogo(base: Buffer, logo: Buffer) {
   const { width, height } = await sharp(base).metadata()
   if (!width || !height) throw new IntegrationError('INVALID_IMAGE', '生成图片无法读取。', 502)
   const short = Math.min(width, height), margin = Math.round(short * 0.03), pad = Math.round(short * 0.012)
-  const mark = await sharp(logo).resize({ width: Math.round(width * 0.18), height: Math.round(height * 0.1), fit: 'inside' }).png().toBuffer({ resolveWithObject: true })
+  // Logo and plate together stay within LOGO_MAX_PX × LOGO_MAX_PX (1688 首图 rule), and smaller on small pictures.
+  const box = Math.min(LOGO_MAX_PX, Math.round(short * 0.16)) - pad * 2
+  const mark = await sharp(logo).resize({ width: box, height: box, fit: 'inside' }).png().toBuffer({ resolveWithObject: true })
   const plateWidth = mark.info.width + pad * 2, plateHeight = mark.info.height + pad * 2, radius = Math.round(pad * 1.2)
   const plate = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${plateWidth}" height="${plateHeight}"><rect width="${plateWidth}" height="${plateHeight}" rx="${radius}" ry="${radius}" fill="#ffffff" fill-opacity="0.92"/></svg>`)
   return sharp(base).composite([{ input: plate, left: margin, top: margin }, { input: mark.data, left: margin + pad, top: margin + pad }]).png().toBuffer()
@@ -347,7 +360,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
   let queued = 0
   for (const { index } of bad) {
     if (existing.has(index)) continue
-    const type = SUITE_TYPES[Math.min(index, SUITE_TYPES.length - 1)]
+    const type = LISTING_MAIN_TYPES[Math.min(index, LISTING_MAIN_TYPES.length - 1)] // by 1688 position: 首图 first, white fifth
     await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,replaces_index,options,prompt,trigger,created_by)
       VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, ...suiteBrandOption(type, brand) }), suitePrompt(type, facts, suiteBrand(brand)), trigger, actorId])
     queued++

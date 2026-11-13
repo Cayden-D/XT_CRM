@@ -170,7 +170,7 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
   app.post('/suites', { preHandler: requirePermission('collection:create') }, async request => {
     const input = z.object({
       collectedProductId: z.string().uuid().optional(), title: z.string().trim().min(2).max(200).optional(), points: z.string().trim().max(400).optional(),
-      references: z.array(source).min(1).max(4), types: z.array(z.enum(SUITE_TYPES)).min(1).max(6).default([...SUITE_TYPES]),
+      references: z.array(source).min(1).max(4), types: z.array(z.enum(SUITE_TYPES)).min(1).max(SUITE_TYPES.length).default([...SUITE_TYPES]),
       model: z.string().optional(), quality: z.enum(SUITE_QUALITIES).optional(), size: z.enum(['1:1', '3:4']).default('1:1'), resolution: z.enum(['1k', '2k']).default('1k'),
       // Left out: the default brand. null: no brand on this suite.
       brandId: z.string().uuid().nullable().optional(),

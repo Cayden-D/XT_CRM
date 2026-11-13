@@ -1,7 +1,7 @@
 import { download, request } from './api'
 
 export type Finding = { readable:boolean; watermark:boolean; rightsRisk:boolean; reason:string }
-export type SuiteType = 'suite_white'|'suite_scene'|'suite_detail'|'suite_model'|'suite_selling'|'suite_spec'
+export type SuiteType = 'suite_hero'|'suite_white'|'suite_scene'|'suite_detail'|'suite_model'|'suite_selling'|'suite_spec'
 export type ImageOperation = 'upload'|'white_bg'|'background'|'resize'|SuiteType
 export type ImageAsset = {
   id:string; collected_product_id:string|null; batch_id:string|null; operation:ImageOperation; label:string; provider:'local'|'qwen'|'apimart'; model:string|null
@@ -19,7 +19,8 @@ export type ImageSource = { url:string }|{ assetId:string }
 export type Brand = { id:string; name:string; aliases:string[]; is_default:boolean; logo_url:string|null; logo_width:number|null; logo_height:number|null; updated_at:string }
 
 export const suiteTypes:[SuiteType,string,string][] = [
-  ['suite_white','白底图','纯白背景、居中完整，平台主图首选'],
+  ['suite_hero','1688 首图','抓眼球的批发首图：大号写出工厂直供、现货速发、支持定制，左上角品牌 Logo'],
+  ['suite_white','白底图','纯白背景、居中完整；1688 建议作为最后一张主图'],
   ['suite_scene','场景氛围图','放进真实使用环境，突出质感'],
   ['suite_detail','细节图','微距展示做工、材质与结构'],
   ['suite_model','模特场景图','真人使用或展示，直观感受尺寸'],

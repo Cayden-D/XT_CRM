@@ -160,7 +160,15 @@ try {
   assert.deepEqual(await fill({ required: true, uiType: 'select', customizable: true, dataSource: [{ value: 8, text: '其他' }] }), { value: -1, text: '拓洋', custom: true })
   assert.deepEqual(await fill({ required: true, uiType: 'select', dataSource: [{ value: 8, text: '其他' }] }), { value: 8, text: '其他' }, 'a closed list without it falls back')
   assert.equal(await fill({ required: false, uiType: 'input' }, attributeFacts({ name: '车载香薰', specifications: {} }, [], null)), undefined, 'no brand of its own: optional stays empty')
-  console.log(JSON.stringify({ permissions: 'ok', rightsStatement: 'ok', rasterOnly: 'ok', foreignLogoRefused: 'ok', ownNameRecognised: 'ok', defaultBrand: 'ok', tenantIsolation: 'ok', sourceBrandRemoved: 'ok', logoExact: 'ok', whiteStaysClean: 'ok', textOnlyBrand: 'ok', deleteGuard: 'ok', noPayWithoutLogo: 'ok', attributeBrand: 'ok', liveModelCalls: 0 }))
+  // On a large picture the logo and its plate stay within 200×200 px in the top-left corner (1688 首图 rule).
+  const big = await sharp({ create: { width: 2048, height: 2048, channels: 3, background: '#000000' } }).png().toBuffer()
+  const marked = await sharp(await workshop.applyLogo(big, logo)).raw().toBuffer({ resolveWithObject: true })
+  const lit = (x: number, y: number) => marked.data[(y * marked.info.width + x) * marked.info.channels] > 40
+  let right = 0, bottom = 0
+  for (let y = 0; y < 400; y++) for (let x = 0; x < 400; x++) if (lit(x, y)) { right = Math.max(right, x); bottom = Math.max(bottom, y) }
+  const margin = Math.round(2048 * 0.03)
+  assert.ok(right > margin && right - margin < 200 && bottom - margin < 200, `logo area ${right - margin}×${bottom - margin}`)
+  console.log(JSON.stringify({ logoWithin200: 'ok', permissions: 'ok', rightsStatement: 'ok', rasterOnly: 'ok', foreignLogoRefused: 'ok', ownNameRecognised: 'ok', defaultBrand: 'ok', tenantIsolation: 'ok', sourceBrandRemoved: 'ok', logoExact: 'ok', whiteStaysClean: 'ok', textOnlyBrand: 'ok', deleteGuard: 'ok', noPayWithoutLogo: 'ok', attributeBrand: 'ok', liveModelCalls: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

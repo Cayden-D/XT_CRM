@@ -174,7 +174,10 @@ try {
   assert.equal(addCalls, 1); assert.ok(uploadedTo.every(id => id === '777'), 'uploaded into the new album')
   assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '777')
   const source = (await db.query('SELECT main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1', [sourceId])).rows[0]
-  assert.equal(source.main_image_url, 'https://cbu01.alicdn.com/img/ibank/album-1.jpg', 'the white main picture comes first')
+  assert.equal(source.main_image_url, 'https://cbu01.alicdn.com/img/ibank/album-1.jpg', 'the 1688 首图 comes first')
+  // 1688 order: 首图 first (not the white picture), the white picture fifth — the last of the five 1688 shows.
+  const order = (await db.query("SELECT operation FROM image_assets WHERE collected_product_id=$1 AND applied_to->>'placement'='replace' ORDER BY (applied_to->>'index')::int", [sourceId])).rows.map(r => r.operation)
+  assert.deepEqual(order, ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white', 'suite_model'])
   assert.equal(source.gallery_images.length, 6)
   assert.deepEqual(source.detail_images, [7, 8, 9].map(n => `https://cbu01.alicdn.com/img/ibank/album-${n}.jpg`))
   state = await run(sourceId)
