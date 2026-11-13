@@ -41,7 +41,10 @@ globalThis.fetch = async (input, init) => {
       const images = content.filter((c: any) => c.type === 'image_url').map((c: any) => c.image_url.url as string)
       return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ images: images.map((u, index) => ({ index, readable: true, companyWatermark: { detected: false, name: '', confidence: 0 }, famousBrandLogo: { detected: u.includes('mark'), name: u.includes('mark') ? '奔驰' : '', confidence: u.includes('mark') ? 0.99 : 0 } })) }) } }] })
     }
-    const answer = String(body.messages[0].content).includes('资料整理器') ? { title: '车载香薰机', catProp: {}, unknown: [] } : { fields: [], cannot: [] }
+    const system = String(body.messages[0].content)
+    // The 首图's words: one feature carries a number the product facts do not have and must be dropped.
+    if (system.includes('首图文案')) return reply({ model: body.model, choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ headline: '车载香薰机', subline: '持久淡香 除异味', features: ['持久淡香', '续航72小时', '机器人造型', '除异味'], uses: ['车内', '办公桌'] }) } }] })
+    const answer = system.includes('资料整理器') ? { title: '车载香薰机', catProp: {}, unknown: [] } : { fields: [], cannot: [] }
     return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] })
   }
   if (url === 'https://apimart.fixture.invalid/v1/images/generations') { submits++; return reply({ code: 200, data: [{ status: 'submitted', task_id: `task_${submits}` }] }) }
@@ -120,6 +123,11 @@ try {
   let state = await run(sourceId)
   assert.deepEqual([state.status, state.attempts], ['queued', 0], state.message)
   assert.match(state.message, /正在用 AI 生成 5 张主图和 3 张详情图/)
+  // The 首图 is laid out from words written for this product, with the shop's own terms as a badge.
+  const heroPrompt = (await db.query("SELECT prompt FROM image_assets WHERE collected_product_id=$1 AND operation='suite_hero'", [sourceId])).rows[0].prompt as string
+  assert.match(heroPrompt, /超大号粗体中文写主标题“车载香薰机”/); assert.match(heroPrompt, /“持久淡香”、“机器人造型”、“除异味”/); assert.match(heroPrompt, /车内\/办公桌/)
+  assert.match(heroPrompt, /店铺优势：工厂直供、现货速发、支持定制/)
+  assert.ok(!heroPrompt.includes('72'), 'a number not in the product facts is dropped')
   const generated = (await db.query("SELECT operation,options FROM image_assets WHERE collected_product_id=$1 ORDER BY operation", [sourceId])).rows
   assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
@@ -209,7 +217,7 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

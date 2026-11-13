@@ -6,9 +6,9 @@ import { IntegrationError } from './1688.js'
 import { inspectPublishingImages, publishingImages } from './1688-agent.js'
 import { createDraftFromProduct } from './1688-drafts.js'
 import { saveCollectedPackage } from './product-attributes.js'
-import { requireListingCredits } from './teams.js'
+import { requireListingCredits, teamOf } from './teams.js'
 import { ownBrandNames } from './brands.js'
-import { DETAIL_TYPES, LISTING_MAIN_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
+import { DETAIL_TYPES, LISTING_MAIN_TYPES, heroCopy, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
 import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
@@ -125,6 +125,8 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
       const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
       if(!refs.length)return {kind:'block',message:'没有可用作参考的商品主图，无法生成新图。'}
       const brand=await defaultBrand(job.tenant_id),batch=randomUUID()
+      // The 首图's words are written for this product first (team's text model); without them it falls back to the shop terms.
+      facts.heroCopy=await heroCopy(facts,(await teamOf(job.tenant_id,actor.id)).textModel)
       for(const type of GENERATED)await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,trigger,created_by)
         VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,'agent',$9)`,[job.tenant_id,source.id,batch,type,settings.suite_model,JSON.stringify(refs),
         JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',resolution:'1k',quality:settings.suite_quality,unchecked:true,...suiteBrandOption(type,brand)}),suitePrompt(type,facts,suiteBrand(brand)),actor.id])

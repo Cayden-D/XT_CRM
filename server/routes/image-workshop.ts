@@ -9,7 +9,7 @@ import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
 import {
   cachedFindings, checkPrompt, download, editPrompt, flagged, imageUrl, productFacts, productImages, queueReplacements, readImage, removeImage,
-  resizeImage, screen, storeImage, detailNames, HERO_BADGES, MAX_HERO_BADGES, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
+  resizeImage, screen, storeImage, detailNames, HERO_BADGES, heroCopy, MAX_HERO_BADGES, type SuiteFacts, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
 } from '../integrations/image-workshop.js'
 import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
 import { IMAGE_MODELS } from '../llm/qwen-image.js'
@@ -185,14 +185,16 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY（电商套图使用 GPT-Image）。', 503)
     if (input.points) checkPrompt(input.points)
     const settings = await settingsOf(tenant(request))
-    const facts = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId, input.points)
+    const facts: SuiteFacts | null = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId, input.points)
       : input.title ? { title: input.title, category: null, attributes: {}, skus: [], points: input.points, badges: settings.hero_badges } : null
     if (!facts) throw new IntegrationError('TITLE_REQUIRED', '请选择采集商品，或填写商品名称。', 400)
     const refs: string[] = []
     for (const ref of input.references) refs.push((await usableSource(tenant(request), ref)).ref)
     const brand = input.brandId === null ? null : input.brandId ? await brandById(tenant(request), input.brandId) : await defaultBrand(tenant(request))
     if (input.brandId && !brand) throw new IntegrationError('NOT_FOUND', '品牌不存在。', 404)
-    const batch = randomUUID(), model = (await teamOf(tenant(request), request.authUser.sub)).imageModel, quality = input.quality ?? settings.suite_quality
+    const team = await teamOf(tenant(request), request.authUser.sub)
+    if (input.types.includes('suite_hero')) facts.heroCopy = await heroCopy(facts, team.textModel)
+    const batch = randomUUID(), model = team.imageModel, quality = input.quality ?? settings.suite_quality
     const rows = []
     for (const type of [...new Set(input.types)] as SuiteType[]) rows.push((await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,created_by)
       VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9) RETURNING ${assetColumns}`,

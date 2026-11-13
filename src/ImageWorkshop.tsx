@@ -326,7 +326,7 @@ function HeroBadges({ saved, editable, busy, save }:{ saved:string[]; editable:b
   const changed = cleaned.join('|') !== saved.join('|')
   const problem = cleaned.some(b => !b) ? '优势不能为空，不需要的请删除。' : cleaned.some(b => b.length > 12) ? '每条优势最多 12 个字。' : new Set(cleaned).size !== cleaned.length ? '优势有重复。' : ''
   return <div className="iw-hero-badges">
-    <b>1688 首图核心优势</b><small>用大号字放在首图最显眼的位置，决定点击率；全部删除后首图只写商品名和已知卖点。</small>
+    <b>1688 首图店铺优势</b><small>首图的大标题、产品特点和用途由 AI 根据每个商品的资料自动撰写；这里的店铺优势以醒目角标或色块出现在每张首图上。全部删除则不放店铺优势。</small>
     <div className="iw-hero-list">{badges.map((badge, i) => <span key={i} className="iw-hero-item">
       <input aria-label={`首图优势 ${i + 1}`} value={badge} maxLength={12} disabled={!editable || busy} onChange={e => setBadges(list => list.map((b, j) => j === i ? e.target.value : b))}/>
       <button type="button" title="删除" aria-label={`删除首图优势 ${badge || i + 1}`} disabled={!editable || busy} onClick={() => setBadges(list => list.filter((_, j) => j !== i))}><X size={13}/></button>

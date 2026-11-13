@@ -19,7 +19,7 @@ export type ImageSource = { url:string }|{ assetId:string }
 export type Brand = { id:string; name:string; aliases:string[]; is_default:boolean; logo_url:string|null; logo_width:number|null; logo_height:number|null; updated_at:string }
 
 export const suiteTypes:[SuiteType,string,string][] = [
-  ['suite_hero','1688 首图','抓眼球的批发首图：大号写出工厂直供、现货速发、支持定制，左上角品牌 Logo'],
+  ['suite_hero','1688 首图','抓眼球的批发首图：AI 按商品写大标题、特点标签和用途，店铺优势做角标，左上角品牌 Logo'],
   ['suite_white','白底图','纯白背景、居中完整；1688 建议作为最后一张主图'],
   ['suite_scene','场景氛围图','放进真实使用环境，突出质感'],
   ['suite_detail','细节图','微距展示做工、材质与结构'],
