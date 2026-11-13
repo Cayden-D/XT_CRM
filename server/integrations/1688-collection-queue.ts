@@ -15,7 +15,7 @@ import { apimartConfigured } from '../llm/apimart-image.js'
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
 // from the collected ones, put into the shop album and the product, and published without screening (the owner's choice).
 // SKU pictures stay as collected. A failure stops the job with its reason; nothing falls back to the originals.
-const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4
+const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4,MAX_STORAGE_REVIVALS=3
 const GENERATED:GeneratedType[]=[...SUITE_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
@@ -102,6 +102,18 @@ async function defer(job:QueueJob,message:string,report:Json,seconds=IMAGE_POLL_
 
 /** Generates the listing's pictures (or reuses an unfinished batch), then puts them into the album and the product. */
 async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string},state:Json):Promise<ImageStep>{
+  // Pictures the provider finished but that could not be fetched or saved are fetched and saved again (not generated
+  // again, so nothing is paid twice), a few times per queue entry.
+  if(Number(state.storageRevivals||0)<MAX_STORAGE_REVIVALS){
+    const revived=(await db.query(`UPDATE image_assets SET status='processing',next_poll_at=now(),lease_until=NULL,error=NULL,updated_at=now()
+      WHERE collected_product_id=$1 AND tenant_id=$2 AND options->>'unchecked'='true' AND applied_to IS NULL AND status='failed' AND task_id IS NOT NULL
+        AND (error LIKE '图片保存到 OSS 失败%' OR error LIKE '无法读取已保存的图片%' OR error LIKE '生成图片下载失败%') RETURNING batch_id`,[source.id,job.tenant_id])).rows
+    if(revived.length){
+      state.storageRevivals=Number(state.storageRevivals||0)+1
+      state.imageBatch??=revived[0].batch_id
+      return {kind:'wait',message:`有 ${revived.length} 张 AI 图已生成但未保存成功，正在重新保存（不会重新生图），完成后继续上架。`}
+    }
+  }
   if(!state.imageBatch){
     // A batch from an earlier attempt that never failed is reused, so a retry does not pay twice.
     const reusable=(await db.query(`SELECT batch_id FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2 AND options->>'unchecked'='true' AND applied_to IS NULL
@@ -121,7 +133,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   const rows=(await db.query('SELECT * FROM image_assets WHERE batch_id=$1 AND tenant_id=$2',[state.imageBatch,job.tenant_id])).rows
   const ordered=GENERATED.map(type=>rows.find(r=>r.operation===type)).filter(Boolean) as Json[]
   const failed=ordered.find(r=>r.status==='failed')
-  if(failed||ordered.length<GENERATED.length)return {kind:'block',message:`AI 生图失败：${failed?.error||'部分图片缺失'}。请在采集商品的「商品图片」里重试后重新入队。`}
+  if(failed||ordered.length<GENERATED.length)return {kind:'block',message:`AI 生图失败：${String(failed?.error||'部分图片缺失').replace(/[。.]+$/,'')}。请在采集商品的「商品图片」里重试后重新入队。`}
   const done=ordered.filter(r=>r.status==='completed').length
   if(done<ordered.length)return {kind:'wait',message:`AI 生图中：已生成 ${done}/${ordered.length} 张，完成后自动上传店铺相册并上架。`}
   const ctx={tenantId:job.tenant_id,actorId:actor.id,requestId:job.id}
@@ -169,7 +181,7 @@ async function processJob(job:QueueJob){
   let report:Json
   let variantImage=(url:string|null)=>url
   if(auto&&!previous.generatedImages){
-    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,uploadRounds:previous.uploadRounds,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
+    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,uploadRounds:previous.uploadRounds,storageRevivals:previous.storageRevivals,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
     if(Date.now()-Date.parse(state.imageWaitSince)>IMAGE_WAIT_MS){await finish(job,'blocked','AI 生图等待超时（30 分钟），请在采集商品的「商品图片」里查看后重新入队。',state);return}
     const step=await generateListingImages(job,source,actor,auto,state)
     if(step.kind==='block'){await finish(job,'blocked',step.message,state);return}

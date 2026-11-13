@@ -14,10 +14,13 @@ process.env.OSS_ACCESS_KEY_ID = 'queue-images-id'
 process.env.OSS_ACCESS_KEY_SECRET = 'queue-images-secret'
 process.env.OSS_CUSTOM_DOMAIN = 'https://images.example.com'
 process.env.ALBUM_UPLOAD_RETRY_MS = '0'
+process.env.OSS_RETRY_MS = '0'
 const { default: OSS } = await import('ali-oss')
 const originalOss = { put: OSS.prototype.put, get: OSS.prototype.get, delete: OSS.prototype.delete }
 const objects = new Map<string, Buffer>()
-;(OSS.prototype as any).put = async (key: string, bytes: Buffer) => { objects.set(key, bytes); return {} }
+// `ossFailures` makes the next saves time out, as OSS does on a slow upload.
+let ossFailures = 0
+;(OSS.prototype as any).put = async (key: string, bytes: Buffer) => { if (ossFailures > 0) { ossFailures--; throw Object.assign(new Error('timeout'), { name: 'ConnectionTimeoutError', code: 'RequestTimeout', status: -1 }) } objects.set(key, bytes); return {} }
 ;(OSS.prototype as any).get = async (key: string) => ({ content: objects.get(key) })
 ;(OSS.prototype as any).delete = async (key: string) => { objects.delete(key); return {} }
 
@@ -111,9 +114,19 @@ try {
   assert.equal(generated.length, 9)
   assert.ok(generated.every(r => r.options.unchecked === true))
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])
+  // OSS times out three times on the first finished picture: it is saved again later instead of failing.
+  ossFailures = 3
   await drain()
   assert.equal(submits, 9)
   assert.ok((await db.query("SELECT bool_and(status='completed') AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
+
+  // A picture already marked failed by OSS (as before this fix) is fetched and saved again by the job, not generated again.
+  await db.query("UPDATE image_assets SET status='failed',oss_key=NULL,error='图片保存到 OSS 失败。' WHERE id=(SELECT id FROM image_assets WHERE collected_product_id=$1 ORDER BY operation LIMIT 1)", [sourceId])
+  state = await run(sourceId)
+  assert.equal(state.status, 'queued', state.message); assert.match(state.message, /1 张 AI 图已生成但未保存成功，正在重新保存（不会重新生图）/)
+  await drain()
+  assert.equal(submits, 9, 'nothing generated again')
+  assert.ok((await db.query("SELECT bool_and(status='completed' AND oss_key IS NOT NULL) AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
 
   // No album chosen and the album service fails: a clear stop with the platform's reason.
   state = await run(sourceId)
@@ -167,7 +180,7 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

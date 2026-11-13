@@ -40,11 +40,28 @@ function checkedKey(key: string, tenantId: string) {
   if (!new RegExp(`^${prefix}${tenantId}/[a-f0-9-]{36}\\.png$`).test(key)) throw new IntegrationError('OSS_IMAGE_KEY', '图片存储标识无效。', 400)
   return key
 }
+const OSS_PUT_ATTEMPTS = 3
+const OSS_RETRY_MS = Number(process.env.OSS_RETRY_MS ?? 1000)
+/** OSS's own reason (e.g. AccessDenied, RequestTimeout, ConnectionTimeoutError); never credentials. */
+const ossReason = (error: unknown) => {
+  const e = error as { code?: unknown; name?: unknown; status?: unknown }
+  const code = [e?.code, e?.name].find(v => typeof v === 'string' && v && v !== 'Error') as string | undefined
+  return [code, typeof e?.status === 'number' && e.status > 0 ? `HTTP ${e.status}` : ''].filter(Boolean).join('，').replace(/[^\w ，-]/g, '').slice(0, 80)
+}
+/** Saves the picture, trying again on a passing failure (timeouts and network trouble are common on large uploads). */
 export async function storeImage(tenantId: string, id: string, png: Buffer) {
   const key = keyOf(tenantId, id)
-  try { await requireImageStorage().put(key, png, { mime: 'image/png', headers: { 'x-oss-object-acl': 'private', 'Cache-Control': 'private, max-age=3600' } }) }
-  catch (error) { if (error instanceof IntegrationError) throw error; throw new IntegrationError('OSS_IMAGE_UPLOAD', '图片保存到 OSS 失败。', 502) }
-  return key
+  let last: unknown
+  for (let attempt = 1; attempt <= OSS_PUT_ATTEMPTS; attempt++) {
+    try { await requireImageStorage().put(key, png, { mime: 'image/png', headers: { 'x-oss-object-acl': 'private', 'Cache-Control': 'private, max-age=3600' } }); return key }
+    catch (error) {
+      if (error instanceof IntegrationError) throw error
+      last = error
+      if (attempt < OSS_PUT_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, OSS_RETRY_MS * attempt))
+    }
+  }
+  const reason = ossReason(last)
+  throw new IntegrationError('OSS_IMAGE_UPLOAD', `图片保存到 OSS 失败${reason ? `（${reason}）` : ''}，已重试 ${OSS_PUT_ATTEMPTS} 次。`, 502)
 }
 export const imageUrl = async (key: string, tenantId: string) => imagePreviewClient().signatureUrlV4('GET', 3600, undefined, checkedKey(key, tenantId))
 export async function readImage(key: string, tenantId: string) {
@@ -235,6 +252,9 @@ async function brandLogoOf(asset: Asset) {
 // ---------- worker ----------
 type Asset = { id: string; tenant_id: string; operation: string; provider: string; model: string | null; reference_urls: string[]; source_url: string | null; options: Json; prompt: string | null; status: string; task_id: string | null; attempts: number; created_at: Date }
 const retryable = (error: unknown) => error instanceof IntegrationError && ['APIMART_RATE_LIMIT', 'APIMART_NETWORK', 'IMAGE_MODEL_NETWORK', 'IMAGE_MODEL_TIMEOUT', 'APIMART_FAILED'].includes(error.code)
+/** Failures after the provider finished: the paid result is fetched and saved again instead of generating anew. */
+export const STORAGE_ERRORS = ['OSS_IMAGE_UPLOAD', 'OSS_IMAGE_READ', 'IMAGE_DOWNLOAD_FAILED']
+const STORAGE_RETRY_MS = 60 * 60_000
 
 async function complete(asset: Asset, png: Buffer, cost?: number) {
   const { png: decoded, width, height } = await toPng(png)
@@ -250,6 +270,10 @@ async function complete(asset: Asset, png: Buffer, cost?: number) {
 }
 async function fail(asset: Asset, error: unknown) {
   const message = error instanceof IntegrationError ? error.message : '图片处理失败，请重试。'
+  if (asset.task_id && error instanceof IntegrationError && STORAGE_ERRORS.includes(error.code) && Date.now() - new Date(asset.created_at).getTime() < STORAGE_RETRY_MS) {
+    await db.query("UPDATE image_assets SET next_poll_at=now()+interval '30 seconds',lease_until=NULL,error=$2,updated_at=now() WHERE id=$1", [asset.id, `${message}（生成已完成，稍后自动重新保存）`])
+    return
+  }
   if (retryable(error) && asset.attempts < 4 && Date.now() - new Date(asset.created_at).getTime() < 20 * 60_000) {
     await db.query("UPDATE image_assets SET next_poll_at=now()+($2::int*interval '20 seconds'),lease_until=NULL,error=$3,updated_at=now() WHERE id=$1", [asset.id, asset.attempts, message])
     return
