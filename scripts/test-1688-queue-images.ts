@@ -136,8 +136,6 @@ try {
   assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, 'https://cbu01.alicdn.com/img/ibank/album-10.jpg')
   assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-10.jpg' }])
   assert.equal(published.formValues.skuTable[0].sku_props[0].value, -1)
-  assert.deepEqual(Object.keys(published.formValues.skuTable[0]).sort(), ['sku_amountOnSale', 'sku_cargoNumber', 'sku_props', 'sku_status'], 'SKU rows as in the platform example')
-  assert.deepEqual(published.formValues.saleProp.custom, [])
   assert.equal(published.formValues.beginAmount, 2, 'the minimum order matches the first quantity tier')
   assert.deepEqual(state.report.skuPictures, { uploaded: 1, failed: 0 })
   assert.equal(visionCalls, before, 'nothing was screened: originals, generated pictures and the final check all skipped')

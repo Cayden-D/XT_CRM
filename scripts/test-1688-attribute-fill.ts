@@ -119,7 +119,7 @@ try {
   assert.equal(clean.report.ai.filled.length, 6)
   assert.deepEqual(published.formValues.catProp['p-func'], [{ value: 21, text: '芳香' }, { value: 22, text: '除异味' }])
   assert.equal((await db.query('SELECT data_body FROM integration_1688_publish_drafts WHERE status=$1 ORDER BY updated_at DESC LIMIT 1', ['published'])).rows[0].data_body.formValues.skuTable[0].sku_price, 15, 'prices are not the AI’s to touch')
-  assert.equal(published.formValues.skuTable[0].sku_price, undefined, 'a quantity quote sends no per-SKU price, as in the platform example')
+  assert.equal(published.formValues.skuTable[0].sku_price, 15)
 
   // Rejected for a named attribute: corrected, sent again, published.
   publishCalls = 0; rejections = [{ code: 'CHK_ATTR_VALUE', message: '属性香型取值错误' }]

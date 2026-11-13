@@ -106,22 +106,23 @@ async function saveListing(tenantId: string, connectionId: string, info: Json, p
 }
 
 /**
- * Reads the new listing back and says so when the platform kept fewer SKUs than were sent (it accepts a body and silently
- * drops specifications it does not like). Best effort: a failed read changes nothing about the published result.
+ * Reads the new listing back and reports how many SKUs the platform kept (it accepts a body and can silently drop every
+ * specification). Always says what it found, including when the read itself failed; the published result stays as it is.
  */
 async function checkPublishedSkus(row: Json, request: Pick<FastifyRequest,'authUser'|'id'>, offerId: string, sent: number) {
-  if (!sent) return ''
+  if (!sent) return { warning: '', skuCheck: '' }
   try {
     const result = await callProductApi(row.connection_id, request.authUser.tenantId, request.authUser.sub, 'alibaba.product.get', { productID: offerId, webSite: '1688' }, request.id)
     const info = result.productInfo as Json
-    if (!info || typeof info !== 'object' || String(info.productID) !== offerId) return ''
+    if (!info || typeof info !== 'object' || String(info.productID) !== offerId) return { warning: `未能回读平台 SKU：平台没有返回商品 ${offerId} 的详情，请在 1688 后台核对规格。`, skuCheck: 'unread' }
     await saveListing(request.authUser.tenantId, row.connection_id, info, row.product_id).catch(() => {})
     const kept = Array.isArray(info.skuInfos) ? info.skuInfos.length : 0
-    if (kept >= sent) return ''
-    const warning = `平台商品只有 ${kept} 个 SKU，提交了 ${sent} 个，请在 1688 后台核对规格。`
+    if (kept >= sent) return { warning: '', skuCheck: `平台回读 ${kept}/${sent} 个 SKU` }
     await db.query('UPDATE integration_1688_publish_drafts SET last_error_code=$2,updated_at=now() WHERE id=$1', [row.id, 'SKU_DROPPED'])
-    return warning
-  } catch { return '' }
+    return { warning: `平台商品只有 ${kept} 个 SKU，提交了 ${sent} 个，请在 1688 后台核对规格。`, skuCheck: `平台回读 ${kept}/${sent} 个 SKU` }
+  } catch (error) {
+    return { warning: `未能回读平台 SKU（${error instanceof Error ? error.message : '读取失败'}），请在 1688 后台核对规格。`, skuCheck: 'unread' }
+  }
 }
 
 export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>, agent?:{jobId:string;settingsRevision:number;queue?:{id:string;workerId:string}}) {
@@ -175,8 +176,8 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
       await db.query("UPDATE integration_1688_publish_drafts SET status='published',offer_id=$2,last_error_code=NULL,updated_at=now() WHERE id=$1", [id, offerId])
       await saveListing(request.authUser.tenantId, row.connection_id, { productID: offerId, subject: row.data_body.formValues.title, status: value.offerStatus || 'submitted', image: { images: row.data_body.formValues.primaryPicture.imageList.map((image: Json) => image.url) } }, row.product_id)
       await audit(request.authUser.tenantId, request.authUser.sub, row.connection_id, '1688.publish', request.id)
-      const warning = await checkPublishedSkus(row, request, offerId, Array.isArray(formValues.skuTable) ? formValues.skuTable.length : 0)
-      return { data: { offerId, status: 'published', ...(warning ? { warning } : {}) } }
+      const { warning, skuCheck } = await checkPublishedSkus(row, request, offerId, Array.isArray(formValues.skuTable) ? formValues.skuTable.length : 0)
+      return { data: { offerId, status: 'published', ...(warning ? { warning } : {}), ...(skuCheck ? { skuCheck } : {}) } }
     } catch (error) {
       const unknown = platformResponded || !(error instanceof IntegrationError) || ['NETWORK_ERROR','INVALID_RESPONSE','PUBLISH_UNKNOWN','INVALID_SCHEMA','EMPTY_SCHEMA'].includes(error.code)
       await db.query('UPDATE integration_1688_publish_drafts SET status=$2,last_error_code=$3,updated_at=now() WHERE id=$1', [id, unknown ? 'unknown' : 'failed', error instanceof IntegrationError ? error.code : 'INTERNAL_ERROR'])

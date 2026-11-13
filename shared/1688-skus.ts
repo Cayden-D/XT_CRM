@@ -18,7 +18,7 @@ export function dimensionId(dimension:SaleDimension):number {
 }
 export function validChoice(dimension:SaleDimension,choice:SaleChoice):boolean {
   if(!choice||typeof choice.text!=='string'||!choice.text.trim())return false
-  // Custom values carry negative numbers, distinct across the form (-1, -2, …).
+  // Custom values go as -1 (drafts saved while they were numbered -1, -2, … still pass).
   if(choice.custom)return Number.isInteger(Number(choice.value))&&Number(choice.value)<0&&allowsCustom(dimension)
   return (dimension.dataSource||[]).some(option=>String(option.value)===String(choice.value)&&option.text===choice.text)
 }
@@ -47,51 +47,22 @@ export function platformImagePath(url:string){
   try{const u=new URL(url);return /^cbu\d+\.alicdn\.com$/.test(u.hostname)&&u.pathname.startsWith('/img/ibank/')?u.pathname.slice(1):url}catch{return url}
 }
 /**
- * Gives every custom sale value its own negative number (the platform tells custom values apart by it; -1 for all of them
- * collides) and keeps the SKU rows pointing at the renumbered values. Values are matched by dimension and text.
- */
-export function numberCustomValues<T extends {saleProp?:unknown;skuTable?:unknown}>(values:T):T{
-  const saleProp=values.saleProp&&typeof values.saleProp==='object'?values.saleProp as Record<string,unknown>:null
-  if(!saleProp)return values
-  const numbers=new Map<string,number>()
-  let next=-1
-  const nextProp:Record<string,unknown>={}
-  for(const [name,choices] of Object.entries(saleProp)){
-    nextProp[name]=Array.isArray(choices)?choices.map(choice=>{
-      if(!choice||typeof choice!=='object'||!(choice as SaleChoice).custom)return choice
-      const c=choice as SaleChoice,key=`${name}\u0000${c.text}`
-      if(!numbers.has(key))numbers.set(key,next--)
-      return {...c,value:numbers.get(key)!}
-    }):choices
-  }
-  const rows=Array.isArray(values.skuTable)?(values.skuTable as SkuRow[]).map(row=>Array.isArray(row?.sku_props)?{...row,sku_props:row.sku_props.map(p=>Number(p.value)<0&&numbers.has(`${p.name}\u0000${p.text}`)?{...p,value:numbers.get(`${p.name}\u0000${p.text}`)!}:p)}:row):values.skuTable
-  return {...values,saleProp:nextProp,skuTable:rows}
-}
-/**
- * The sale part of the publish body in exactly the shape of the platform's own example: custom values numbered, SKU rows
- * naming only id/name/label/value/text, no readonly picture column, no per-SKU price when quoting by quantity (quotationType
- * 2, or none given with a quantity quote), a picture on a sale value only as a shop-album path, and the "custom" list present. Extra keys on SKU rows were a
- * likely reason the platform dropped every specification.
+ * The sale part of the publish body. Custom values all go as -1, as they did while the platform kept every specification;
+ * numbering them -1, -2, … (as the platform's sample shows) made it drop all of them without an error. A picture on a sale
+ * value goes only as a shop-album path; anything else on the body is left as it is.
  */
 export function platformSaleValues<T extends Record<string,any>>(values:T):T{
-  const numbered=numberCustomValues(values) as Record<string,any>
-  if(!numbered.saleProp||typeof numbered.saleProp!=='object')return numbered as T
-  const quote=String(numbered.quotationType?.value??''),byQuantity=quote==='2'||(!quote&&Array.isArray(numbered.priceRange)&&numbered.priceRange.length>0)
+  if(!values.saleProp||typeof values.saleProp!=='object')return values
   const saleProp:Record<string,unknown>={}
-  for(const [name,choices] of Object.entries(numbered.saleProp as Record<string,unknown>)){
-    saleProp[name]=Array.isArray(choices)&&name!=='custom'?choices.map((choice:any)=>{
+  for(const [name,choices] of Object.entries(values.saleProp as Record<string,unknown>)){
+    saleProp[name]=Array.isArray(choices)?choices.map((choice:any)=>{
       if(!choice||typeof choice!=='object')return choice
-      const imgUrl=typeof choice.imgUrl==='string'?platformImagePath(choice.imgUrl):''
-      return {value:choice.value,text:choice.text,...(choice.custom?{custom:true}:{}),...(/^img\/ibank\//.test(imgUrl)?{imgUrl}:{})}
+      const {imgUrl,...rest}=choice,path=typeof imgUrl==='string'?platformImagePath(imgUrl):''
+      return {...rest,...(choice.custom?{value:-1}:{}),...(/^img\/ibank\//.test(path)?{imgUrl:path}:{})}
     }):choices
   }
-  if(!Array.isArray(saleProp.custom))saleProp.custom=[]
-  const skuTable=Array.isArray(numbered.skuTable)?numbered.skuTable.map((row:any)=>{
-    if(!row||!Array.isArray(row.sku_props))return row
-    const {sku_picture_url:_picture,sku_price,...rest}=row
-    return {...rest,sku_props:row.sku_props.map((p:any)=>({id:p.id,name:p.name,label:p.label,value:p.value,text:p.text})),...(!byQuantity&&sku_price!=null?{sku_price}:{})}
-  }):numbered.skuTable
-  return {...numbered,saleProp,skuTable} as unknown as T
+  const skuTable=Array.isArray(values.skuTable)?values.skuTable.map((row:any)=>row&&Array.isArray(row.sku_props)?{...row,sku_props:row.sku_props.map((p:any)=>p&&(p.custom||Number(p.value)<0)?{...p,value:-1}:p)}:row):values.skuTable
+  return {...values,saleProp,skuTable} as unknown as T
 }
 export function mapReviewedVariants(dimensions:SaleDimension[],variants:ReviewedVariant[],mapping:Record<string,string>) {
   if(Object.keys(mapping).some(key=>!dimensions.some(d=>d.name===key)))throw new Error('映射包含未知平台属性。')
@@ -121,5 +92,5 @@ export function mapReviewedVariants(dimensions:SaleDimension[],variants:Reviewed
     if(!Number.isFinite(price)||price<0||(stock!=null&&(!Number.isSafeInteger(stock)||stock<0)))throw new Error(`${variant.label} 的价格或库存不合法。`)
     skuTable.push({sku_props:props,sku_price:price,sku_amountOnSale:stock,sku_picture_url:variant.image_url,sku_cargoNumber:'',sku_status:1})
   }
-  return numberCustomValues({saleProp,skuTable})
+  return {saleProp,skuTable}
 }
