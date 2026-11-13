@@ -3,6 +3,20 @@ import { fillPublishTemplate } from './1688-publish-template.js'
 import { db } from '../db.js'
 import { callProductApi, IntegrationError, parseBusinessData } from './1688.js'
 import { collectedCategoryDefaults } from './1688-collected-attributes.js'
+
+/** 1688 is wholesale: the minimum order and the first quantity tier must be at least 2 (CHK_WHOLESALE_BEGIN_AMOUNT_LIMIT). */
+export const MIN_WHOLESALE=2
+/** Quantity tiers raised to the wholesale minimum; a tier that lands on the same quantity replaces the one before it. */
+export function wholesaleRanges<T extends {pricerange_beginAmount:number}>(rows:T[]):T[]{
+  const out:T[]=[]
+  for(const row of rows){
+    const begin=Math.max(MIN_WHOLESALE,Math.trunc(Number(row.pricerange_beginAmount)||0)),last=out[out.length-1]
+    if(last&&begin<last.pricerange_beginAmount)continue
+    const next={...row,pricerange_beginAmount:begin}
+    if(last&&begin===last.pricerange_beginAmount)out[out.length-1]=next;else out.push(next)
+  }
+  return out
+}
 import { fillFromProductData, loadProductData } from './product-attributes.js'
 
 type Json=Record<string,any>
@@ -27,7 +41,7 @@ export async function createDraftFromProduct(input:{tenantId:string;actorId:stri
   const maxImages=Number(schema.data.primaryPicture?.fields?.maxItems||10)
   // Quantity tiers of the product (from the collected ladder or entered by hand), lowest quantity first; at most three.
   const tiers=(await db.query('SELECT min_quantity,unit_price FROM product_prices WHERE product_id=$1 AND tenant_id=$2 AND customer_level IS NULL ORDER BY min_quantity LIMIT 3',[product.id,tenantId])).rows
-  const formValues={...defaults,title:product.name,primaryPicture:{imageList:(product.images||[]).slice(0,maxImages).map((url:string)=>({url}))},description:withDetail(defaults.description,product.description||''),...(schema.data.priceRange?{priceRange:tiers.length?tiers.map(t=>({pricerange_beginAmount:Number(t.min_quantity),pricerange_price:Number(t.unit_price)})):[{pricerange_beginAmount:1,pricerange_price:Number(product.base_price)}]}:{}),...(Object.keys(category).length?{catProp:{...(defaults.catProp||{}),...category}}:{})}
+  const formValues={...defaults,title:product.name,primaryPicture:{imageList:(product.images||[]).slice(0,maxImages).map((url:string)=>({url}))},description:withDetail(defaults.description,product.description||''),...(schema.data.priceRange?{priceRange:tiers.length?wholesaleRanges(tiers.map(t=>({pricerange_beginAmount:Number(t.min_quantity),pricerange_price:Number(t.unit_price)}))):[{pricerange_beginAmount:MIN_WHOLESALE,pricerange_price:Number(product.base_price)}]}:{}),...(Object.keys(category).length?{catProp:{...(defaults.catProp||{}),...category}}:{})}
   const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[product.id,tenantId])).rows
   const dimensions=saleDimensions(schema)
   const mapping=Object.fromEntries(dimensions.filter(d=>variants.length&&variants.every(v=>typeof v.attributes?.[d.label]==='string'&&v.attributes[d.label].trim())).map(d=>[d.name,d.label]))

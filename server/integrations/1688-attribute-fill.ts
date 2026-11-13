@@ -176,7 +176,8 @@ export async function fillRequiredAttributes(schema: Json, values: Json, facts: 
 
 /** A definite rejection of the listing's content. Authorization, quota and logistics failures are not attribute problems. */
 export function isAttributeRejection(error: unknown): error is IntegrationError {
-  if (!(error instanceof IntegrationError) || /LOGISTICS/i.test(error.code)) return false
+  // Trade terms (wholesale quantities, prices) are not attributes; they are set from product data, not guessed by AI.
+  if (!(error instanceof IntegrationError) || /LOGISTICS|WHOLESALE|PRICE|BEGIN_AMOUNT/i.test(error.code)) return false
   return /^CHK_/.test(error.code) || /属性|必填|不能为空|标题/.test(error.detail ?? '')
 }
 

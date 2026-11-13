@@ -16,7 +16,7 @@ import { agentImageRoutes } from './1688-images.js'
 import { collectionQueueRoutes } from './1688-queue.js'
 import { buildSkuRows, mapReviewedVariants, platformSaleValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
-import { createDraftFromProduct } from '../integrations/1688-drafts.js'
+import { createDraftFromProduct, MIN_WHOLESALE, wholesaleRanges } from '../integrations/1688-drafts.js'
 import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
 
 const idSchema = z.object({ id: z.string().uuid() })
@@ -162,8 +162,10 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     try {
       // As the platform's own example has it: sale values and SKU rows in its shape, and the minimum order equal to the first quantity tier.
       const formValues: Json = platformSaleValues(row.data_body.formValues || {})
-      const tiers = Array.isArray(formValues.priceRange) ? formValues.priceRange.filter((r: Json) => Number.isInteger(r?.pricerange_beginAmount)) : []
-      if (row.platform_schema?.data?.beginAmount && tiers.length && String(formValues.quotationType?.value ?? '2') === '2') formValues.beginAmount = Math.min(...tiers.map((r: Json) => r.pricerange_beginAmount))
+      // Wholesale minimum of 2 for the tiers and the minimum order, also for drafts saved before.
+      if (Array.isArray(formValues.priceRange)) formValues.priceRange = wholesaleRanges(formValues.priceRange.filter((r: Json) => Number.isInteger(r?.pricerange_beginAmount)))
+      const tiers = Array.isArray(formValues.priceRange) ? formValues.priceRange : []
+      formValues.beginAmount = tiers.length && String(formValues.quotationType?.value ?? '2') === '2' ? tiers[0].pricerange_beginAmount : Math.max(MIN_WHOLESALE, Math.trunc(Number(formValues.beginAmount) || 0))
       const args: Json = { scene: row.scene, dataBody: { ...row.data_body, formValues } }
       if (row.scene === 'industry') args.bizParam = { industryCategoryId: row.cat_id }
       else args.catId = row.cat_id

@@ -111,7 +111,11 @@ export async function gateway(path: string, params: Record<string, string>, imag
     // Publishing only: the reason is needed to correct the listing. Other endpoints keep the code alone (see OAuth above).
     const album=path.includes('alibaba.photobank.album.')
     if(path.includes('alibaba.new.product.add')||album){
-      const raw=[nested.errorMessage,nested.errorMsg,nested.errMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.errorMsg,data.errMsg,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
+      // Form checks answer {bizCode,bizMsg,bizData:{dataJson:'{"data":{"models":{"formError":{"beginAmount":{"message":[{msg}]}}}}}'}}.
+      let formErrors=''
+      try{const biz=nested.bizData as Record<string,unknown>|undefined,form=typeof biz?.dataJson==='string'?(json.parse(biz.dataJson) as any)?.data?.models?.formError:undefined
+        if(form&&typeof form==='object')formErrors=[...new Set(Object.values(form).flatMap((f:any)=>Array.isArray(f?.message)?f.message.map((m:any)=>m?.msg).filter((m:unknown)=>typeof m==='string'):[]))].join('；')}catch{}
+      const raw=[nested.bizMsg,formErrors,nested.errorMessage,nested.errorMsg,nested.errMsg,nested.error_message,nested.bizMessage,nested.message,nested.msg,data.errorMessage,data.errorMsg,data.errMsg,data.error_message,data.message].find(v=>typeof v==='string'&&v.trim()) as string|undefined
       const detail=raw?.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,300)
       if(detail)throw new IntegrationError(safeCode,album?`1688 相册接口返回错误（${safeCode}）：${detail}`:`1688 拒绝发布（${safeCode}）：${detail}`,400,detail)
       // No readable reason: keep a short copy of the answer itself (a publish response carries no credentials).

@@ -26,7 +26,7 @@ const schema = (extra: object[] = []) => ({ global: { systemParam: { catId: 101 
 
 let answers = good, repairAnswers: Answer[] = [], repairQueue: Answer[][] = [], repairTitle: string | undefined, malformed = false
 let currentSchema: object = schema(), publishCalls = 0, offerSeq = 0, published: any = null
-let rejections: Array<{ code: string; message?: string } | 'transport'> = []
+let rejections: Array<{ code: string; message?: string; form?: string } | 'transport'> = []
 const fillerFields: string[][] = [], repairInputs: any[] = []
 
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
@@ -48,6 +48,7 @@ globalThis.fetch = async (input, init) => {
     publishCalls++; published = JSON.parse((init?.body as URLSearchParams).get('dataBody')!)
     const next = rejections.shift()
     if (next === 'transport') throw new Error('fixture timeout')
+    if (next?.form) return response({ result: { success: false, bizCode: next.code, bizMsg: next.message, bizData: { dataJson: JSON.stringify({ data: { models: { formError: { beginAmount: { message: [{ type: 'error', code: next.code, msg: next.form }] } } } } }) } } })
     if (next) return response({ result: { success: false, errorCode: next.code, errorMessage: next.message } })
     return response({ result: { success: true, bizData: { dataJson: JSON.stringify({ itemId: String(800000 + ++offerSeq), offerStatus: 'auditing' }) } } })
   }
@@ -153,6 +154,13 @@ try {
   publishCalls = 0; rejections = [{ code: 'CHK_WHOLESALE_PRICE_RANGE_BEGIN_LIMIT' }]; repairAnswers = []
   const silent = await run(await draft())
   assert.equal(silent.status, 'blocked'); assert.match(silent.message, /平台原始返回：.*CHK_WHOLESALE_PRICE_RANGE_BEGIN_LIMIT/)
+
+  // The platform's own words (bizMsg / form errors) are shown; a wholesale-quantity rejection is not the AI's to repair.
+  publishCalls = 0; rejections = [{ code: 'CHK_WHOLESALE_BEGIN_AMOUNT_LIMIT', message: '批发起订量必须大于等于2，请在发布页修改。', form: '批发起订量必须大于等于2，请在发布页修改。' }]
+  const wholesale = await run(await draft())
+  assert.equal(wholesale.status, 'blocked'); assert.equal(publishCalls, 1, 'not resent by the AI repair')
+  assert.match(wholesale.message, /1688 拒绝发布（CHK_WHOLESALE_BEGIN_AMOUNT_LIMIT）：批发起订量必须大于等于2/)
+  assert.ok(published.formValues.beginAmount >= 2 && published.formValues.priceRange.every((r: any) => r.pricerange_beginAmount >= 2), 'a minimum order of 1 is never sent')
 
   // Not about the listing's content: never sent twice.
   publishCalls = 0; rejections = [{ code: 'isv.permission-denied' }]
