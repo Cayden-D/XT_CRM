@@ -133,7 +133,7 @@ export const deleteContact = (accountId: string, contactId: string) => request<v
 
 export async function getProducts(params:{search?:string;category?:string;status?:string}={}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value)query.set(key,value)});return request<{data:Product[]}>(`/api/products?${query}`)}
 /** One catalogue page with status counts and the category list. */
-export async function getProductPage(params:{search?:string;category?:string;status?:string;missingPackage?:string;unlisted?:string;page:number;pageSize:number}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value!==undefined&&value!=='')query.set(key,String(value))});return request<Paged<Product,ProductFacets>&{categories:string[]}>(`/api/products?${query}`)}
+export async function getProductPage(params:{search?:string;category?:string;status?:string;missingPackage?:string;unlisted?:string;page:number;pageSize:number}){const query=new URLSearchParams();Object.entries(params).forEach(([key,value])=>{if(value!==undefined&&value!=='')query.set(key,String(value))});return request<Paged<Product,ProductFacets>&{categories:string[];allCategories?:string[]}>(`/api/products?${query}`)}
 export const getProduct=(id:string)=>request<{data:Product}>(`/api/products/${id}`)
 export const createProduct=(data:ProductInput)=>request<{data:Product}>('/api/products',{method:'POST',body:JSON.stringify(cleanInput(data))})
 export const updateProduct=(id:string,data:Partial<ProductInput>)=>request<{data:Product}>(`/api/products/${id}`,{method:'PATCH',body:JSON.stringify(cleanInput(data))})

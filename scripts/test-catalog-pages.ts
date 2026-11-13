@@ -99,6 +99,9 @@ try {
   assert.deepEqual([fragrance.total, fragrance.data.map((r: { offer_id: string }) => r.offer_id), fragrance.categories.length], [1, ['1003'], 2])
   const expired = await catalog(`&category=${encodeURIComponent('车用吸尘器')}&group=expired`)
   assert.deepEqual([expired.total, expired.categories], [1, [{ name: '车用吸尘器', count: 1 }]], 'counts follow the tab')
+  // Adding a product by hand offers every category in use: the products' own and the shop's 1688 categories.
+  const choices = (await get('/api/products?page=1&pageSize=1&unlisted=true')).allCategories as string[]
+  assert.deepEqual([...choices].sort(), ['家居', '汽车用品', '车用吸尘器', '车载香薰'].sort())
   assert.ok(onSale.shops.some((s: { id: string }) => s.id === shop.id))
   assert.equal((await get('/api/integrations/1688/catalog', tenantIds[1])).total, 0)
   const noRead = await app.inject({ method: 'GET', url: '/api/integrations/1688/catalog', headers: { authorization: `Bearer ${app.jwt.sign({ sub: admin, tenantId, email: 't', displayName: 't', roles: [], permissions: ['product:read'] })}` } })
