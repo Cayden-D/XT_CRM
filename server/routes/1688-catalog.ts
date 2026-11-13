@@ -23,6 +23,7 @@ export const catalogListQuery = z.object({
   connectionId: z.string().uuid().optional(), group: z.enum(['on_sale', 'expired', 'other']).default('on_sale'), search: z.string().trim().max(100).optional(),
   sort: z.enum(['recent', 'sales', 'price_asc', 'price_desc', 'stock']).default('recent'),
   page: z.coerce.number().int().min(1).max(10000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(24), missingPackage: z.enum(['true']).optional(),
+  category: z.string().trim().min(1).max(200).optional(),
 })
 // Lowest/highest SKU price, else the price ladder, else the reference price.
 const priceSql = (agg: 'min' | 'max') => `coalesce(
@@ -39,6 +40,10 @@ export async function queryCatalog(tenantId: string, q: z.infer<typeof catalogLi
       values.push(`%${q.search.replace(/[\\%_]/g, m => `\\${m}`)}%`, q.search)
       where.push(`(l.title ILIKE $${values.length - 1} OR l.offer_id=$${values.length} OR l.snapshot->>'productCargoNumber' ILIKE $${values.length - 1})`)
     }
+    // Category choices follow the other filters and the tab, but not the category itself, so every choice stays reachable.
+    const categories = (await db.query(`SELECT l.snapshot->>'categoryName' AS name,count(*)::int AS count FROM integration_1688_listings l
+      WHERE ${where.join(' AND ')} AND ${groups[q.group]} AND coalesce(l.snapshot->>'categoryName','')<>'' GROUP BY 1 ORDER BY count(*) DESC,1 LIMIT 200`, values)).rows
+    if (q.category) { values.push(q.category); where.push(`l.snapshot->>'categoryName'=$${values.length}`) }
     const base = `WITH sales AS (
         SELECT i->>'productId' AS offer_id,sum(coalesce((i->>'quantity')::numeric,0))::float AS quantity,sum(coalesce((i->>'amount')::numeric,0))::float AS amount,count(DISTINCT o.order_id)::int AS orders
         FROM perf_orders o CROSS JOIN LATERAL jsonb_array_elements(o.items) i
@@ -60,7 +65,7 @@ export async function queryCatalog(tenantId: string, q: z.infer<typeof catalogLi
         count(*) FILTER (WHERE ${groups.other})::int AS other FROM integration_1688_listings l WHERE ${where.join(' AND ')}`, values)).rows[0]
     const shops = (await db.query(`SELECT c.id,c.display_name,c.status,max(l.synced_at) AS synced_at,c.listings_synced_through FROM integration_1688_connections c LEFT JOIN integration_1688_listings l ON l.connection_id=c.id
       WHERE c.tenant_id=$1 GROUP BY c.id ORDER BY c.created_at`, [tenantId])).rows
-    return { data: rows, total: facets[q.group], page: q.page, pageSize: q.pageSize, facets, shops }
+    return { data: rows, total: facets[q.group], page: q.page, pageSize: q.pageSize, facets, shops, categories }
 }
 
 export async function catalogRoutes(app: FastifyInstance) {

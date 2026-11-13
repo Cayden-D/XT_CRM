@@ -20,7 +20,8 @@ export async function productRoutes(app:FastifyInstance){
     const values:unknown[]=[request.authUser.tenantId];const base=['p.tenant_id=$1','p.deleted_at IS NULL']
     if(search){values.push(`%${search.replace(/[\\%_]/g,m=>`\\${m}`)}%`);base.push(`(p.name ILIKE $${values.length} OR p.sku ILIKE $${values.length})`)}
     if(category){values.push(category);base.push(`p.category=$${values.length}`)}
-    if(unlisted)base.push("NOT EXISTS(SELECT 1 FROM integration_1688_listings l WHERE l.product_id=p.id AND l.status<>'deleted' AND coalesce(l.deletion_state,'') NOT IN ('deleted','deleting'))")
+    const notListed=(alias:string)=>`NOT EXISTS(SELECT 1 FROM integration_1688_listings l WHERE l.product_id=${alias}.id AND l.status<>'deleted' AND coalesce(l.deletion_state,'') NOT IN ('deleted','deleting'))`
+    if(unlisted)base.push(notListed('p'))
     if(missingPackage)base.push('NOT EXISTS(SELECT 1 FROM product_measurements m WHERE m.product_id=p.id AND m.variant_id IS NULL AND m.package_weight_g IS NOT NULL)')
     const where=[...base];const listValues=[...values]
     if(status){listValues.push(status);where.push(`p.status=$${listValues.length}`)}
@@ -33,7 +34,7 @@ export async function productRoutes(app:FastifyInstance){
     if(!paged)return{data:rows}
     // Status counts ignore the status filter so the tabs show what each choice would return.
     const facets=(await db.query(`SELECT count(*)::int AS all,count(*) FILTER(WHERE p.status='active')::int AS active,count(*) FILTER(WHERE p.status='draft')::int AS draft,count(*) FILTER(WHERE p.status='inactive')::int AS inactive,
-        coalesce((SELECT array_agg(DISTINCT c.category ORDER BY c.category) FROM products c WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND c.category IS NOT NULL),'{}') AS categories
+        coalesce((SELECT array_agg(DISTINCT c.category ORDER BY c.category) FROM products c WHERE c.tenant_id=$1 AND c.deleted_at IS NULL AND c.category IS NOT NULL${unlisted?` AND ${notListed('c')}`:''}),'{}') AS categories
       FROM products p WHERE ${base.join(' AND ')}`,values)).rows[0]
     const total=result.rows[0]?.total_count??(page>1?(await db.query(`SELECT count(*)::int AS n FROM products p WHERE ${where.join(' AND ')}`,listValues.slice(0,-2))).rows[0].n:0)
     return{data:rows,total,page,pageSize,facets:{all:facets.all,active:facets.active,draft:facets.draft,inactive:facets.inactive},categories:facets.categories}

@@ -35,7 +35,7 @@ export default function ProductLibrary({unlisted,startCreating,onStarted,canEdit
   {notice&&<div className="inline-notice">{notice}<button onClick={()=>setNotice('')}><X size={14}/></button></div>}
   <section className="catalog-head">
    <div className="catalog-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索 SKU 或产品名称" aria-label="搜索产品"/>{search&&<button onClick={()=>setSearch('')} aria-label="清除搜索"><X size={14}/></button>}</div>
-   {categories.length>0&&<select className="catalog-select" value={category} onChange={e=>setCategory(e.target.value)} aria-label="分类"><option value="">全部分类</option>{categories.map(c=><option key={c}>{c}</option>)}</select>}
+   {categories.length>0&&<select className="catalog-select" value={category} onChange={e=>setCategory(e.target.value)} aria-label="产品类型"><option value="">全部类型</option>{categories.map(c=><option key={c}>{c}</option>)}</select>}
    <div className="catalog-tools"><label><input type="checkbox" checked={missingPackage} onChange={e=>setMissingPackage(e.target.checked)}/>只看缺件重尺</label>{canEdit&&<><button onClick={()=>setDialog('templates')}>属性模板</button><button onClick={()=>setDialog('import')}>导入导出</button></>}</div>
    {canEdit&&<button className="catalog-primary" onClick={()=>setProductForm(null)}><Plus size={16}/>新建产品</button>}
   </section>

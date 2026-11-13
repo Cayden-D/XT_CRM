@@ -68,7 +68,7 @@ try {
     [tenantId, shop.id, offer, `吸尘器 ${offer}`, status, snapshot, deletion])
   await listing('1001', 'published', snap([59, 88, 72]))
   await listing('1002', 'published', snap([], { saleInfo: { unit: '个', amountOnSale: 9, priceRanges: [{ price: 12.5, startQuantity: 1 }, { price: 9.9, startQuantity: 100 }] } }))
-  await listing('1003', 'published', snap([], { saleInfo: {}, referencePrice: '30.0' }))
+  await listing('1003', 'published', snap([], { saleInfo: {}, referencePrice: '30.0', categoryName: '车载香薰' }))
   await listing('1004', 'member expired', snap([5]))
   await listing('1005', 'deleted', snap([5]))
   await listing('1006', 'published', snap([5]), 'deleted')
@@ -93,12 +93,18 @@ try {
   assert.deepEqual((await catalog('&group=expired')).data.map((r: { offer_id: string }) => r.offer_id), ['1004'])
   assert.deepEqual((await catalog('&search=HH-3')).data.map((r: { offer_id: string }) => r.offer_id), ['1001'], 'search by 货号')
   assert.equal((await catalog('&search=1003')).total, 1, 'search by offer id')
+  // Filter by product type (the offer's 1688 category); the choices ignore the chosen type and count each one.
+  assert.deepEqual(onSale.categories, [{ name: '车用吸尘器', count: 2 }, { name: '车载香薰', count: 1 }])
+  const fragrance = await catalog(`&category=${encodeURIComponent('车载香薰')}`)
+  assert.deepEqual([fragrance.total, fragrance.data.map((r: { offer_id: string }) => r.offer_id), fragrance.categories.length], [1, ['1003'], 2])
+  const expired = await catalog(`&category=${encodeURIComponent('车用吸尘器')}&group=expired`)
+  assert.deepEqual([expired.total, expired.categories], [1, [{ name: '车用吸尘器', count: 1 }]], 'counts follow the tab')
   assert.ok(onSale.shops.some((s: { id: string }) => s.id === shop.id))
   assert.equal((await get('/api/integrations/1688/catalog', tenantIds[1])).total, 0)
   const noRead = await app.inject({ method: 'GET', url: '/api/integrations/1688/catalog', headers: { authorization: `Bearer ${app.jwt.sign({ sub: admin, tenantId, email: 't', displayName: 't', roles: [], permissions: ['product:read'] })}` } })
   assert.equal(noRead.statusCode, 403)
 
-  console.log(JSON.stringify({ platformCatalog: 'ok', catalogSales: 'ok', productPages: 'ok', productFacets: 'ok', pickerUnpaged: 'ok', collectionPages: 'ok', collectionStages: 'ok', literalSearch: 'ok', slimCards: 'ok', isolation: 'ok' }))
+  console.log(JSON.stringify({ platformCatalog: 'ok', categoryFilter: 'ok', catalogSales: 'ok', productPages: 'ok', productFacets: 'ok', pickerUnpaged: 'ok', collectionPages: 'ok', collectionStages: 'ok', literalSearch: 'ok', slimCards: 'ok', isolation: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   for (const id of tenantIds) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }

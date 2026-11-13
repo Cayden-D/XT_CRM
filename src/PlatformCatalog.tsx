@@ -25,22 +25,22 @@ export default function PlatformCatalog({ user, onAdd }: { user: SessionUser; on
   const canManage = permission(user, 'integration:manage'), canPublish = permission(user, 'integration:publish'), canSeeShop = permission(user, 'integration:read')
   const [detailId, setDetailId] = useState(''), [missingPackage, setMissingPackage] = useState(false)
   const [items, setItems] = useState<CatalogItem[]>([]), [facets, setFacets] = useState<Record<CatalogGroup, number>>({ on_sale: 0, expired: 0, other: 0 }), [shops, setShops] = useState<CatalogShop[]>([])
-  const [group, setGroup] = useState<CatalogGroup>('on_sale'), [sort, setSort] = useState<CatalogSort>('recent'), [shop, setShop] = useState(''), [search, setSearch] = useState('')
+  const [group, setGroup] = useState<CatalogGroup>('on_sale'), [sort, setSort] = useState<CatalogSort>('recent'), [shop, setShop] = useState(''), [search, setSearch] = useState(''), [category, setCategory] = useState(''), [categories, setCategories] = useState<{ name: string; count: number }[]>([])
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(24), [total, setTotal] = useState(0)
   const [loaded, setLoaded] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const [syncing, setSyncing] = useState(false), [viewing, setViewing] = useState<PlatformListing | null>(null)
   const stop = useRef(false)
   const query = useDebounced(search.trim())
-  useEffect(() => { setPage(1) }, [query, group, sort, shop, pageSize, missingPackage])
+  useEffect(() => { setPage(1) }, [query, group, sort, shop, pageSize, missingPackage, category])
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const params = new URLSearchParams(Object.entries({ connectionId: shop, group, search: query, sort, page: String(page), pageSize: String(pageSize), missingPackage: missingPackage ? 'true' : '' }).filter(([, v]) => v))
-      const r = await request<{ data: CatalogItem[]; total: number; facets: Record<CatalogGroup, number>; shops: CatalogShop[] }>(`/api/products/catalog?${params}`)
-      setItems(r.data); setFacets(r.facets); setShops(r.shops); setTotal(r.total); setLoaded(true)
+      const params = new URLSearchParams(Object.entries({ connectionId: shop, group, search: query, sort, page: String(page), pageSize: String(pageSize), missingPackage: missingPackage ? 'true' : '', category }).filter(([, v]) => v))
+      const r = await request<{ data: CatalogItem[]; total: number; facets: Record<CatalogGroup, number>; shops: CatalogShop[]; categories: { name: string; count: number }[] }>(`/api/products/catalog?${params}`)
+      setItems(r.data); setFacets(r.facets); setShops(r.shops); setCategories(r.categories ?? []); setTotal(r.total); setLoaded(true)
       if (!r.data.length && page > 1 && r.total) setPage(Math.ceil(r.total / pageSize))
     } catch (cause) { setError(message(cause)) } finally { setLoading(false) }
-  }, [shop, group, query, sort, page, pageSize, missingPackage])
+  }, [shop, group, query, sort, page, pageSize, missingPackage, category])
   useEffect(() => { void load() }, [load])
 
   const connected = shops.filter(s => s.status === 'connected')
@@ -67,7 +67,7 @@ export default function PlatformCatalog({ user, onAdd }: { user: SessionUser; on
   const open = (item: CatalogItem) => setDetailId(item.id)
   async function openPlatform() { try { setViewing((await getShopListing(detailId)).data) } catch (cause) { setError(message(cause)) } }
   const changePage = (next: number) => { setPage(next); document.querySelector('.catalog-head')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
-  const filtered = Boolean(query || shop || missingPackage)
+  const filtered = Boolean(query || shop || missingPackage || category)
   const noShops = loaded && !shops.length
 
   return <>
@@ -75,6 +75,7 @@ export default function PlatformCatalog({ user, onAdd }: { user: SessionUser; on
     <section className="catalog-head">
       <div className="catalog-search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索标题、1688 商品 ID 或货号" aria-label="搜索平台商品" />{search && <button onClick={() => setSearch('')} aria-label="清除搜索"><X size={14} /></button>}</div>
       {shops.length > 1 && <select className="catalog-select" value={shop} onChange={e => setShop(e.target.value)} aria-label="店铺"><option value="">全部店铺</option>{shops.map(s => <option key={s.id} value={s.id}>{s.display_name || '未命名店铺'}</option>)}</select>}
+      {(categories.length > 0 || category) && <select className="catalog-select" value={category} onChange={e => setCategory(e.target.value)} aria-label="产品类型"><option value="">全部类型</option>{category && !categories.some(c => c.name === category) && <option value={category}>{category}</option>}{categories.map(c => <option key={c.name} value={c.name}>{c.name}（{c.count}）</option>)}</select>}
       <select className="catalog-select" value={sort} onChange={e => setSort(e.target.value as CatalogSort)} aria-label="排序">{(Object.keys(sortNames) as CatalogSort[]).map(k => <option key={k} value={k}>{sortNames[k]}</option>)}</select>
       <label className="catalog-check"><input type="checkbox" checked={missingPackage} onChange={e => setMissingPackage(e.target.checked)} />只看缺件重尺</label>
       {onAdd && <button className="catalog-secondary" onClick={onAdd}><Plus size={15} />手动添加</button>}
