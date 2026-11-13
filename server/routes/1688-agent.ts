@@ -7,7 +7,7 @@ import { currentTextModel, generateQwenText, LlmRequestError, withTextModel } fr
 import { teamOf } from '../integrations/teams.js'
 import { requirePermission } from '../auth.js'
 import { IntegrationError } from '../integrations/1688.js'
-import { inspectPublishingImages, prepareAgentFields, publishingImages } from '../integrations/1688-agent.js'
+import { inspectPublishingImages, prepareAgentFields, publishingImages, sourceNames } from '../integrations/1688-agent.js'
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
@@ -102,7 +102,9 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
       const current=await fillPublishTemplate(tenant,draft.platform_schema,fillFromProductData(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,product.id)))
       const catProp={...(current.catProp||{})}
       for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
-      let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed)
+      // The source listing's brand and its factory/shop name stay out of the title (the shop's own brand is fine).
+      const avoid=sourceNames(source,product,await ownBrandNames(tenant))
+      let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed,avoid)
       report={...report,title:formValues.title}
       const images=publishingImages(formValues)
       // Pictures generated for this listing are published unchecked when the owner chose so (AI images on).
