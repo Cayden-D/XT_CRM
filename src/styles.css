@@ -320,3 +320,6 @@ a.goods-icon { text-decoration:none; }
 .collector-connect button { display:inline-flex; align-items:center; gap:6px; height:38px; padding:0 18px; border-radius:8px; border:1px solid var(--line); background:#fff; color:#2b3a4e; font-size:14px; cursor:pointer; }
 .collector-connect button.primary { background:#2f5da8; border-color:#2f5da8; color:#fff; }
 .collector-connect-error { display:flex; justify-content:center; align-items:center; gap:6px; color:#b4412f !important; }
+
+.oauth-return { gap:14px; }
+.oauth-return p { max-width:420px; text-align:center; line-height:1.6; }

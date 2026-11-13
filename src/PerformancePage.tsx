@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { rememberAuthorization } from './OAuthReturn'
 import { AgentsView, ComparisonView, HourlyView } from './PerformanceReports'
 import { ChatAnalysisView, OrdersView, QualityView } from './PerformanceAnalysis'
 import { KeywordsView } from './PerformanceKeywords'
@@ -6,12 +7,12 @@ import { FavoritesView, KpiView, PayrollView } from './PerformancePayroll'
 import { AgentCoachingView } from './AgentCoaching'
 import './1688.css'
 import ConnectionDelete from './ConnectionDelete'
-import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Link2, LoaderCircle, Save, ShieldCheck, Store, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Link2, LoaderCircle, Save, ShieldCheck, Store, X } from 'lucide-react'
 import type { SessionUser } from './api'
 import { useAiFocusPart } from './aiFocus'
 import { DateRange, NeedShop, Note, ShopPicker } from './ui'
 import {
-  attributionSchemeNames, availableSchemes, completePerformanceAuthorization, deletePerformanceConnection, disablePerformanceConnection, getPerformanceConnectionUsage, getPerformanceConnections, getPerformanceOperations, getPerformanceSettings,
+  attributionSchemeNames, availableSchemes, deletePerformanceConnection, disablePerformanceConnection, getPerformanceConnectionUsage, getPerformanceConnections, getPerformanceOperations, getPerformanceSettings,
   refreshPerformanceToken, savePerformanceSettings, startPerformanceAuthorization, testPerformanceConnection,
   type AttributionScheme, type PerformanceConnection, type PerformanceOperation, type PerformanceSettings,
 } from './performanceApi'
@@ -46,7 +47,7 @@ export default function PerformancePage({user,view}:{user:SessionUser;view:View}
   const [operations,setOperations]=useState<PerformanceOperation[]>([]),[page,setPage]=useState(1)
   const [settings,setSettings]=useState<PerformanceSettings|null>(null),[draft,setDraft]=useState({windowHours:'',thresholdSeconds:'',countOther:false,workHours:true,workStart:'09:00',workEnd:'22:00',scheme:'order_first' as AttributionScheme,orderShare:'50',ownerShare:'50',autoOwner:true})
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('')
-  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<PerformanceConnection|null>(null),[remove,setRemove]=useState<PerformanceConnection|null>(null)
+  const [disable,setDisable]=useState<PerformanceConnection|null>(null),[remove,setRemove]=useState<PerformanceConnection|null>(null)
   const canRead=permission(user,'performance:read')||permission(user,'performance:read_own'),canManage=permission(user,'performance:manage'),canPayroll=permission(user,'payroll:manage')
   const applySettings=(data:PerformanceSettings)=>{setSettings(data);setDraft({windowHours:String(data.attribution_window_hours),thresholdSeconds:String(data.unanswered_threshold_seconds),countOther:data.count_other_as_reply,workHours:data.work_hours_enabled,workStart:data.work_start,workEnd:data.work_end,scheme:data.default_scheme,orderShare:String(Math.round(data.split_order_share*100)),ownerShare:String(Math.round(data.owner_share*100)),autoOwner:data.auto_assign_owner})}
   const load=useCallback(async()=>{
@@ -62,7 +63,8 @@ export default function PerformancePage({user,view}:{user:SessionUser;view:View}
   useEffect(()=>{setPage(1)},[view])
   useEffect(()=>{void load()},[load])
   async function action(name:string,run:()=>Promise<unknown>,success:string){setBusy(name);setError('');try{await run();setNotice(success);await load()}catch(cause){setError(message(cause));await load()}finally{setBusy('')}}
-  async function authorize(){setBusy('authorize');setError('');try{setAuthUrl((await startPerformanceAuthorization()).data.authorizationUrl);setCallbackUrl('')}catch(cause){setError(message(cause))}finally{setBusy('')}}
+  // Straight to 1688; it sends the browser back to this site, where the authorization finishes by itself (OAuthReturn).
+  async function authorize(){setBusy('authorize');setError('');try{const url=(await startPerformanceAuthorization()).data.authorizationUrl;rememberAuthorization('performance');window.location.assign(url)}catch(cause){setError(message(cause));setBusy('')}}
   async function save(part:'metrics'|'scheme'){
     if(!settings)return
     const windowHours=Number(draft.windowHours),thresholdSeconds=Number(draft.thresholdSeconds)
@@ -125,7 +127,6 @@ export default function PerformancePage({user,view}:{user:SessionUser;view:View}
       {view==='operations'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>时间</th><th>店铺</th><th>接口 / 操作</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead><tbody>{operations.map(item=><tr key={item.id}><td>{time(item.created_at)}</td><td>{item.display_name||'—'}</td><td><code>{item.api_name}</code></td><td><Status value={item.outcome}/></td><td>{item.error_code||'—'}</td><td>{item.duration_ms} ms</td></tr>)}</tbody></table>{!operations.length&&<div className="shop-empty"><Store size={28}/><p>暂无调用记录</p></div>}</div>}
     </>}
     {view==='operations'&&<div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} 页</span><button className="shop-icon" title="下一页" disabled={loading||operations.length<50} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>}
-    {authUrl&&<Modal title="授权 1688 绩效应用" close={()=>setAuthUrl('')}><div className="shop-modal-body"><p className="shop-note">请使用店铺主账号登录授权，子账号授权无法读取全部客服数据。</p><a className="shop-button primary" href={authUrl} target="_blank" rel="noreferrer">前往 1688 授权 <ExternalLink size={16}/></a><label>完整回跳地址<input value={callbackUrl} onChange={e=>setCallbackUrl(e.target.value)} autoComplete="off" placeholder="https://…?code=…&state=…"/></label><p className="shop-note">授权码有效期 2 分钟</p></div><footer><button className="shop-button" onClick={()=>setAuthUrl('')}>取消</button><button className="shop-button primary" disabled={!callbackUrl||Boolean(busy)} onClick={()=>void action('complete',async()=>{await completePerformanceAuthorization(callbackUrl);setAuthUrl('');setCallbackUrl('')},'绩效应用授权完成，请点击验证确认主账号')}><CheckCircle2 size={16}/>完成授权</button></footer></Modal>}
     {remove&&<ConnectionDelete name={remove.display_name} account={remove.login_id||remove.member_id} close={()=>setRemove(null)} done={()=>{setRemove(null);setNotice('绩效应用连接已删除');void load()}} remove={()=>deletePerformanceConnection(remove.id)}
       impact={async()=>{const u=(await getPerformanceConnectionUsage(remove.id)).data,kept=[u.followups&&`${u.followups} 条跟进记录`,u.attachments&&`${u.attachments} 个客户附件`,u.locked_payrolls&&`${u.locked_payrolls} 期已锁定工资单`].filter(Boolean)
         return{blocked:kept.length?`这个店铺有 ${kept.join('、')}，需要保留，不能删除；保持停用即可。`:null,

@@ -1,4 +1,5 @@
 import DeleteListing from './1688DeleteListing'
+import { rememberAuthorization } from './OAuthReturn'
 import LogisticsEditor from './1688LogisticsEditor'
 import { applyDraftTemplate } from './1688Api'
 import DraftProductData from './DraftProductData'
@@ -12,7 +13,7 @@ import { getAlbums } from './imageApi'
 import ConnectionDelete from './ConnectionDelete'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FilePlus2, ImagePlus, Link2, LoaderCircle, Package, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Store, Trash2, X } from 'lucide-react'
 import { getProducts, type Product, type SessionUser } from './api'
-import { getAgentSettings, runPublishingAgent, completeShopAuthorization, createPublishDraft, deleteShopConnection, disableShopConnection, getShopConnectionUsage, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
+import { getAgentSettings, runPublishingAgent, createPublishDraft, deleteShopConnection, disableShopConnection, getShopConnectionUsage, findShopCategories, getPublishDraft, getPublishDrafts, getShopConnections, getShopListing, getShopOperations, reconcilePublishDraft, refreshShopListing, refreshShopToken, savePublishDraft, startShopAuthorization, submitPublishDraft, testShopConnection, updateShopStock, uploadShopPhoto, type CategoryOption, type IntegrationOperation, type PlatformListing, type PublishDraft, type ShopConnection } from './1688Api'
 
 const imageUrl=(value:string)=>value.startsWith('img/')?`https://cbu01.alicdn.com/${value}`:value
 const time = (value:string|null) => value ? new Date(value).toLocaleString('zh-CN') : '—'
@@ -30,7 +31,7 @@ export default function ShopPanel({user,view}:{user:SessionUser;view:'connection
   const [connections,setConnections]=useState<ShopConnection[]>([]),[selected,setSelected]=useState(''),[configured,setConfigured]=useState(false)
   const [drafts,setDrafts]=useState<PublishDraft[]>([]),[operations,setOperations]=useState<IntegrationOperation[]>([])
   const [page,setPage]=useState(1),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('')
-  const [authUrl,setAuthUrl]=useState(''),[callbackUrl,setCallbackUrl]=useState(''),[disable,setDisable]=useState<ShopConnection|null>(null),[remove,setRemove]=useState<ShopConnection|null>(null),[create,setCreate]=useState(false),[draft,setDraft]=useState<PublishDraft|null>(null)
+  const [disable,setDisable]=useState<ShopConnection|null>(null),[remove,setRemove]=useState<ShopConnection|null>(null),[create,setCreate]=useState(false),[draft,setDraft]=useState<PublishDraft|null>(null)
   const canManage=permission(user,'integration:manage'),canPublish=permission(user,'integration:publish'),canRead=permission(user,'integration:read')
   useEffect(()=>{setPage(1)},[view])
   const load=useCallback(async()=>{
@@ -46,7 +47,8 @@ export default function ShopPanel({user,view}:{user:SessionUser;view:'connection
   },[canRead,selected,view,page])
   useEffect(()=>{void load()},[load])
   async function action(name:string,run:()=>Promise<unknown>,success:string){setBusy(name);setError('');try{await run();setNotice(success);await load()}catch(cause){setError(message(cause))}finally{setBusy('')}}
-  async function authorize(){setBusy('authorize');setError('');try{const result=await startShopAuthorization();setAuthUrl(result.data.authorizationUrl);setCallbackUrl('')}catch(cause){setError(message(cause))}finally{setBusy('')}}
+  // Straight to 1688; it sends the browser back to this site, where the authorization finishes by itself (OAuthReturn).
+  async function authorize(){setBusy('authorize');setError('');try{const result=await startShopAuthorization();rememberAuthorization('product');window.location.assign(result.data.authorizationUrl)}catch(cause){setError(message(cause));setBusy('')}}
   async function openDraft(id:string){setBusy(id);try{setDraft((await getPublishDraft(id)).data)}catch(cause){setError(message(cause))}finally{setBusy('')}}
   if(!canRead)return <section className="state-card"><ShieldCheck size={28}/><h2>暂无店铺访问权限</h2></section>
   return <div className="shop-workspace">
@@ -68,7 +70,6 @@ export default function ShopPanel({user,view}:{user:SessionUser;view:'connection
       {view==='operations'&&<div className="shop-table-scroll"><table className="shop-table"><thead><tr><th>时间</th><th>店铺</th><th>接口 / 操作</th><th>结果</th><th>错误码</th><th>耗时</th></tr></thead><tbody>{operations.map(item=><tr key={item.id}><td>{time(item.created_at)}</td><td>{item.display_name||'—'}</td><td><code>{item.api_name}</code></td><td><Status value={item.outcome}/></td><td>{item.error_code||'—'}</td><td>{item.duration_ms} ms</td></tr>)}</tbody></table>{!operations.length&&<Empty text="暂无调用记录"/>}</div>}
     </>}
     {view==='operations'&&<div className="shop-pagination"><button className="shop-icon" title="上一页" disabled={loading||page===1||Boolean(busy)} onClick={()=>setPage(p=>p-1)}><ChevronLeft size={17}/></button><span>第 {page} 页</span><button className="shop-icon" title="下一页" disabled={loading||Boolean(busy)||operations.length<50} onClick={()=>setPage(p=>p+1)}><ChevronRight size={17}/></button></div>}
-    {authUrl&&<Modal title="连接 1688 店铺" close={()=>setAuthUrl('')}><div className="shop-modal-body"><a className="shop-button primary" href={authUrl} target="_blank" rel="noreferrer">前往 1688 授权 <ExternalLink size={16}/></a><label>完整回跳地址<input value={callbackUrl} onChange={e=>setCallbackUrl(e.target.value)} autoComplete="off" placeholder="https://…?code=…&state=…"/></label><p className="shop-note">授权码有效期 2 分钟</p></div><footer><button className="shop-button" onClick={()=>setAuthUrl('')}>取消</button><button className="shop-button primary" disabled={!callbackUrl||Boolean(busy)} onClick={()=>void action('complete',async()=>{await completeShopAuthorization(callbackUrl);setAuthUrl('');setCallbackUrl('')},'店铺授权完成')}><CheckCircle2 size={16}/>完成连接</button></footer></Modal>}
     {remove&&<ConnectionDelete name={remove.display_name} account={remove.member_id||remove.login_id} close={()=>setRemove(null)} done={()=>{setRemove(null);setNotice('店铺连接已删除');void load()}} remove={()=>deleteShopConnection(remove.id)}
       impact={async()=>{const u=(await getShopConnectionUsage(remove.id)).data;return{blocked:u.published?`这个店铺有 ${u.published} 个通过本系统发布过的商品，发布记录需要保留，不能删除；保持停用即可。`:null,
         removes:[u.listings&&`${u.listings} 件已同步的平台商品${u.bound?`（其中 ${u.bound} 件关联了正式产品，关联关系会一起删除）`:''}`,u.drafts&&`${u.drafts} 个未发布的草稿`,u.queue_jobs&&`${u.queue_jobs} 条上架队列记录`,u.agent_jobs&&`${u.agent_jobs} 条 Agent 任务记录`].filter((x):x is string=>Boolean(x))}}}/>}

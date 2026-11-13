@@ -7,6 +7,7 @@ import ProductCatalogPage from './ProductCatalogPage'
 import DashboardPage from './DashboardPage'
 import ProductCollectionsPage from './ProductCollectionsPage'
 import ShopPanel from './1688Page'
+import OAuthReturn, { isAuthorizationReturn } from './OAuthReturn'
 import AgentSettingsPage from './AgentSettingsPage'
 import PerformancePage, { type View as PerfView } from './PerformancePage'
 import CustomerOpsPage from './CustomerOpsPage'
@@ -94,6 +95,8 @@ export default function App() {
   const [aiOpen, setAiOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
+  // Back from 1688's authorization page (?code=…&state=…): finished here, then on to 店铺授权.
+  const [oauthReturn] = useState(() => isAuthorizationReturn())
   const openAI = (text = '') => { setPrompt(text); setAiOpen(true) }
   useEffect(() => {
     // An image handed to a tool stays only while that tool is open.
@@ -121,6 +124,7 @@ export default function App() {
   }, [])
   if (session === undefined) return <div className="app-loading"><div className="brand-mark"><span /></div><p>正在恢复工作空间…</p></div>
   if (session === null) return <LoginPage onLogin={setSession} />
+  if (oauthReturn) return <OAuthReturn />
   const logout = () => { clearToken(); setSession(null); setAiOpen(false); resetAiFocus() }
   // Opened by the 1688 collector to be approved; signing in (above) keeps the address, so it comes back here.
   if (hash.startsWith('#/collector-connect')) return <CollectorConnect user={session} hash={hash} />
