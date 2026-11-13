@@ -24,7 +24,7 @@ let ossFailures = 0
 ;(OSS.prototype as any).get = async (key: string) => ({ content: objects.get(key) })
 ;(OSS.prototype as any).delete = async (key: string) => { objects.delete(key); return {} }
 
-const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
+const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob, resumeImageBlockedJobs }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
 const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true, uploadFailures = 0, uploadAttempts = 0, unreachable = 0
@@ -138,6 +138,19 @@ try {
   assert.equal(submits, 9, 'nothing generated again')
   assert.ok((await db.query("SELECT bool_and(status='completed' AND oss_key IS NOT NULL) AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
 
+  // A job stopped for its pictures (here: the wait ran out) resumes by itself once they are all saved — not before.
+  await db.query("UPDATE integration_1688_collection_queue_jobs SET status='blocked',message='AI 生图等待超时（90 分钟），请在采集商品的「商品图片」里查看后重新入队。',report=report||'{\"imageWaitSince\":\"2020-01-01T00:00:00Z\"}' WHERE collected_product_id=$1", [sourceId])
+  await db.query("UPDATE collected_products SET processing_status='failed',updated_at=now()+interval '1 second' WHERE id=$1", [sourceId])
+  const lastPicture = (await db.query('SELECT id FROM image_assets WHERE collected_product_id=$1 ORDER BY operation LIMIT 1', [sourceId])).rows[0].id
+  await db.query("UPDATE image_assets SET status='processing' WHERE id=$1", [lastPicture])
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'still saving: the job waits')
+  await db.query("UPDATE image_assets SET status='completed' WHERE id=$1", [lastPicture])
+  assert.equal(await resumeImageBlockedJobs(tenant), 1)
+  const resumed = await job(sourceId)
+  assert.deepEqual([resumed.status, resumed.report.autoResumes, resumed.report.imageWaitSince, Boolean(resumed.report.imageBatch)], ['queued', 1, undefined, true])
+  assert.equal(new Date(resumed.source_updated_at).getTime(), new Date((await db.query('SELECT updated_at FROM collected_products WHERE id=$1', [sourceId])).rows[0].updated_at).getTime(), 'the source is taken as it is now')
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'a queued job is left alone')
+
   // No album chosen and the album service fails: a clear stop with the platform's reason.
   state = await run(sourceId)
   assert.equal(state.status, 'blocked'); assert.match(state.message, /没能确定店铺相册.*相册服务暂不可用/)
@@ -193,7 +206,7 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

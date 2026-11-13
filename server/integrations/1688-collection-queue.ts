@@ -16,7 +16,8 @@ import { apimartConfigured } from '../llm/apimart-image.js'
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
 // from the collected ones, put into the shop album and the product, and published without screening (the owner's choice).
 // SKU pictures stay as collected. A failure stops the job with its reason; nothing falls back to the originals.
-const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4,MAX_STORAGE_REVIVALS=3
+// The wait outlasts the image worker's own retries (generation up to 20 min, saving again for up to 60 min).
+const IMAGE_WAIT_MS=90*60_000,MAX_AUTO_RESUMES=3,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4,MAX_STORAGE_REVIVALS=3
 const GENERATED:GeneratedType[]=[...SUITE_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
@@ -192,7 +193,7 @@ async function processJob(job:QueueJob){
   let variantImage=(url:string|null)=>url
   if(auto&&!previous.generatedImages){
     const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,uploadRounds:previous.uploadRounds,storageRevivals:previous.storageRevivals,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
-    if(Date.now()-Date.parse(state.imageWaitSince)>IMAGE_WAIT_MS){await finish(job,'blocked','AI 生图等待超时（30 分钟），请在采集商品的「商品图片」里查看后重新入队。',state);return}
+    if(Date.now()-Date.parse(state.imageWaitSince)>IMAGE_WAIT_MS){await finish(job,'blocked',`AI 生图等待超时（${IMAGE_WAIT_MS/60_000} 分钟），请在采集商品的「商品图片」里查看后重新入队。`,state);return}
     const step=await generateListingImages(job,source,actor,auto,state)
     if(step.kind==='block'){await finish(job,'blocked',step.message,state);return}
     if(step.kind==='wait'){await defer(job,step.message,state);return}
@@ -286,14 +287,39 @@ export async function recoverCollectionQueue(tenantId?:string){
   await db.query(`UPDATE integration_1688_collection_queue_jobs SET status=CASE WHEN phase='screening' AND attempts<3 THEN 'queued' WHEN phase='screening' THEN 'failed' ELSE 'unknown' END,message=CASE WHEN phase='screening' THEN '执行进程中断，等待重试或人工核对。' ELSE '执行进程中断且可能已创建产品或提交平台，请人工核对，禁止自动重试。' END,available_at=now()+interval '15 seconds',worker_id=NULL,lease_until=NULL,updated_at=now() WHERE status='processing' AND lease_until<now() AND ($1::uuid IS NULL OR tenant_id=$1)`,[tenantId||null])
 }
 
+/**
+ * Jobs stopped by AI pictures (generation failed, waited too long, album upload) go back in line by themselves once their
+ * pictures are all saved, or once pictures that finished but were not saved can be saved again; at most
+ * MAX_AUTO_RESUMES times per job. The job then checks everything again as usual before listing.
+ */
+export async function resumeImageBlockedJobs(tenantId?:string){
+  const rows=(await db.query(`UPDATE integration_1688_collection_queue_jobs j SET status='queued',phase='screening',attempts=0,available_at=now(),source_updated_at=p.updated_at,
+      message='AI 图片已处理完，自动核对后继续上架。',worker_id=NULL,lease_until=NULL,updated_at=now(),
+      report=(j.report-'imageWaitSince'-'uploadRounds'-'storageRevivals')||jsonb_build_object('autoResumes',coalesce((j.report->>'autoResumes')::int,0)+1)
+    FROM collected_products p
+    WHERE p.id=j.collected_product_id AND p.product_id IS NULL AND j.status='blocked' AND j.phase='screening' AND j.draft_id IS NULL
+      AND ($1::uuid IS NULL OR j.tenant_id=$1) AND j.updated_at>now()-interval '2 days'
+      AND (j.message LIKE 'AI 生图%' OR j.message LIKE 'AI 新图上传店铺相册%')
+      AND coalesce((j.report->>'autoResumes')::int,0)<$2
+      AND j.report->>'imageBatch' ~ '^[0-9a-f-]{36}$'
+      AND NOT EXISTS(SELECT 1 FROM image_assets a WHERE a.batch_id=(j.report->>'imageBatch')::uuid AND a.status IN ('pending','processing'))
+      AND (NOT EXISTS(SELECT 1 FROM image_assets a WHERE a.batch_id=(j.report->>'imageBatch')::uuid AND a.status<>'completed')
+        OR EXISTS(SELECT 1 FROM image_assets a WHERE a.batch_id=(j.report->>'imageBatch')::uuid AND a.status='failed' AND a.task_id IS NOT NULL
+          AND (a.error LIKE '图片保存到 OSS 失败%' OR a.error LIKE '无法读取已保存的图片%' OR a.error LIKE '生成图片下载失败%')))
+    RETURNING j.collected_product_id`,[tenantId??null,MAX_AUTO_RESUMES])).rows
+  if(rows.length)await db.query("UPDATE collected_products SET processing_status='ai_processing' WHERE id=ANY($1::uuid[])",[rows.map(r=>r.collected_product_id)])
+  return rows.length
+}
+
 export function startCollectionQueue(onError:(error:unknown)=>void=()=>{}){
-  let running=0,stopped=false,ticking=false
+  let running=0,stopped=false,ticking=false,lastResume=0
   const active=new Set<Promise<unknown>>()
   const tick=async()=>{
     if(stopped||ticking)return
     ticking=true
     try{
       await recoverCollectionQueue()
+      if(Date.now()-lastResume>60_000){lastResume=Date.now();await resumeImageBlockedJobs()}
       while(!stopped&&running<config.AGENT_QUEUE_CONCURRENCY){
         running++
         const task=runCollectionQueueOnce().catch(onError).finally(()=>{running--;active.delete(task)})
