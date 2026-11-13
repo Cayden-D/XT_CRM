@@ -14,7 +14,7 @@ import { catalogRoutes } from './1688-catalog.js'
 import { agent1688Routes } from './1688-agent.js'
 import { agentImageRoutes } from './1688-images.js'
 import { collectionQueueRoutes } from './1688-queue.js'
-import { buildSkuRows, mapReviewedVariants, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
+import { buildSkuRows, mapReviewedVariants, numberCustomValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
 import { createDraftFromProduct } from '../integrations/1688-drafts.js'
 import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
@@ -140,7 +140,11 @@ export async function publishDraft(request: Pick<FastifyRequest,'params'|'body'|
     }catch(error){await claim.query('ROLLBACK');throw error}finally{claim.release()}
     let platformResponded = false
     try {
-      const args: Json = { scene: row.scene, dataBody: row.data_body }
+      // As the platform's own example has it: custom sale values numbered -1, -2, …, and the minimum order equal to the first quantity tier.
+      const formValues: Json = numberCustomValues(row.data_body.formValues || {})
+      const tiers = Array.isArray(formValues.priceRange) ? formValues.priceRange.filter((r: Json) => Number.isInteger(r?.pricerange_beginAmount)) : []
+      if (row.platform_schema?.data?.beginAmount && tiers.length && String(formValues.quotationType?.value ?? '2') === '2') formValues.beginAmount = Math.min(...tiers.map((r: Json) => r.pricerange_beginAmount))
+      const args: Json = { scene: row.scene, dataBody: { ...row.data_body, formValues } }
       if (row.scene === 'industry') args.bizParam = { industryCategoryId: row.cat_id }
       else args.catId = row.cat_id
       const result = await callProductApi(row.connection_id, request.authUser.tenantId, request.authUser.sub, 'alibaba.new.product.add', args, request.id)

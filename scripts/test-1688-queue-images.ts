@@ -22,7 +22,7 @@ const objects = new Map<string, Buffer>()
 
 const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
-const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
+const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
@@ -42,6 +42,8 @@ globalThis.fetch = async (input, init) => {
   }
   if (url === 'https://apimart.fixture.invalid/v1/images/generations') { submits++; return reply({ code: 200, data: [{ status: 'submitted', task_id: `task_${submits}` }] }) }
   if (url.startsWith('https://apimart.fixture.invalid/v1/tasks/')) return reply({ code: 200, data: { id: url.split('/').pop(), status: 'completed', progress: 100, cost: 0.01, result: { images: [{ url: ['https://upload.apimart.fixture/f/image/x.png'], expires_at: 1789000000 }] } } })
+  // The collected SKU picture, read so it can be copied into the shop album.
+  if (url === 'https://cbu01.alicdn.com/img/ibank/sku-mark.jpg') return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
   if (url.startsWith('https://upload.apimart.fixture/')) return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
   assert.ok(url.startsWith('https://gw.open.1688.com/openapi/'), `unexpected request ${url}`)
   if (url.includes('alibaba.photobank.album.getList')) {
@@ -118,7 +120,7 @@ try {
   await db.query("UPDATE integration_1688_collection_queue_jobs j SET status='queued',report='{}',source_updated_at=p.updated_at FROM collected_products p WHERE p.id=j.collected_product_id AND j.collected_product_id=$1", [sourceId])
   state = await run(sourceId)
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /已生成并上传 9 张/)
-  assert.equal(submits, 9, 'a retry does not generate again'); assert.equal(albumUploads, 9)
+  assert.equal(submits, 9, 'a retry does not generate again'); assert.equal(albumUploads, 9, 'the nine generated pictures')
   assert.equal(addCalls, 1); assert.ok(uploadedTo.every(id => id === '777'), 'uploaded into the new album')
   assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '777')
   const source = (await db.query('SELECT main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1', [sourceId])).rows[0]
@@ -129,14 +131,20 @@ try {
   assert.equal(state.status, 'published', state.message)
   const body = JSON.stringify(published)
   assert.ok(body.includes('album-1.jpg') && body.includes('album-9.jpg')); assert.ok(!body.includes('main-mark') && !body.includes('detail-ok'), 'only the new pictures')
-  assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, cdn('sku-mark'), 'SKU pictures stay as collected')
+  // The SKU picture is copied into the album (not regenerated) and shown on the colour value; minimum order = first tier.
+  assert.equal(albumUploads, 10)
+  assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, 'https://cbu01.alicdn.com/img/ibank/album-10.jpg')
+  assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-10.jpg' }])
+  assert.equal(published.formValues.skuTable[0].sku_props[0].value, -1)
+  assert.equal(published.formValues.beginAmount, 2, 'the minimum order matches the first quantity tier')
+  assert.deepEqual(state.report.skuPictures, { uploaded: 1, failed: 0 })
   assert.equal(visionCalls, before, 'nothing was screened: originals, generated pictures and the final check all skipped')
   assert.equal(state.report.imagesUnchecked, true)
   // The collected ladder is the quantity quote (three tiers at most); the platform's description structure is kept.
   assert.deepEqual(published.formValues.priceRange, [{ pricerange_beginAmount: 2, pricerange_price: 39 }, { pricerange_beginAmount: 10, pricerange_price: 35 }, { pricerange_beginAmount: 50, pricerange_price: 30 }])
   assert.deepEqual([published.formValues.description.smartDetail, published.formValues.description.sizeTableDescriptionBlackIdList], [{ kept: true }, '[1]'])
   assert.match(published.formValues.description.detailList[0].content, /album-7\.jpg[\s\S]*album-9\.jpg/, 'the generated detail pictures are in the text')
-  assert.equal(albumUploads, 9, 'nothing is uploaded twice')
+  assert.equal(albumUploads, 10, 'nothing is uploaded twice')
   // A shop that already has the album (e.g. settings lost) finds it by name instead of creating another.
   await db.query('DELETE FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])
   const { ensureAlbum } = await import('../server/integrations/image-album.js')

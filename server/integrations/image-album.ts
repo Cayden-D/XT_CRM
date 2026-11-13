@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg'
 import { db } from '../db.js'
 import { callProductApi, IntegrationError, uploadPhoto } from './1688.js'
 import { publishingImages } from './1688-agent.js'
-import { albumJpeg, flagged, galleryOf, readImage, type Finding } from './image-workshop.js'
+import { albumJpeg, download, flagged, galleryOf, readImage, sourceUrl, type Finding } from './image-workshop.js'
 
 /**
  * Generated picture → 1688 shop photo album → main picture of a collected product. Album uploads are platform writes:
@@ -136,4 +136,15 @@ export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
     await client.query('COMMIT')
     return String(albumId)
   } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+
+/**
+ * Copies a picture from Alibaba's CDN (e.g. a SKU picture of the collected listing) into the shop's own album and returns
+ * the album address: the platform shows only pictures from the shop's own album.
+ */
+export async function rehostToAlbum(ctx: AlbumContext, connectionId: string, albumId: string, url: string, name: string) {
+  const bytes = await albumJpeg(await download(sourceUrl(url), 15_000_000))
+  const photo = await uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, albumId, name, bytes, 'image/jpeg', ctx.requestId) as { url?: string } | undefined
+  if (typeof photo?.url !== 'string') throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传未返回图片地址。', 502)
+  return publishingImages({ image: photo.url })[0]
 }

@@ -1,5 +1,5 @@
-export type SaleChoice = { value:string|number; text:string; custom?:boolean }
-export type SaleDimension = { name:string; label:string; propertyId?:number|string; required?:boolean; maxItems?:number; customizable?:boolean; fieldType?:string; dataSource?:SaleChoice[] }
+export type SaleChoice = { value:string|number; text:string; custom?:boolean; imgUrl?:string }
+export type SaleDimension = { name:string; label:string; propertyId?:number|string; required?:boolean; maxItems?:number; customizable?:boolean; fieldType?:string; dataSource?:SaleChoice[]; supportImg?:boolean }
 export type SkuProperty = SaleChoice & { id:number; name:string; label:string }
 export type SkuRow = { sku_props:SkuProperty[]; sku_amountOnSale:number|null; sku_price?:number|null; sku_cargoNumber?:string; sku_status?:number; [key:string]:unknown }
 export type ReviewedVariant = { id:string; label:string; attributes:Record<string,string>; unit_price:string|number; stock:string|number|null; image_url:string|null }
@@ -18,7 +18,8 @@ export function dimensionId(dimension:SaleDimension):number {
 }
 export function validChoice(dimension:SaleDimension,choice:SaleChoice):boolean {
   if(!choice||typeof choice.text!=='string'||!choice.text.trim())return false
-  if(choice.custom)return choice.value===-1&&allowsCustom(dimension)
+  // Custom values carry negative numbers, distinct across the form (-1, -2, …).
+  if(choice.custom)return Number.isInteger(Number(choice.value))&&Number(choice.value)<0&&allowsCustom(dimension)
   return (dimension.dataSource||[]).some(option=>String(option.value)===String(choice.value)&&option.text===choice.text)
 }
 export function allowsCustom(dimension:SaleDimension):boolean {
@@ -41,6 +42,31 @@ export function buildSkuRows(dimensions:SaleDimension[],selected:Record<string,S
   const existing=new Map(previous.filter(row=>Array.isArray(row.sku_props)).map(row=>[skuKey(row.sku_props),row]))
   return combinations.map(sku_props=>({...existing.get(skuKey(sku_props)),sku_props,sku_amountOnSale:existing.get(skuKey(sku_props))?.sku_amountOnSale??null,sku_status:existing.get(skuKey(sku_props))?.sku_status??1}))
 }
+/** A picture path as the platform's own album gives it ("img/ibank/…"); other addresses are left as they are. */
+export function platformImagePath(url:string){
+  try{const u=new URL(url);return /^cbu\d+\.alicdn\.com$/.test(u.hostname)&&u.pathname.startsWith('/img/ibank/')?u.pathname.slice(1):url}catch{return url}
+}
+/**
+ * Gives every custom sale value its own negative number (the platform tells custom values apart by it; -1 for all of them
+ * collides) and keeps the SKU rows pointing at the renumbered values. Values are matched by dimension and text.
+ */
+export function numberCustomValues<T extends {saleProp?:unknown;skuTable?:unknown}>(values:T):T{
+  const saleProp=values.saleProp&&typeof values.saleProp==='object'?values.saleProp as Record<string,unknown>:null
+  if(!saleProp)return values
+  const numbers=new Map<string,number>()
+  let next=-1
+  const nextProp:Record<string,unknown>={}
+  for(const [name,choices] of Object.entries(saleProp)){
+    nextProp[name]=Array.isArray(choices)?choices.map(choice=>{
+      if(!choice||typeof choice!=='object'||!(choice as SaleChoice).custom)return choice
+      const c=choice as SaleChoice,key=`${name}\u0000${c.text}`
+      if(!numbers.has(key))numbers.set(key,next--)
+      return {...c,value:numbers.get(key)!}
+    }):choices
+  }
+  const rows=Array.isArray(values.skuTable)?(values.skuTable as SkuRow[]).map(row=>Array.isArray(row?.sku_props)?{...row,sku_props:row.sku_props.map(p=>Number(p.value)<0&&numbers.has(`${p.name}\u0000${p.text}`)?{...p,value:numbers.get(`${p.name}\u0000${p.text}`)!}:p)}:row):values.skuTable
+  return {...values,saleProp:nextProp,skuTable:rows}
+}
 export function mapReviewedVariants(dimensions:SaleDimension[],variants:ReviewedVariant[],mapping:Record<string,string>) {
   if(Object.keys(mapping).some(key=>!dimensions.some(d=>d.name===key)))throw new Error('映射包含未知平台属性。')
   const active=dimensions.filter(d=>mapping[d.name])
@@ -57,7 +83,10 @@ export function mapReviewedVariants(dimensions:SaleDimension[],variants:Reviewed
       const choice:SaleChoice=matches[0]||{value:-1,text,custom:true}
       if(!validChoice(d,choice))throw new Error(`${d.label} 不允许自定义规格“${text}”。`)
       saleProp[d.name]??=[]
-      if(!saleProp[d.name].some(c=>String(c.value)===String(choice.value)&&c.text===choice.text))saleProp[d.name].push(choice)
+      const listed=saleProp[d.name].find(c=>String(c.value)===String(choice.value)&&c.text===choice.text)
+      // A dimension that shows pictures (颜色) carries the variant's picture on its value, from the first variant that has one.
+      if(!listed)saleProp[d.name].push(d.supportImg&&variant.image_url?{...choice,imgUrl:platformImagePath(variant.image_url)}:{...choice})
+      else if(d.supportImg&&!listed.imgUrl&&variant.image_url)listed.imgUrl=platformImagePath(variant.image_url)
       if(d.maxItems&&saleProp[d.name].length>d.maxItems)throw new Error(`${d.label} 超过规格数量上限。`)
       return {...choice,id:dimensionId(d),name:d.name,label:d.label}
     })
@@ -66,5 +95,5 @@ export function mapReviewedVariants(dimensions:SaleDimension[],variants:Reviewed
     if(!Number.isFinite(price)||price<0||(stock!=null&&(!Number.isSafeInteger(stock)||stock<0)))throw new Error(`${variant.label} 的价格或库存不合法。`)
     skuTable.push({sku_props:props,sku_price:price,sku_amountOnSale:stock,sku_picture_url:variant.image_url,sku_cargoNumber:'',sku_status:1})
   }
-  return {saleProp,skuTable}
+  return numberCustomValues({saleProp,skuTable})
 }

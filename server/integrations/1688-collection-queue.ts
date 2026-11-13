@@ -8,13 +8,13 @@ import { createDraftFromProduct } from './1688-drafts.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
-import { ensureAlbum, ensurePhoto } from './image-album.js'
+import { ensureAlbum, ensurePhoto, rehostToAlbum } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
 
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
 // from the collected ones, put into the shop album and the product, and published without screening (the owner's choice).
 // SKU pictures stay as collected. A failure stops the job with its reason; nothing falls back to the originals.
-const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45
+const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30
 const GENERATED:GeneratedType[]=[...SUITE_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
@@ -189,6 +189,22 @@ async function processJob(job:QueueJob){
     const droppedSku=variants.filter(v=>v.image_url&&!variantImage(v.image_url)).length
     if(droppedDetails||droppedSku)report.droppedImages={details:droppedDetails,sku:droppedSku}
   }
+  // SKU pictures go into the shop's album first (the platform shows only its own album's pictures on sale values).
+  const rehosted=new Map<string,string>()
+  const skuPictures=[...new Set(variants.map(v=>variantImage(v.image_url)).filter((u):u is string=>Boolean(u)))]
+  if(skuPictures.length){
+    const ctx={tenantId:job.tenant_id,actorId:actor.id,requestId:job.id}
+    let failed=0
+    try{
+      const album=await ensureAlbum(ctx,job.connection_id)
+      for(const [i,url] of skuPictures.slice(0,MAX_SKU_PICTURES).entries()){
+        try{rehosted.set(url,await rehostToAlbum(ctx,job.connection_id,album,url,`sku-${source.id.slice(0,8)}-${i+1}.jpg`))}catch{failed++}
+      }
+    }catch{failed=skuPictures.length}
+    failed+=Math.max(0,skuPictures.length-MAX_SKU_PICTURES)
+    report.skuPictures={uploaded:rehosted.size,failed}
+  }
+  const skuPicture=(url:string|null)=>{const kept=variantImage(url);return kept?(rehosted.get(kept)??kept):null}
   const client=await db.connect()
   let product:Json
   try{
@@ -200,7 +216,7 @@ async function processJob(job:QueueJob){
     product=(await client.query(`INSERT INTO products(tenant_id,sku,name,category,description,specifications,base_price,base_currency,status,images,detail_images)VALUES($1,$2,$3,$4,$5,$6,$7,'CNY','active',$8,$9) RETURNING *`,[job.tenant_id,sourceSku(source),source.title.slice(0,200),source.category_path?.slice(0,120)||null,description,JSON.stringify(source.attributes||{}),price,JSON.stringify([...new Set([images.main,...images.gallery])]),JSON.stringify(images.details)])).rows[0]
     // The source listing's ladder ("¥39.00 (2 pieces) / ¥35.00 (10 pieces)") becomes the product's quantity price tiers.
     for(const tier of ladderTiers(source.attributes?.['阶梯价格']))await client.query('INSERT INTO product_prices(tenant_id,product_id,min_quantity,unit_price)VALUES($1,$2,$3,$4)',[job.tenant_id,product.id,tier.quantity,tier.price])
-    for(const variant of variants)await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[job.tenant_id,product.id,variant.id,variant.position,variant.label,JSON.stringify({...variant.attributes,...collectedSkuAttributes(source,variant)}),variantImage(variant.image_url),Number(variant.price),Number(variant.stock)])
+    for(const variant of variants)await client.query('INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[job.tenant_id,product.id,variant.id,variant.position,variant.label,JSON.stringify({...variant.attributes,...collectedSkuAttributes(source,variant)}),skuPicture(variant.image_url),Number(variant.price),Number(variant.stock)])
     await client.query("UPDATE collected_products SET product_id=$2,processing_status='ready',updated_at=now() WHERE id=$1",[source.id,product.id])
     await client.query("UPDATE integration_1688_collection_queue_jobs SET phase='materializing',product_id=$2,report=$3::jsonb,updated_at=now() WHERE id=$1 AND worker_id=$4 AND status='processing'",[job.id,product.id,JSON.stringify(report),job.worker_id])
     await client.query('COMMIT')

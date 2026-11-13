@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { buildSkuRows, mapReviewedVariants, skuKey, type SaleDimension } from '../shared/1688-skus.js'
+import { buildSkuRows, mapReviewedVariants, numberCustomValues, platformImagePath, skuKey, type SaleDimension } from '../shared/1688-skus.js'
 import { validatePublishBody } from '../server/routes/1688.js'
 import { collectedSkuAttributes } from '../server/integrations/1688-collected-skus.js'
 
@@ -41,4 +41,18 @@ assert.deepEqual(collectedSkuAttributes(collected,{label:'黑色>有线款',attr
 const sourceDimensions:SaleDimension[]=[{name:'p-1627207',propertyId:1627207,label:'颜色分类',customizable:true,fieldType:'string'},{name:'p-1235',propertyId:1235,label:'规格尺寸',customizable:true,fieldType:'string'}]
 const sourceMapped=mapReviewedVariants(sourceDimensions,[{id:'1',label:'黑色>有线款',attributes:first,unit_price:18,stock:1134,image_url:null},{id:'2',label:'黑色>无线款',attributes:second,unit_price:28,stock:4142,image_url:null}],{'p-1627207':'颜色分类','p-1235':'规格尺寸'})
 assert.equal(sourceMapped.skuTable.length,2);assert.equal(sourceMapped.skuTable[0].sku_props[0].text,'黑色');assert.equal(sourceMapped.skuTable[1].sku_props[1].text,'无线款')
-console.log(JSON.stringify({cartesianGeneration:'ok',unknownStock:'ok',stableCombinationRetention:'ok',duplicateChoiceGuard:'ok',enumGuard:'ok',requiredDimensions:'ok',combinationLimit:'ok',reviewedVariantMapping:'ok',sparseCombinations:'ok',duplicateMappingGuard:'ok',missingAttributeGuard:'ok',publishConsistency:'ok',collectedDimensionRecovery:'ok'}))
+// Pictures on sale values (颜色 shows them), album paths as the platform writes them, custom values numbered -1, -2, ….
+const pictured:SaleDimension[]=[{name:'p-3216',propertyId:3216,label:'颜色',required:true,supportImg:true,customizable:true,fieldType:'string'},{name:'p-450',propertyId:450,label:'尺码',customizable:true,fieldType:'string'}]
+const withPictures=mapReviewedVariants(pictured,[
+  {id:'a',label:'黑S',attributes:{颜色:'黑色',尺码:'S'},unit_price:10,stock:1,image_url:'https://cbu01.alicdn.com/img/ibank/O1CN-black.jpg'},
+  {id:'b',label:'黑M',attributes:{颜色:'黑色',尺码:'M'},unit_price:10,stock:1,image_url:null},
+  {id:'c',label:'白S',attributes:{颜色:'白色',尺码:'S'},unit_price:10,stock:1,image_url:null}],{'p-3216':'颜色','p-450':'尺码'})
+assert.deepEqual(withPictures.saleProp['p-3216'],[{value:-1,text:'黑色',custom:true,imgUrl:'img/ibank/O1CN-black.jpg'},{value:-2,text:'白色',custom:true}])
+assert.deepEqual(withPictures.saleProp['p-450'].map(c=>c.value),[-3,-4],'every custom value has its own number')
+assert.deepEqual(withPictures.skuTable.map(r=>r.sku_props.map(p=>p.value)),[[-1,-3],[-1,-4],[-2,-3]],'SKU rows follow the numbering')
+assert.equal(new Set(withPictures.skuTable.map(r=>skuKey(r.sku_props))).size,3)
+assert.equal(platformImagePath('https://img.alicdn.com/imgextra/a.jpg'),'https://img.alicdn.com/imgextra/a.jpg')
+const editorDraft={saleProp:{'p-3216':[{value:-1,text:'红',custom:true},{value:-1,text:'蓝',custom:true}]},skuTable:[{sku_props:[{id:3216,name:'p-3216',label:'颜色',value:-1,text:'红'}],sku_amountOnSale:1},{sku_props:[{id:3216,name:'p-3216',label:'颜色',value:-1,text:'蓝'}],sku_amountOnSale:1}]}
+const renumbered=numberCustomValues(editorDraft)
+assert.deepEqual([(renumbered.saleProp as any)['p-3216'].map((c:any)=>c.value),(renumbered.skuTable as any[]).map(r=>r.sku_props[0].value)],[[-1,-2],[-1,-2]],'an editor draft with -1 everywhere is renumbered at publish')
+console.log(JSON.stringify({salePictures:'ok',customNumbering:'ok',cartesianGeneration:'ok',unknownStock:'ok',stableCombinationRetention:'ok',duplicateChoiceGuard:'ok',enumGuard:'ok',requiredDimensions:'ok',combinationLimit:'ok',reviewedVariantMapping:'ok',sparseCombinations:'ok',duplicateMappingGuard:'ok',missingAttributeGuard:'ok',publishConsistency:'ok',collectedDimensionRecovery:'ok'}))
