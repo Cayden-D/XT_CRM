@@ -9,13 +9,13 @@ import { saveCollectedPackage } from './product-attributes.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, SUITE_TYPES, productFacts, suiteBrand, suiteBrandOption, suitePrompt, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
-import { ensureAlbum, ensurePhoto, rehostToAlbum } from './image-album.js'
+import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
 
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
 // from the collected ones, put into the shop album and the product, and published without screening (the owner's choice).
 // SKU pictures stay as collected. A failure stops the job with its reason; nothing falls back to the originals.
-const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30
+const IMAGE_WAIT_MS=30*60_000,IMAGE_POLL_SECONDS=45,MAX_SKU_PICTURES=30,MAX_UPLOAD_ROUNDS=4
 const GENERATED:GeneratedType[]=[...SUITE_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
@@ -129,7 +129,17 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   try{album=await ensureAlbum(ctx,job.connection_id)}
   catch(error){return {kind:'block',message:`AI 新图已生成，但没能确定店铺相册：${(error instanceof Error?error.message:'相册接口调用失败').replace(/[。.]+$/,'')}。可在「图片」里手动上传一张图到店铺相册后重新入队。`}}
   const urls:string[]=[]
-  for(const asset of ordered)urls.push(await ensurePhoto(ctx,asset,job.connection_id,album))
+  // An upload that is not confirmed is tried again (and read back) here; if a round still fails, the job waits and comes
+  // back, keeping the pictures already in the album, up to MAX_UPLOAD_ROUNDS rounds.
+  try{for(const asset of ordered)urls.push(await ensurePhoto(ctx,asset,job.connection_id,album,{retry:true}))}
+  catch(error){
+    const reason=(error instanceof Error?error.message:'相册上传失败').replace(/[。.]+$/,'')
+    if(!retryableUpload(error))return {kind:'block',message:`AI 新图上传店铺相册失败：${reason}。`}
+    const rounds=Number(state.uploadRounds||0)+1
+    state.uploadRounds=rounds
+    if(rounds>=MAX_UPLOAD_ROUNDS)return {kind:'block',message:`AI 新图上传店铺相册 ${rounds} 轮仍未成功（已上传 ${urls.length}/${ordered.length} 张）：${reason}。请稍后重新入队。`}
+    return {kind:'wait',message:`有图片上传店铺相册未确认（已上传 ${urls.length}/${ordered.length} 张）：${reason}。稍后自动重试第 ${rounds+1} 轮并继续上架。`}
+  }
   const mains=urls.slice(0,SUITE_TYPES.length),details=urls.slice(SUITE_TYPES.length)
   const client=await db.connect()
   try{
@@ -159,7 +169,7 @@ async function processJob(job:QueueJob){
   let report:Json
   let variantImage=(url:string|null)=>url
   if(auto&&!previous.generatedImages){
-    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
+    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,uploadRounds:previous.uploadRounds,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
     if(Date.now()-Date.parse(state.imageWaitSince)>IMAGE_WAIT_MS){await finish(job,'blocked','AI 生图等待超时（30 分钟），请在采集商品的「商品图片」里查看后重新入队。',state);return}
     const step=await generateListingImages(job,source,actor,auto,state)
     if(step.kind==='block'){await finish(job,'blocked',step.message,state);return}
