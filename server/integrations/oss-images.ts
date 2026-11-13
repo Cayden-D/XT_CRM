@@ -10,7 +10,7 @@ let previewClient:OSS|undefined
 
 export function requireImageStorage(){
   if(!config.OSS_REGION||!config.OSS_BUCKET||!config.OSS_ACCESS_KEY_ID||!config.OSS_ACCESS_KEY_SECRET)throw new IntegrationError('OSS_NOT_CONFIGURED','请先在服务器配置私有 OSS Bucket 与访问凭据。',503)
-  return client??=new OSS({region:config.OSS_REGION,bucket:config.OSS_BUCKET,accessKeyId:config.OSS_ACCESS_KEY_ID,accessKeySecret:config.OSS_ACCESS_KEY_SECRET,authorizationV4:true,secure:true,timeout:30_000})
+  return client??=new OSS({region:config.OSS_REGION,bucket:config.OSS_BUCKET,accessKeyId:config.OSS_ACCESS_KEY_ID,accessKeySecret:config.OSS_ACCESS_KEY_SECRET,authorizationV4:true,secure:true,timeout:120_000})
 }
 
 export function imagePreviewClient(){

@@ -92,12 +92,20 @@ export async function resizeImage(bytes: Buffer, width: number, height: number, 
   return { png, width, height }
 }
 
-export async function download(url: string, limit = 25_000_000) {
-  let response: Response
-  try { response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(60_000) }) } catch { throw new IntegrationError('IMAGE_DOWNLOAD_FAILED', '生成图片下载失败。', 502) }
-  if (!response.ok || !response.body) throw new IntegrationError('IMAGE_DOWNLOAD_FAILED', '生成图片已失效或无法读取。', 502)
-  if (Number(response.headers.get('content-length') || 0) > limit) throw new IntegrationError('IMAGE_TOO_LARGE', '图片超过下载上限。', 400)
-  const reader = response.body.getReader(), parts: Uint8Array[] = []
+export async function download(url: string, limit = 25_000_000, follow?: (location: string) => string) {
+  let response: Response | undefined, current = url
+  // Redirects are refused, except for generated results, where each hop is checked again (`follow`), at most three.
+  for (let hop = 0; hop <= 3; hop++) {
+    try { response = await fetch(current, { redirect: follow ? 'manual' : 'error', signal: AbortSignal.timeout(60_000) }) } catch { throw new IntegrationError('IMAGE_DOWNLOAD_FAILED', '生成图片下载失败（网络连接失败或超时）。', 502) }
+    const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
+    if (!follow || !location) break
+    if (hop === 3) throw new IntegrationError('IMAGE_DOWNLOAD_FAILED', '生成图片下载失败（跳转次数过多）。', 502)
+    current = follow(new URL(location, current).href)
+  }
+  if (!response!.ok || !response!.body) throw new IntegrationError('IMAGE_DOWNLOAD_FAILED', `生成图片已失效或无法读取（HTTP ${response!.status}）。`, 502)
+  const response_ = response!
+  if (Number(response_.headers.get('content-length') || 0) > limit) throw new IntegrationError('IMAGE_TOO_LARGE', '图片超过下载上限。', 400)
+  const reader = response_.body!.getReader(), parts: Uint8Array[] = []
   let length = 0
   try { while (true) { const { done, value } = await reader.read(); if (done) break; length += value.length; if (length > limit) throw new IntegrationError('IMAGE_TOO_LARGE', '图片超过下载上限。', 400); parts.push(value) } } finally { reader.releaseLock() }
   return Buffer.concat(parts.map(p => Buffer.from(p)))
@@ -297,7 +305,7 @@ async function step(asset: Asset) {
       return
     }
     const task = await getImageTask(asset.task_id!)
-    if (task.status === 'completed') { await complete(asset, await download(resultUrl(task.url!)), task.cost); return }
+    if (task.status === 'completed') { await complete(asset, await download(resultUrl(task.url!), 25_000_000, resultUrl), task.cost); return }
     if (task.status === 'failed') { await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, `生成失败：${task.error}`]); return }
     if (Date.now() - new Date(asset.created_at).getTime() > 20 * 60_000) { await db.query("UPDATE image_assets SET status='failed',error='生成超时（超过 20 分钟），请重试。',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id]); return }
     await db.query("UPDATE image_assets SET next_poll_at=now()+interval '4 seconds',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id])

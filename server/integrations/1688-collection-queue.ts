@@ -136,7 +136,12 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   const failed=ordered.find(r=>r.status==='failed')
   if(failed||ordered.length<GENERATED.length)return {kind:'block',message:`AI 生图失败：${String(failed?.error||'部分图片缺失').replace(/[。.]+$/,'')}。请在采集商品的「商品图片」里重试后重新入队。`}
   const done=ordered.filter(r=>r.status==='completed').length
-  if(done<ordered.length)return {kind:'wait',message:`AI 生图中：已生成 ${done}/${ordered.length} 张，完成后自动上传店铺相册并上架。`}
+  if(done<ordered.length){
+    // Finished at the provider but not yet saved: say why, so a stuck save is not mistaken for slow generation.
+    const retrying=ordered.filter(r=>r.status==='processing'&&r.error)
+    const why=retrying.length?`其中 ${retrying.length} 张已生成但保存未成功，正在自动重试（${String(retrying[0].error).replace(/[。.]+$/,'')}）。`:''
+    return {kind:'wait',message:`AI 生图中：已生成 ${done}/${ordered.length} 张，完成后自动上传店铺相册并上架。${why}`}
+  }
   const ctx={tenantId:job.tenant_id,actorId:actor.id,requestId:job.id}
   let album:string
   try{album=await ensureAlbum(ctx,job.connection_id)}

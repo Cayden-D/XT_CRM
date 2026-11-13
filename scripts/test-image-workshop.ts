@@ -39,7 +39,9 @@ globalThis.fetch = async (input, init) => {
     return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ images: images.map(item) }) } }] })
   }
   if (url === 'https://dashscope.fixture.invalid/compatible-mode/v1/images/generations') { calls.qwen.push(JSON.parse(String(init?.body))); return reply({ data: [{ url: qwenResult }] }) }
-  if (url === qwenResult || url.startsWith('https://upload.apimart.fixture/')) return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
+  // The first result link answers with a redirect to its CDN copy, as some result hosts do.
+  if (url === 'https://upload.apimart.fixture/f/image/task_1.png') return new Response(null, { status: 302, headers: { location: 'https://cdn.apimart.fixture/f/image/task_1.png' } })
+  if (url === qwenResult || url.startsWith('https://upload.apimart.fixture/') || url.startsWith('https://cdn.apimart.fixture/')) return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
   if (url === 'https://apimart.fixture.invalid/v1/images/generations') {
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer apimart-fixture-key')
     const body = JSON.parse(String(init?.body)); calls.submit.push(body)
@@ -113,6 +115,7 @@ try {
   assert.match(editCall.prompt, /纯白色/)
   assert.equal(calls.qwen.length, 0)
   calls.submit.length = 0
+  // (its result link redirected once to the CDN copy and was still saved; see `done` below)
   const done = (await call('GET', `/assets?ids=${edit.id}`)).json().data[0]
   assert.deepEqual([done.status, done.width, done.risky], ['completed', 1024, false])
   assert.ok(done.url.startsWith('https://images.example.com/'), 'signed link on the configured domain')

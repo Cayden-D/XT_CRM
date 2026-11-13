@@ -176,3 +176,5 @@
 .br-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
 @media (max-width:900px) { .br-page { grid-template-columns:minmax(0,1fr); } .br-list li { grid-template-columns:48px minmax(0,1fr); } .br-list img, .br-list .br-logo-empty { width:48px; height:48px; } .br-actions { grid-column:1 / -1; justify-content:flex-start; } }
 .br-hint { color:#6a7a8e; font-size:12px; line-height:1.5; }
+
+.iw-asset-retry { display:block; margin-top:6px; color:#b45309; font-size:12px; line-height:1.4; }

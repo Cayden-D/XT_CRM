@@ -55,7 +55,7 @@ function AssetCard({asset, onChange, onRemove, onEdit, canApply, onApplied}:{ass
     <div className="iw-asset-media">
       {asset.url ? <button onClick={() => setZoom(true)} aria-label={`查看${asset.label}大图`}><img src={asset.url} alt={asset.label} loading="lazy"/></button>
         : asset.status === 'failed' ? <div className="iw-asset-state"><AlertCircle size={22}/><small>{asset.error || '生成失败'}</small></div>
-        : <div className="iw-asset-state"><LoaderCircle size={22} className="spin"/><small>{asset.status === 'pending' ? '排队中…' : '生成中，约 20–60 秒'}</small></div>}
+        : <div className="iw-asset-state"><LoaderCircle size={22} className="spin"/><small>{asset.status === 'pending' ? '排队中…' : '生成中，约 20–60 秒'}</small>{asset.error && <small className="iw-asset-retry">{asset.error}</small>}</div>}
       <span className="iw-asset-label">{asset.replaces_index != null ? `替代主图 ${asset.replaces_index + 1}` : asset.label}</span>
       {asset.trigger === 'agent' && <span className="iw-asset-agent" title="Agent 自动生成"><Bot size={12}/></span>}
     </div>
