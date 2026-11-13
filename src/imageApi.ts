@@ -11,7 +11,7 @@ export type ImageAsset = {
   applied_to:{ collectedProductId:string; index:number; placement:'replace'|'append'|'detail'; previousUrl:string|null; productId:string|null }|null; applied_at:string|null
 }
 export type AlbumShop = { id:string; display_name:string; status:string; album_id:string|null }
-export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; enabled_at:string|null; revision:number }
+export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; hero_badges:string[]; enabled_at:string|null; revision:number }
 export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
@@ -33,7 +33,7 @@ export const flagged = (f:Finding|null|undefined) => Boolean(f && (!f.readable |
 const base = '/api/image-workshop'
 const json = (method:string, body:unknown) => ({ method, body:JSON.stringify(body) })
 export const getImageSettings = () => request<{data:ImageSettings;services:ImageServices}>(`${base}/settings`)
-export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
+export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
 export const getProductImages = (id:string) => request<{data:ProductImages}>(`${base}/products/${id}`)
 export const screenProductImages = (id:string, details=false) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details }))
 export const replaceFlagged = (id:string) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', {}))

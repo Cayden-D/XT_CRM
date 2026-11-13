@@ -178,3 +178,12 @@
 .br-hint { color:#6a7a8e; font-size:12px; line-height:1.5; }
 
 .iw-asset-retry { display:block; margin-top:6px; color:#b45309; font-size:12px; line-height:1.4; }
+
+.iw-hero-badges { display:grid; gap:6px; margin:14px 0 4px; }
+.iw-hero-badges > small { color:#6b7787; font-size:12px; }
+.iw-hero-list { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.iw-hero-item { display:inline-flex; align-items:center; border:1px solid #cdd6e0; border-radius:6px; background:#fff; }
+.iw-hero-item input { width:118px; border:0; padding:6px 8px; font:inherit; background:none; }
+.iw-hero-item button { border:0; background:none; color:#8a94a1; padding:4px 6px; cursor:pointer; display:grid; place-items:center; }
+.iw-hero-actions { display:flex; gap:8px; }
+.iw-error-text { color:#c2410c; font-size:12px; }

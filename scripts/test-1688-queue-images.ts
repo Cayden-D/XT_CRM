@@ -119,15 +119,15 @@ try {
   const sourceId = await collect()
   let state = await run(sourceId)
   assert.deepEqual([state.status, state.attempts], ['queued', 0], state.message)
-  assert.match(state.message, /正在用 AI 生成 6 张主图和 3 张详情图/)
+  assert.match(state.message, /正在用 AI 生成 5 张主图和 3 张详情图/)
   const generated = (await db.query("SELECT operation,options FROM image_assets WHERE collected_product_id=$1 ORDER BY operation", [sourceId])).rows
-  assert.equal(generated.length, 9)
+  assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])
   // OSS times out three times on the first finished picture: it is saved again later instead of failing.
   ossFailures = 3
   await drain()
-  assert.equal(submits, 9)
+  assert.equal(submits, 8)
   assert.ok((await db.query("SELECT bool_and(status='completed') AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
 
   // A picture already marked failed by OSS (as before this fix) is fetched and saved again by the job, not generated again.
@@ -135,7 +135,7 @@ try {
   state = await run(sourceId)
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /1 张 AI 图已生成但未保存成功，正在重新保存（不会重新生图）/)
   await drain()
-  assert.equal(submits, 9, 'nothing generated again')
+  assert.equal(submits, 8, 'nothing generated again')
   assert.ok((await db.query("SELECT bool_and(status='completed' AND oss_key IS NOT NULL) AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
 
   // A job stopped for its pictures (here: the wait ran out) resumes by itself once they are all saved — not before.
@@ -162,32 +162,32 @@ try {
   // An upload that times out three times in a row: the job waits for another round instead of stopping.
   uploadFailures = 3
   state = await run(sourceId)
-  assert.equal(state.status, 'queued', state.message); assert.match(state.message, /上传店铺相册未确认（已上传 0\/9 张）.*已自动重试 3 次.*第 2 轮/)
+  assert.equal(state.status, 'queued', state.message); assert.match(state.message, /上传店铺相册未确认（已上传 0\/8 张）.*已自动重试 3 次.*第 2 轮/)
   assert.deepEqual([uploadAttempts, albumUploads, state.attempts], [3, 0, 0])
   assert.equal((await db.query("SELECT count(*)::int AS n FROM image_assets WHERE collected_product_id=$1 AND photo_status='unknown'", [sourceId])).rows[0].n, 1)
   // Next round: one more timeout is retried, and a copy not yet readable is read again; everything ends up uploaded.
   uploadFailures = 1; unreachable = 1
   state = await run(sourceId)
-  assert.equal(state.status, 'queued', state.message); assert.match(state.message, /已生成并上传 9 张/)
-  assert.equal(submits, 9, 'a retry does not generate again'); assert.equal(albumUploads, 9, 'the nine generated pictures')
-  assert.equal(uploadAttempts, 3 + 1 + 9, 'the timed-out picture was tried again')
+  assert.equal(state.status, 'queued', state.message); assert.match(state.message, /已生成并上传 8 张/)
+  assert.equal(submits, 8, 'a retry does not generate again'); assert.equal(albumUploads, 8, 'the eight generated pictures')
+  assert.equal(uploadAttempts, 3 + 1 + 8, 'the timed-out picture was tried again')
   assert.equal(addCalls, 1); assert.ok(uploadedTo.every(id => id === '777'), 'uploaded into the new album')
   assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '777')
   const source = (await db.query('SELECT main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1', [sourceId])).rows[0]
   assert.equal(source.main_image_url, 'https://cbu01.alicdn.com/img/ibank/album-1.jpg', 'the 1688 首图 comes first')
   // 1688 order: 首图 first (not the white picture), the white picture fifth — the last of the five 1688 shows.
   const order = (await db.query("SELECT operation FROM image_assets WHERE collected_product_id=$1 AND applied_to->>'placement'='replace' ORDER BY (applied_to->>'index')::int", [sourceId])).rows.map(r => r.operation)
-  assert.deepEqual(order, ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white', 'suite_model'])
-  assert.equal(source.gallery_images.length, 6)
-  assert.deepEqual(source.detail_images, [7, 8, 9].map(n => `https://cbu01.alicdn.com/img/ibank/album-${n}.jpg`))
+  assert.deepEqual(order, ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white'])
+  assert.equal(source.gallery_images.length, 5)
+  assert.deepEqual(source.detail_images, [6, 7, 8].map(n => `https://cbu01.alicdn.com/img/ibank/album-${n}.jpg`))
   state = await run(sourceId)
   assert.equal(state.status, 'published', state.message)
   const body = JSON.stringify(published)
-  assert.ok(body.includes('album-1.jpg') && body.includes('album-9.jpg')); assert.ok(!body.includes('main-mark') && !body.includes('detail-ok'), 'only the new pictures')
+  assert.ok(body.includes('album-1.jpg') && body.includes('album-8.jpg')); assert.ok(!body.includes('main-mark') && !body.includes('detail-ok'), 'only the new pictures')
   // The SKU picture is copied into the album (not regenerated) and shown on the colour value; minimum order = first tier.
-  assert.equal(albumUploads, 10)
-  assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, 'https://cbu01.alicdn.com/img/ibank/album-10.jpg')
-  assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-10.jpg' }])
+  assert.equal(albumUploads, 9)
+  assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, 'https://cbu01.alicdn.com/img/ibank/album-9.jpg')
+  assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-9.jpg' }])
   assert.equal(published.formValues.skuTable[0].sku_props[0].value, -1)
   assert.equal(published.formValues.beginAmount, 2, 'the minimum order matches the first quantity tier')
   // The source's 件重尺 (heaviest SKU, sides longest first) is used, not the shop template.
@@ -202,8 +202,8 @@ try {
   // The collected ladder is the quantity quote (three tiers at most); the platform's description structure is kept.
   assert.deepEqual(published.formValues.priceRange, [{ pricerange_beginAmount: 2, pricerange_price: 39 }, { pricerange_beginAmount: 10, pricerange_price: 35 }, { pricerange_beginAmount: 50, pricerange_price: 30 }])
   assert.deepEqual([published.formValues.description.smartDetail, published.formValues.description.sizeTableDescriptionBlackIdList], [{ kept: true }, '[1]'])
-  assert.match(published.formValues.description.detailList[0].content, /album-7\.jpg[\s\S]*album-9\.jpg/, 'the generated detail pictures are in the text')
-  assert.equal(albumUploads, 10, 'nothing is uploaded twice')
+  assert.match(published.formValues.description.detailList[0].content, /album-6\.jpg[\s\S]*album-8\.jpg/, 'the generated detail pictures are in the text')
+  assert.equal(albumUploads, 9, 'nothing is uploaded twice')
   // A shop that already has the album (e.g. settings lost) finds it by name instead of creating another.
   await db.query('DELETE FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])
   const { ensureAlbum } = await import('../server/integrations/image-album.js')

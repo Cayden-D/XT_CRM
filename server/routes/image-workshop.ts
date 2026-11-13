@@ -9,7 +9,7 @@ import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
 import {
   cachedFindings, checkPrompt, download, editPrompt, flagged, imageUrl, productFacts, productImages, queueReplacements, readImage, removeImage,
-  resizeImage, screen, storeImage, detailNames, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
+  resizeImage, screen, storeImage, detailNames, HERO_BADGES, MAX_HERO_BADGES, suiteBrand, suiteBrandOption, suiteNames, suitePrompt, SUITE_TYPES, toPng, usableSource, type SuiteType,
 } from '../integrations/image-workshop.js'
 import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
 import { IMAGE_MODELS } from '../llm/qwen-image.js'
@@ -32,8 +32,8 @@ export async function present(row: Record<string, any>) {
 }
 export const assetColumns = 'id,tenant_id,collected_product_id,batch_id,operation,provider,model,source_url,reference_urls,replaces_index,options,status,task_id,lease_until,next_poll_at,oss_key,width,height,bytes,findings,error,cost,trigger,photo_status,photo_url,photo_connection_id,photo_album_id,photo_uploaded_at,applied_to,applied_at,created_at,updated_at'
 async function settingsOf(tenantId: string) {
-  return (await db.query('SELECT auto_replace,suite_model,suite_quality,enabled_at,revision,updated_at FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
-    ?? { auto_replace: false, suite_model: 'gpt-image-2.5-flare', suite_quality: 'medium', enabled_at: null, revision: 0, updated_at: null }
+  return (await db.query('SELECT auto_replace,suite_model,suite_quality,hero_badges,enabled_at,revision,updated_at FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
+    ?? { auto_replace: false, suite_model: 'gpt-image-2.5-flare', suite_quality: 'medium', hero_badges: HERO_BADGES, enabled_at: null, revision: 0, updated_at: null }
 }
 const RATIOS = [[1, 1], [4, 3], [3, 4], [3, 2], [2, 3]] as const
 const nearestRatio = (size: { width: number; height: number } | null) => {
@@ -67,16 +67,23 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
   }))
 
   app.put('/settings', { preHandler: requirePermission('integration:manage') }, async request => {
-    const input = z.object({ autoReplace: z.boolean(), suiteModel: z.enum(SUITE_MODELS).optional(), suiteQuality: z.enum(SUITE_QUALITIES), revision: z.number().int().min(0), confirmed: z.boolean().optional() }).strict().parse(request.body)
-    if (input.autoReplace && !input.confirmed) throw new IntegrationError('CONFIRM_REQUIRED', '开启前请确认图片资料发送至模型服务并产生费用。', 400)
+    const input = z.object({ autoReplace: z.boolean(), suiteModel: z.enum(SUITE_MODELS).optional(), suiteQuality: z.enum(SUITE_QUALITIES),
+      // 1688 首图 core terms: each short and plain text, at most MAX_HERO_BADGES, no duplicates.
+      heroBadges: z.array(z.string().trim().min(1, '优势不能为空。').max(12, '每条优势最多 12 个字。').regex(/^[^<>\n\r]+$/)).max(MAX_HERO_BADGES, `首图优势最多 ${MAX_HERO_BADGES} 条。`).refine(v => new Set(v).size === v.length, '首图优势有重复。').optional(),
+      revision: z.number().int().min(0), confirmed: z.boolean().optional() }).strict().parse(request.body)
+    // Consent is asked when switching on, not again for every later change while it stays on.
+    const current = await settingsOf(tenant(request))
+    if (input.autoReplace && !current.auto_replace && !input.confirmed) throw new IntegrationError('CONFIRM_REQUIRED', '开启前请确认图片资料发送至模型服务并产生费用。', 400)
     if (input.autoReplace && !apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY。', 503)
-    const saved = (await db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,enabled_at,revision,updated_by)
-      VALUES($1,$2,$3,$4,CASE WHEN $2 THEN now() END,1,$6) ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace,suite_model=excluded.suite_model,suite_quality=excluded.suite_quality,
+    for (const badge of input.heroBadges ?? []) checkPrompt(badge)
+    const saved = (await db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,hero_badges,enabled_at,revision,updated_by)
+      VALUES($1,$2,$3,$4,coalesce($7::jsonb,$8::jsonb),CASE WHEN $2 THEN now() END,1,$6) ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace,suite_model=excluded.suite_model,suite_quality=excluded.suite_quality,
+      hero_badges=CASE WHEN $7::jsonb IS NULL THEN image_workshop_settings.hero_badges ELSE excluded.hero_badges END,
       enabled_at=CASE WHEN excluded.auto_replace AND NOT image_workshop_settings.auto_replace THEN now() WHEN excluded.auto_replace THEN image_workshop_settings.enabled_at END,
       revision=image_workshop_settings.revision+1,updated_by=excluded.updated_by,updated_at=now() WHERE image_workshop_settings.revision=$5 RETURNING tenant_id`,
-    [tenant(request), input.autoReplace, input.suiteModel ?? (await settingsOf(tenant(request))).suite_model, input.suiteQuality, input.revision, request.authUser.sub])).rows[0]
+    [tenant(request), input.autoReplace, input.suiteModel ?? current.suite_model, input.suiteQuality, input.revision, request.authUser.sub, input.heroBadges ? JSON.stringify(input.heroBadges) : null, JSON.stringify(HERO_BADGES)])).rows[0]
     if (!saved) throw new IntegrationError('SETTINGS_CONFLICT', '设置已被他人修改，请刷新后重试。', 409)
-    await audit(request, 'image.settings.update', randomUUID(), { autoReplace: input.autoReplace, suiteModel: input.suiteModel, suiteQuality: input.suiteQuality })
+    await audit(request, 'image.settings.update', randomUUID(), { autoReplace: input.autoReplace, suiteModel: input.suiteModel, suiteQuality: input.suiteQuality, heroBadges: input.heroBadges })
     return { data: await settingsOf(tenant(request)) }
   })
 
@@ -179,7 +186,7 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     if (input.points) checkPrompt(input.points)
     const settings = await settingsOf(tenant(request))
     const facts = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId, input.points)
-      : input.title ? { title: input.title, category: null, attributes: {}, skus: [], points: input.points } : null
+      : input.title ? { title: input.title, category: null, attributes: {}, skus: [], points: input.points, badges: settings.hero_badges } : null
     if (!facts) throw new IntegrationError('TITLE_REQUIRED', '请选择采集商品，或填写商品名称。', 400)
     const refs: string[] = []
     for (const ref of input.references) refs.push((await usableSource(tenant(request), ref)).ref)

@@ -195,6 +195,31 @@ try {
   const on = (await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-sunburst', suiteQuality: 'low', revision: 0, confirmed: true })).json().data
   assert.deepEqual([on.auto_replace, on.revision], [true, 1])
   assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'low', revision: 0, confirmed: true })).statusCode, 409)
+
+  // The 1688 首图 terms: three by default, changed by the shop (add, edit, remove), checked, and used for the next 首图.
+  assert.deepEqual(on.hero_badges, ['工厂直供', '现货速发', '支持定制'])
+  const badges = (list: string[], revision: number) => call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroBadges: list, revision })
+  assert.equal((await badges(['源头工厂', '源头工厂'], 1)).statusCode, 400, 'no duplicates')
+  assert.equal((await badges(['一二三四五六七八九十一二三'], 1)).statusCode, 400, 'twelve characters at most')
+  assert.equal((await badges(['a', 'b', 'c', 'd', 'e', 'f', 'g'], 1)).statusCode, 400, 'six at most')
+  const editedReply = await badges(['源头工厂', '48小时发货'], 1); assert.equal(editedReply.statusCode, 200, editedReply.body)
+  const edited = editedReply.json().data
+  assert.deepEqual([edited.hero_badges, edited.revision, edited.auto_replace], [['源头工厂', '48小时发货'], 2, true])
+  const heroPrompt = async () => {
+    calls.submit.length = 0
+    await call('POST', '/suites', { title: '手提收纳箱', references: [{ url: cdn('main') }], types: ['suite_hero'], brandId: null })
+    await drain()
+    return calls.submit[0].prompt as string
+  }
+  const custom = await heroPrompt()
+  assert.match(custom, /源头工厂、48小时发货/); assert.ok(!custom.includes('工厂直供'))
+  assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroBadges: [], revision: 2 })).json().data.hero_badges.length, 0)
+  const plain = await heroPrompt()
+  assert.ok(plain.includes('商品名称短语') && !plain.includes('核心优势，一字不差'), 'no terms: name and known points only')
+  // Brand without a logo: its name, as text, in the top-left corner of the 首图; with a logo the corner is kept clear.
+  const facts = { title: '车载香薰', attributes: {}, skus: [], badges: ['工厂直供'] }
+  assert.match(workshop.suitePrompt('suite_hero', facts, { name: '拓洋', hasLogo: false }), /左上角用醒目的字体准确写出品牌名“拓洋”/)
+  assert.match(workshop.suitePrompt('suite_hero', facts, { name: '拓洋', hasLogo: true }), /左上角约 16% 宽、16% 高的区域保持干净/)
   const fresh = await product([cdn('clean-new'), cdn('mark-new')])
   while (await workshop.screenNextProduct()) { /* screen everything due */ }
   const agentRows = (await db.query('SELECT collected_product_id,trigger,model,options,replaces_index FROM image_assets WHERE collected_product_id=ANY($1::uuid[]) AND trigger=$2', [[old, fresh], 'agent'])).rows
@@ -256,7 +281,7 @@ try {
   assert.equal((await call('DELETE', `/assets/${resized.id}`)).statusCode, 200)
   assert.ok(!objects.has(`image-workshop/${tenant}/${resized.id}.png`))
 
-  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
+  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', heroBadges: 'ok', heroTextBrand: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, original)

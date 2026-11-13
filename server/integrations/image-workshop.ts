@@ -24,9 +24,14 @@ export type SuiteType = typeof SUITE_TYPES[number]
  * it is an eye-catching 首图 with the shop's core terms, not a white background; the white picture goes fifth, the last
  * one 1688 shows (its own rule: a white last picture gets more exposure).
  */
-export const LISTING_MAIN_TYPES = ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white', 'suite_model'] as const
-/** The shop's core terms on the 首图. */
-export const HERO_BADGES = ['工厂直供', '现货速发', '支持定制']
+export const LISTING_MAIN_TYPES = ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white'] as const
+/** The shop's core terms on the 首图 until it sets its own (图片工坊设置, up to MAX_HERO_BADGES). */
+export const HERO_BADGES = ['工厂直供', '现货速发', '支持定制'], MAX_HERO_BADGES = 6
+/** The shop's current 首图 terms. */
+export async function heroBadges(tenantId: string): Promise<string[]> {
+  const row = (await db.query('SELECT hero_badges FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
+  return Array.isArray(row?.hero_badges) ? row.hero_badges.filter((b: unknown): b is string => typeof b === 'string' && b.trim().length > 0) : HERO_BADGES
+}
 /** The logo, with its plate, never exceeds this square in the top-left corner. */
 export const LOGO_MAX_PX = 200
 /** Detail pictures made for automatic listing (vertical, 3:4). */
@@ -195,7 +200,7 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
   return `${KEEP}把背景换成：${scene}。光线方向、色温和透视与商品一致，商品自然融入场景，主体清晰突出，真实摄影质感。${CLEAN}`
 }
 
-export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string }
+export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string; badges?: string[] }
 /** The white main picture stays free of marks; every other picture carries the logo, placed exactly by `applyLogo`. */
 export const logoApplies = (type: GeneratedType, brand: SuiteBrand | null | undefined) => Boolean(brand?.hasLogo) && type !== 'suite_white'
 export type SuiteBrand = { name: string; hasLogo: boolean }
@@ -203,6 +208,8 @@ export function suitePrompt(type: GeneratedType, facts: SuiteFacts, brand?: Suit
   // A collected product's brand is the source seller's; with the shop's own brand chosen it must not reach the picture.
   const known = brand ? { 品牌: brand.name, ...Object.fromEntries(Object.entries(facts.attributes).filter(([k]) => !k.includes('品牌'))) } : facts.attributes
   const attrs = Object.entries(known).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
+  // Without a logo the 首图 carries the brand name in its top-left corner, as text.
+  if (type === 'suite_hero' && brand && !logoApplies(type, brand)) return `${suiteBody(type, facts, attrs)}在画面左上角用醒目的字体准确写出品牌名“${brand.name}”，一字不差，不画任何图形标志。`
   const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec', 'detail_poster', 'detail_advantages', 'detail_features'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
   const logoSpace = logoApplies(type, brand) ? '画面左上角约 16% 宽、16% 高的区域保持干净，不放文字、图标或商品主体，后期会放置品牌标识。' : ''
   return `${suiteBody(type, facts, attrs)}${brandText}${logoSpace}`
@@ -212,7 +219,13 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
   const noFake = '不得编造未提供的参数、认证、销量、功效或获奖信息。'
   const text = '画面中的文字一律使用简体中文，字体清晰、排版整齐，不出现乱码。'
   switch (type) {
-    case 'suite_hero': return `${base}生成 1688 批发商品首图（决定点击率，必须抓眼球）：商品主体放大、清晰，占画面约 55%–65%，背景用与商品相配的高对比色或渐变，光感强、色彩饱和、有冲击力。在画面最显眼的位置（如右上角大号标签或底部通栏醒目色块）用大号粗体中文写出这几项核心优势，一字不差：${HERO_BADGES.join('、')}；可再加一句不超过 10 个字的商品名称短语。文字少而大，手机缩略图里也能一眼看清。${text}除上述核心优势外，${noFake}${CLEAN}`
+    case 'suite_hero': {
+      const badges = facts.badges ?? HERO_BADGES
+      const terms = badges.length
+        ? `在画面最显眼的位置（如右上角大号标签或底部通栏醒目色块）用大号粗体中文写出这几项核心优势，一字不差：${badges.join('、')}；可再加一句不超过 10 个字的商品名称短语。`
+        : `在画面最显眼的位置用大号粗体中文写出一句不超过 10 个字的商品名称短语，可加 1–2 个只来自已知信息的核心卖点。`
+      return `${base}生成 1688 批发商品首图（决定点击率，必须抓眼球）：商品主体放大、清晰，占画面约 55%–65%，背景用与商品相配的高对比色或渐变，光感强、色彩饱和、有冲击力。${terms}文字少而大，手机缩略图里也能一眼看清。${text}${badges.length ? '除上述核心优势外，' : ''}${noFake}${CLEAN}`
+    }
     case 'suite_white': return `${base}生成电商白底主图：纯白背景（#FFFFFF），商品完整居中占画面约 80%，正面或 45° 最佳展示角度，柔和自然投影，高清摄影质感，不加任何文字。${CLEAN}`
     case 'suite_scene': return `${base}生成场景氛围图：把商品放在最符合其用途的真实使用环境中，环境干净有质感，光线自然温暖，商品是视觉焦点，不加文字。${CLEAN}`
     case 'suite_detail': return `${base}生成细节特写图：近距离微距展示商品最能体现做工与材质的部位（如表面纹理、接口、缝线、按键或结构细节），浅景深，质感清晰，可加 1–2 个简短的中文细节标注（只用已知信息）。${text}${noFake}${CLEAN}`
@@ -229,7 +242,7 @@ export async function productFacts(tenantId: string, collectedProductId: string,
   const p = (await db.query('SELECT id,title,category_path,attributes,main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1 AND tenant_id=$2', [collectedProductId, tenantId])).rows[0]
   if (!p) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
   const skus = (await db.query('SELECT label FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position LIMIT 12', [collectedProductId])).rows.map(r => r.label as string)
-  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, ...productImages(p) }
+  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, badges: await heroBadges(tenantId), ...productImages(p) }
 }
 const cleanUrls = (list: unknown) => (Array.isArray(list) ? list : []).filter((u): u is string => typeof u === 'string').flatMap(u => { try { return [sourceUrl(u)] } catch { return [] } })
 /** All main pictures of a collected product, main image first, deduplicated. */

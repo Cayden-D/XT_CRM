@@ -294,7 +294,7 @@ export function ProductImagesPanel({productId, title, user}:{productId:string;ti
 export function ImageAutomationSettings({editable}:{editable:boolean}) {
   const [settings, setSettings] = useState<ImageSettings|null>(null), [services, setServices] = useState<ImageServices|null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [agreed, setAgreed] = useState(false)
   useEffect(() => { getImageSettings().then(r => { setSettings(r.data); setServices(r.services) }).catch(cause => setError(message(cause))) }, [])
-  async function save(next:Partial<{autoReplace:boolean;suiteModel:string;suiteQuality:string}>, confirmed?:boolean) {
+  async function save(next:Partial<{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges:string[]}>, confirmed?:boolean) {
     if (!settings) return
     setBusy(true); setError('')
     try { setSettings((await saveImageSettings({ autoReplace:settings.auto_replace, suiteModel:settings.suite_model, suiteQuality:settings.suite_quality, ...next, revision:settings.revision, confirmed })).data); setConfirming(false); setAgreed(false) }
@@ -302,18 +302,38 @@ export function ImageAutomationSettings({editable}:{editable:boolean}) {
   }
   return <section className="iw-settings">
     <h3><Wand2 size={18}/>AI 图片自动处理</h3>
-    <Note>开启后，进入<b>采集自动上架</b>的商品<b>不再检查原图</b>：直接以原图为参考，用团队的 GPT-Image 模型生成 6 张主图（白底、场景、细节、模特、卖点、规格）和 3 张详情图（主海报、产品优势、产品特点），<b>生成图也不做水印/Logo 复检</b>，自动上传店铺相册后用于上架；SKU 图保持原样。生成失败时任务停下并写明原因。未进入自动上架队列的商品仍按原方式检查主图，并为带他人标识的位置生成替代图。</Note>
+    <Note>开启后，进入<b>采集自动上架</b>的商品<b>不再检查原图</b>：直接以原图为参考，用团队的 GPT-Image 模型生成 5 张主图（依次为 1688 首图、卖点、场景、规格尺寸、白底）和 3 张详情图（主海报、产品优势、产品特点），<b>生成图也不做水印/Logo 复检</b>，自动上传店铺相册后用于上架；SKU 图保持原样。生成失败时任务停下并写明原因。未进入自动上架队列的商品仍按原方式检查主图，并为带他人标识的位置生成替代图。</Note>
     {settings && <div className="iw-settings-grid">
       <label className="agent-switch"><input type="checkbox" role="switch" checked={settings.auto_replace} disabled={!editable || busy || (!settings.auto_replace && services?.apimart === false)} onChange={e => { if (e.target.checked) setConfirming(true); else void save({ autoReplace:false }) }}/><span>{settings.auto_replace ? '已开启' : '已关闭'}</span></label>
       <label>默认质量<select value={settings.suite_quality} disabled={!editable || busy} onChange={e => void save({ suiteQuality:e.target.value })}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
       <span className={`shop-status ${services?.apimart ? 'positive' : 'warning'}`}>{services?.apimart ? 'APIMart 已配置' : 'APIMart 未配置'}</span>
     </div>}
+    {settings && <HeroBadges key={settings.hero_badges.join('|')} saved={settings.hero_badges} editable={editable} busy={busy} save={badges => void save({ heroBadges:badges })}/>}
     {settings?.auto_replace && settings.enabled_at && <p className="shop-note">自 {new Date(settings.enabled_at).toLocaleString('zh-CN')} 起采集的商品会自动检查。</p>}
     {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
     {confirming && <div className="dialog-layer shop-dialog"><button className="drawer-scrim" aria-label="取消" onClick={() => setConfirming(false)}/><section className="shop-modal" role="dialog" aria-modal="true" aria-label="开启 AI 图片自动处理">
       <header><h2>开启 AI 图片自动处理</h2><button title="关闭" onClick={() => setConfirming(false)}><X size={18}/></button></header>
-      <div className="shop-modal-body"><p>采集自动上架的每件商品会生成 9 张新图，并上传 9 张到店铺相册，耗时约几分钟。</p><p>原图和生成图都不再检查水印或品牌 Logo：参考图里的他人标识可能被模型照搬到新图并直接发布，请自行确认商品和图片的使用权。</p>
+      <div className="shop-modal-body"><p>采集自动上架的每件商品会生成 8 张新图，并上传 8 张到店铺相册，耗时约几分钟。</p><p>原图和生成图都不再检查水印或品牌 Logo：参考图里的他人标识可能被模型照搬到新图并直接发布，请自行确认商品和图片的使用权。</p>
         <label className="shop-review-check"><input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}/>确认图片资料发送至模型服务并产生费用</label></div>
       <footer><button className="shop-button" onClick={() => setConfirming(false)}>取消</button><button className="shop-button primary" disabled={!agreed || busy} onClick={() => void save({ autoReplace:true }, true)}><Bot size={16}/>开启</button></footer></section></div>}
   </section>
+}
+
+/** The core terms written in large type on the 1688 首图 (add, change, remove; at most 6, 12 characters each). */
+function HeroBadges({ saved, editable, busy, save }:{ saved:string[]; editable:boolean; busy:boolean; save:(badges:string[]) => void }) {
+  const [badges, setBadges] = useState(saved)
+  const cleaned = badges.map(b => b.trim())
+  const changed = cleaned.join('|') !== saved.join('|')
+  const problem = cleaned.some(b => !b) ? '优势不能为空，不需要的请删除。' : cleaned.some(b => b.length > 12) ? '每条优势最多 12 个字。' : new Set(cleaned).size !== cleaned.length ? '优势有重复。' : ''
+  return <div className="iw-hero-badges">
+    <b>1688 首图核心优势</b><small>用大号字放在首图最显眼的位置，决定点击率；全部删除后首图只写商品名和已知卖点。</small>
+    <div className="iw-hero-list">{badges.map((badge, i) => <span key={i} className="iw-hero-item">
+      <input aria-label={`首图优势 ${i + 1}`} value={badge} maxLength={12} disabled={!editable || busy} onChange={e => setBadges(list => list.map((b, j) => j === i ? e.target.value : b))}/>
+      <button type="button" title="删除" aria-label={`删除首图优势 ${badge || i + 1}`} disabled={!editable || busy} onClick={() => setBadges(list => list.filter((_, j) => j !== i))}><X size={13}/></button>
+    </span>)}
+      {badges.length < 6 && <button type="button" className="shop-button" disabled={!editable || busy} onClick={() => setBadges(list => [...list, ''])}>+ 添加</button>}
+    </div>
+    {problem && <small className="iw-error-text">{problem}</small>}
+    {changed && <div className="iw-hero-actions"><button type="button" className="shop-button primary" disabled={!editable || busy || Boolean(problem)} onClick={() => save(cleaned)}><Check size={14}/>保存首图优势</button><button type="button" className="shop-button" disabled={busy} onClick={() => setBadges(saved)}>还原</button></div>}
+  </div>
 }
