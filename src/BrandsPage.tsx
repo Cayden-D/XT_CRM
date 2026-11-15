@@ -66,7 +66,7 @@ export default function BrandsPage() {
     </section>
     <section className="br-panel">
       <h3>本店品牌</h3>
-      <small className="br-hint">默认品牌会自动用于电商套图、AI 替代图和上架时的品牌属性。Logo 原样放在除白底图外每张图的左上角。</small>
+      <small className="br-hint">默认品牌用于电商套图、AI 替代图和上架时的品牌属性。白底图保持纯白，启用参考模板的首图使用模板自带的 Logo。</small>
       {notice && <p className="iw-note"><Check size={14}/><span>{notice}</span></p>}
       {loading ? <p className="iw-empty">正在读取…</p> : !brands.length ? <p className="iw-empty">还没有品牌。添加后，新生成的套图会自动带上品牌。</p>
         : <ul className="br-list">{brands.map(brand => <li key={brand.id}>

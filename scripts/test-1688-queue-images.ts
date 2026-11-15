@@ -116,21 +116,23 @@ try {
   const off = await run(await collect())
   assert.equal(off.status, 'blocked'); assert.match(off.message, /开启.*AI 图片自动处理/)
 
-  // On: no screening at all; nine new pictures are generated (six main, three detail) and the job waits for them.
+  // On: eight new pictures are generated (five main, three detail) without screening, with the frame on the first.
   await imageSettings(true)
+  await db.query('UPDATE image_workshop_settings SET hero_reference_frame=true WHERE tenant_id=$1', [tenant])
   const before = visionCalls
   const sourceId = await collect()
   let state = await run(sourceId)
   assert.deepEqual([state.status, state.attempts], ['queued', 0], state.message)
   assert.match(state.message, /正在用 AI 生成 5 张主图和 3 张详情图/)
-  // The 首图 is laid out from words written for this product, with the shop's own terms as a badge.
+  // The 首图 is laid out from words written for this product. The fixed frame is added after generation.
   const heroPrompt = (await db.query("SELECT prompt FROM image_assets WHERE collected_product_id=$1 AND operation='suite_hero'", [sourceId])).rows[0].prompt as string
-  assert.match(heroPrompt, /超大号粗体中文写主标题“车载香薰机”/); assert.match(heroPrompt, /“持久淡香”、“机器人造型”、“除异味”/); assert.match(heroPrompt, /车内\/办公桌/)
-  assert.match(heroPrompt, /店铺优势：工厂直供、现货速发、支持定制/)
-  assert.ok(!heroPrompt.includes('72'), 'a number not in the product facts is dropped')
+  assert.match(heroPrompt, /主标题“车载香薰机”/); assert.match(heroPrompt, /“持久淡香”、“机器人造型”、“除异味”/)
+  assert.match(heroPrompt, /左侧居中排产品文案，右侧放大、完整展示商品/)
+  assert.doesNotMatch(heroPrompt, /72|18000Pa|工厂直供/, 'only the current product’s copy goes to the model')
   const generated = (await db.query("SELECT operation,options FROM image_assets WHERE collected_product_id=$1 ORDER BY operation", [sourceId])).rows
   assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
+  assert.deepEqual(generated.filter(r => r.options.heroFrame === 'tuoyang-v1').map(r => r.operation), ['suite_hero'])
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])
   // OSS times out three times on the first finished picture: it is saved again later instead of failing.
   ossFailures = 3

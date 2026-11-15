@@ -234,11 +234,11 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
       {!product && <label className="iw-field">商品名称<input value={title} maxLength={200} onChange={e => setTitle(e.target.value)} placeholder="未选择采集商品时必填，如：车载无线充气泵 便携式"/></label>}
       <label className="iw-field">卖点与参数（可选）<textarea rows={2} maxLength={400} value={points} onChange={e => setPoints(e.target.value)} placeholder="写在卖点图和规格图上的内容，如：12V 车充 / 30 秒充满 / 数显胎压 / 尺寸 15×7×5cm。只会使用这里和商品资料里的信息"/></label>
       <div className="iw-step"><span>2</span><h3>要生成的图</h3></div>
-      <div className="iw-suite-types">{suiteTypes.map(([key, label, hint]) => <label key={key} className={types.includes(key) ? 'on' : ''}><input type="checkbox" checked={types.includes(key)} onChange={e => setTypes(e.target.checked ? suiteTypes.map(t => t[0]).filter(t => t === key || types.includes(t)) : types.filter(t => t !== key))}/><b>{label}</b><small>{hint}</small></label>)}</div>
+      <div className="iw-suite-types">{suiteTypes.map(([key, label, hint]) => <label key={key} className={types.includes(key) ? 'on' : ''}><input type="checkbox" checked={types.includes(key)} onChange={e => setTypes(e.target.checked ? suiteTypes.map(t => t[0]).filter(t => t === key || types.includes(t)) : types.filter(t => t !== key))}/><b>{label}</b><small>{key === 'suite_hero' && settings?.hero_reference_frame ? '使用拓洋黑金边框和模板自带的 Logo，中间按商品资料展示卖点' : hint}</small></label>)}</div>
       {brands.length > 0 && <div className="iw-brand-pick">
         {brand?.logo_url && <img src={brand.logo_url} alt={`${brand.name} Logo`}/>}
         <label className="iw-field">品牌<select aria-label="套图品牌" value={brandId} onChange={e => setBrandId(e.target.value)}><option value="">不使用品牌</option>{brands.map(b => <option key={b.id} value={b.id}>{b.name}{b.is_default ? '（默认）' : ''}</option>)}</select></label>
-        {brand && <small>{brand.logo_url ? 'Logo 原样放在除白底图外每张图的左上角' : '未上传 Logo，品牌名只写在卖点图和规格图上'}</small>}
+        {brand && <small>{settings?.hero_reference_frame ? '品牌选择适用于其他套图，首图使用模板自带的 Logo' : brand.logo_url ? 'Logo 原样放在除白底图外每张图的左上角' : '未上传 Logo，品牌名写在首图、卖点图和规格图上'}</small>}
       </div>}
       <div className="iw-row">
         <label className="iw-field">质量<select value={quality} onChange={e => setQuality(e.target.value)}><option value="">默认（{settings?.suite_quality ?? 'medium'}）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
@@ -294,7 +294,7 @@ export function ProductImagesPanel({productId, title, user}:{productId:string;ti
 export function ImageAutomationSettings({editable}:{editable:boolean}) {
   const [settings, setSettings] = useState<ImageSettings|null>(null), [services, setServices] = useState<ImageServices|null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [agreed, setAgreed] = useState(false)
   useEffect(() => { getImageSettings().then(r => { setSettings(r.data); setServices(r.services) }).catch(cause => setError(message(cause))) }, [])
-  async function save(next:Partial<{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges:string[]}>, confirmed?:boolean) {
+  async function save(next:Partial<{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges:string[];heroReferenceFrame:boolean}>, confirmed?:boolean) {
     if (!settings) return
     setBusy(true); setError('')
     try { setSettings((await saveImageSettings({ autoReplace:settings.auto_replace, suiteModel:settings.suite_model, suiteQuality:settings.suite_quality, ...next, revision:settings.revision, confirmed })).data); setConfirming(false); setAgreed(false) }
@@ -308,7 +308,11 @@ export function ImageAutomationSettings({editable}:{editable:boolean}) {
       <label>默认质量<select value={settings.suite_quality} disabled={!editable || busy} onChange={e => void save({ suiteQuality:e.target.value })}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
       <span className={`shop-status ${services?.apimart ? 'positive' : 'warning'}`}>{services?.apimart ? 'APIMart 已配置' : 'APIMart 未配置'}</span>
     </div>}
-    {settings && <HeroBadges key={settings.hero_badges.join('|')} saved={settings.hero_badges} editable={editable} busy={busy} save={badges => void save({ heroBadges:badges })}/>}
+    {settings && <div className="iw-hero-badges">
+      <label className="agent-switch"><input type="checkbox" role="switch" aria-describedby="hero-reference-frame-description" checked={settings.hero_reference_frame} disabled={!editable || busy} onChange={e => void save({ heroReferenceFrame:e.target.checked })}/><b>1688 首图参考模板</b></label>
+      <small id="hero-reference-frame-description">启用后，新生成的 1688 首图使用「超级工厂 · 义乌拓洋」黑金边框、固定文字和模板自带的 Logo，中间按商品资料展示卖点。适用于自动上架、手动套图和首图替换。</small>
+    </div>}
+    {settings && !settings.hero_reference_frame && <HeroBadges key={settings.hero_badges.join('|')} saved={settings.hero_badges} editable={editable} busy={busy} save={badges => void save({ heroBadges:badges })}/>}
     {settings?.auto_replace && settings.enabled_at && <p className="shop-note">自 {new Date(settings.enabled_at).toLocaleString('zh-CN')} 起采集的商品会自动检查。</p>}
     {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
     {confirming && <div className="dialog-layer shop-dialog"><button className="drawer-scrim" aria-label="取消" onClick={() => setConfirming(false)}/><section className="shop-modal" role="dialog" aria-modal="true" aria-label="开启 AI 图片自动处理">

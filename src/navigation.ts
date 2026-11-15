@@ -2,6 +2,7 @@ import { Headset, Images, LayoutDashboard, MessagesSquare, Package, PackageCheck
 import type { SessionUser } from './api'
 
 export const has = (user: SessionUser, ...names: string[]) => (user.permissions || []).some(p => p === '*' || names.some(name => p === name || p === `${name.split(':')[0]}:*`))
+export const canViewTeamCredits = (user: SessionUser) => has(user, 'user:manage', 'user:manage_team', 'integration:manage')
 const perf = (user: SessionUser) => has(user, 'performance:read', 'performance:read_own')
 
 export type Tab = { id: string; label: string; more?: boolean; can?: (user: SessionUser) => boolean }
@@ -50,6 +51,7 @@ export const sections: Section[] = [
     { id: 'agents', label: '客服账号', can: perf },
     { id: 'rules', label: '绩效规则', can: u => has(u, 'performance:read') },
     { id: 'automation', label: '自动上架', can: u => has(u, 'integration:read') },
+    { id: 'credits', label: '我的积分', can: canViewTeamCredits },
     { id: 'users', label: '账号权限', can: u => has(u, 'user:manage', 'user:manage_team') },
     { id: 'logs', label: '调用记录', can: u => has(u, 'integration:read', 'performance:read') },
   ] },

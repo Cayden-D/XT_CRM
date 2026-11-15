@@ -29,6 +29,7 @@ const jpeg = await sharp({ create: { width: 1200, height: 900, channels: 3, back
 const qwenResult = 'https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/edit-fixture.png?Expires=2099999999'
 const calls = { vision: 0, visionImages: [] as string[], qwen: [] as any[], submit: [] as any[], polls: 0 }
 const tasks = new Map<string, { polls: number; fail: boolean }>()
+let frameToScreen = ''
 let failNextTask = false
 let photoMode: 'ok' | 'reject' | 'network' = 'ok'
 const photos: { album: string; type: string; size: number }[] = []
@@ -36,10 +37,16 @@ const reply = (data: unknown, status = 200) => new Response(JSON.stringify(data)
 globalThis.fetch = async (input, init) => {
   const url = String(input)
   if (url === 'https://dashscope.fixture.invalid/compatible-mode/v1/chat/completions') {
-    const body = JSON.parse(String(init?.body)), images = body.messages.at(-1).content.filter((c: any) => c.type === 'image_url').map((c: any) => c.image_url.url as string)
+    const body = JSON.parse(String(init?.body))
+    const images: string[] = body.messages.at(-1).content.filter((c: any) => c.type === 'image_url').map((c: any) => c.image_url.url)
     calls.vision++; calls.visionImages.push(...images)
     const item = (u: string, index: number) => ({ index, readable: true, companyWatermark: { detected: u.includes('mark'), name: u.includes('mark') ? '某某贸易有限公司' : '', confidence: u.includes('mark') ? 0.99 : 0 }, famousBrandLogo: { detected: u.includes('logo'), name: u.includes('logo') ? 'Nike' : '', confidence: u.includes('logo') ? 0.99 : 0 } })
-    return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ images: images.map(item) }) } }] })
+    const findings = images.map((u, index) => frameToScreen && u.includes(frameToScreen) ? {
+      index, readable: true,
+      companyWatermark: { detected: true, name: '义乌拓洋', confidence: 0.99 },
+      famousBrandLogo: { detected: true, name: '超级工厂', confidence: 0.99 },
+    } : item(u, index))
+    return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ images: findings }) } }] })
   }
   if (url === 'https://dashscope.fixture.invalid/compatible-mode/v1/images/generations') { calls.qwen.push(JSON.parse(String(init?.body))); return reply({ data: [{ url: qwenResult }] }) }
   // The first result link answers with a redirect to its CDN copy, as some result hosts do.
@@ -83,6 +90,7 @@ try {
   // Settings: off by default; turning the agent on needs explicit consent; stale revisions are rejected.
   const initial = (await call('GET', '/settings')).json()
   assert.deepEqual([initial.data.auto_replace, initial.data.revision, initial.services.apimart], [false, 0, true])
+  assert.equal(initial.data.hero_reference_frame, false)
   assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 })).statusCode, 400)
   assert.equal((await call('PUT', '/settings', { autoReplace: false, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 }, token(tenant, ['collection:read']))).statusCode, 403)
 
@@ -281,7 +289,44 @@ try {
   assert.equal((await call('DELETE', `/assets/${resized.id}`)).statusCode, 200)
   assert.ok(!objects.has(`image-workshop/${tenant}/${resized.id}.png`))
 
-  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', heroBadges: 'ok', heroTextBrand: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
+  // The frame setting is captured at enqueue time and applies only to first-slot images.
+  const current = (await call('GET', '/settings')).json().data
+  const changeFrame = (heroReferenceFrame: boolean, revision: number) => call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroReferenceFrame, revision })
+  assert.equal((await changeFrame(true, current.revision)).json().data.hero_reference_frame, true)
+  assert.equal((await call('GET', '/settings', undefined, token(tenants[1]))).json().data.hero_reference_frame, false)
+  const logoKey = await workshop.storeImage(tenant, randomUUID(), png)
+  const brandId = (await db.query('INSERT INTO brands(tenant_id,name,logo_key,is_default,rights_confirmed_at) VALUES($1,$2,$3,true,now()) RETURNING id', [tenant, '测试店铺品牌', logoKey])).rows[0].id
+  const frameSuite = await call('POST', '/suites', { title: '车载充气泵', points: '数显胎压', references: [{ url: cdn('main') }], types: ['suite_hero', 'suite_white', 'suite_scene'], brandId })
+  assert.equal(frameSuite.statusCode, 200, frameSuite.body)
+  const [framed, white, scene] = frameSuite.json().data.assets
+  assert.equal(framed.options.heroFrame, 'tuoyang-v1')
+  assert.equal(framed.options.brand, undefined, 'the selected logo cannot overlap the reference')
+  assert.equal(white.options.heroFrame, undefined)
+  assert.equal(white.options.brand.logo, false)
+  assert.equal(scene.options.heroFrame, undefined)
+  assert.equal(scene.options.brand.logo, true)
+  const replacementProduct = await product([cdn('mark-front'), cdn('clean-side')])
+  assert.equal((await call('POST', '/products/' + replacementProduct + '/replace-flagged', {})).json().data.queued, 1)
+  const replacement = (await db.query('SELECT options,prompt FROM image_assets WHERE collected_product_id=$1 AND replaces_index=0', [replacementProduct])).rows[0]
+  assert.equal(replacement.options.heroFrame, 'tuoyang-v1')
+  assert.match(replacement.prompt, /左侧居中排产品文案/)
+  assert.equal((await changeFrame(false, current.revision + 1)).json().data.hero_reference_frame, false)
+  const defaultSuite = (await call('POST', '/suites', { title: '车载充气泵', references: [{ url: cdn('main') }], types: ['suite_hero'] })).json().data.assets[0]
+  assert.equal(defaultSuite.options.brand.logo, true)
+  assert.equal(defaultSuite.options.heroFrame, undefined)
+  frameToScreen = framed.id
+  for (let i = 0; i < 4; i++) await drain()
+  const processed = (await call('GET', '/assets?ids=' + framed.id + ',' + white.id)).json().data
+  assert.ok(processed.every((a: any) => a.status === 'completed' && !a.risky))
+  const savedFrame = objects.get('image-workshop/' + tenant + '/' + framed.id + '.png')!
+  const pixel = async (x: number, y: number) => [...await sharp(savedFrame).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  assert.deepEqual(await pixel(8, 8), [0, 0, 0])
+  assert.deepEqual(await pixel(512, 512), [215, 226, 220])
+  const footer = await pixel(1000, 1000)
+  assert.ok(footer[0] > footer[1] && footer[1] > footer[2], 'the original gold footer is present')
+  assert.deepEqual(objects.get('image-workshop/' + tenant + '/' + white.id + '.png'), (await workshop.toPng(png)).png)
+
+  console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', heroBadges: 'ok', heroTextBrand: 'ok', heroReferenceFrame: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, original)

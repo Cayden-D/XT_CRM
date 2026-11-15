@@ -7,6 +7,7 @@ import { inspectPublishingImages } from './1688-agent.js'
 import { imagePreviewClient, putPrivateImage, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
 import { brandById, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
+import { applyHeroReferenceFrame, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS } from './hero-reference-frame.js'
 import { generateQwenText, type QwenModel } from '../llm/qwen.js'
 import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type SuiteModel, type SuiteQuality } from '../llm/apimart-image.js'
 
@@ -28,11 +29,6 @@ export type SuiteType = typeof SUITE_TYPES[number]
 export const LISTING_MAIN_TYPES = ['suite_hero', 'suite_selling', 'suite_scene', 'suite_spec', 'suite_white'] as const
 /** The shop's core terms on the 首图 until it sets its own (图片工坊设置, up to MAX_HERO_BADGES). */
 export const HERO_BADGES = ['工厂直供', '现货速发', '支持定制'], MAX_HERO_BADGES = 6
-/** The shop's current 首图 terms. */
-export async function heroBadges(tenantId: string): Promise<string[]> {
-  const row = (await db.query('SELECT hero_badges FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
-  return Array.isArray(row?.hero_badges) ? row.hero_badges.filter((b: unknown): b is string => typeof b === 'string' && b.trim().length > 0) : HERO_BADGES
-}
 /** The logo, with its plate, never exceeds this square in the top-left corner. */
 export const LOGO_MAX_PX = 200
 /** Detail pictures made for automatic listing (vertical, 3:4). */
@@ -201,7 +197,7 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
   return `${KEEP}把背景换成：${scene}。光线方向、色温和透视与商品一致，商品自然融入场景，主体清晰突出，真实摄影质感。${CLEAN}`
 }
 
-export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string; badges?: string[]; heroCopy?: HeroCopy | null }
+export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string; badges?: string[]; heroCopy?: HeroCopy | null; heroReferenceFrame?: boolean }
 /** Words for the 1688 首图, written per product from its own facts. */
 export type HeroCopy = { headline: string; subline: string; features: string[]; uses: string[] }
 
@@ -212,8 +208,9 @@ const factText = (facts: SuiteFacts) => [facts.title, facts.category, facts.poin
  * dropped; with too little left (or the model unavailable) the 首图 falls back to the shop terms and the product name.
  */
 export async function heroCopy(facts: SuiteFacts, model?: QwenModel): Promise<HeroCopy | null> {
-  const known = factText(facts)
-  const grounded = (text: string) => (text.match(/\d+(?:\.\d+)?/g) ?? []).every(n => known.includes(n))
+  const numbers = (text: string) => text.match(/\d+(?:\.\d+)?/g) ?? []
+  const known = new Set(numbers(factText(facts)))
+  const grounded = (text: string) => numbers(text).every(n => known.has(n))
   const short = (value: unknown, max: number) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max && grounded(value.trim()) && !/[<>\n]/.test(value) ? value.trim() : ''
   const list = (value: unknown, max: number, count: number) => [...new Set((Array.isArray(value) ? value : []).map(v => short(v, max)).filter(Boolean))].slice(0, count)
   try {
@@ -233,9 +230,12 @@ export async function heroCopy(facts: SuiteFacts, model?: QwenModel): Promise<He
 export const logoApplies = (type: GeneratedType, brand: SuiteBrand | null | undefined) => Boolean(brand?.hasLogo) && type !== 'suite_white'
 export type SuiteBrand = { name: string; hasLogo: boolean }
 export function suitePrompt(type: GeneratedType, facts: SuiteFacts, brand?: SuiteBrand | null) {
+  const framed = type === 'suite_hero' && facts.heroReferenceFrame
   // A collected product's brand is the source seller's; with the shop's own brand chosen it must not reach the picture.
-  const known = brand ? { 品牌: brand.name, ...Object.fromEntries(Object.entries(facts.attributes).filter(([k]) => !k.includes('品牌'))) } : facts.attributes
-  const attrs = Object.entries(known).filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
+  const known = Object.entries(facts.attributes).filter(([k]) => !(brand || framed) || !k.includes('品牌'))
+  if (brand && !framed) known.unshift(['品牌', brand.name])
+  const attrs = known.filter(([k, v]) => k && v && String(v).length <= 60).slice(0, 15).map(([k, v]) => `${k}：${v}`).join('；')
+  if (framed) return suiteBody(type, facts, attrs)
   // Without a logo the 首图 carries the brand name in its top-left corner, as text.
   if (type === 'suite_hero' && brand && !logoApplies(type, brand)) return `${suiteBody(type, facts, attrs)}在画面左上角用醒目的字体准确写出品牌名“${brand.name}”，一字不差，不画任何图形标志。`
   const brandText = !brand || logoApplies(type, brand) || !['suite_selling', 'suite_spec', 'detail_poster', 'detail_advantages', 'detail_features'].includes(type) ? '' : `在画面顶部用小字准确写出品牌名“${brand.name}”，一字不差。`
@@ -248,8 +248,15 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
   const text = '画面中的文字一律使用简体中文，字体清晰、排版整齐，不出现乱码。'
   switch (type) {
     case 'suite_hero': {
-      const badges = facts.badges ?? HERO_BADGES
       const copy = facts.heroCopy
+      if (facts.heroReferenceFrame) {
+        const groundedCopy = copy
+          ? `主标题“${copy.headline}”${copy.subline ? `，副标题“${copy.subline}”` : ''}，金色圆角标签分别写：${copy.features.map(f => `“${f}”`).join('、')}。以上文案一字不差。`
+          : `主标题使用商品名称的简短写法。从商品资料中提炼有明确依据的短卖点，资料不足时减少标签数量。${facts.points ? `用户提供的产品卖点：${facts.points}。` : ''}`
+        return `${base}生成 1688 批发商品首图的中间内容：深蓝黑渐变背景，左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。主标题用大号粗体和浅色描边，副标题较小，卖点用纵排的金色圆角标签。${groundedCopy}`
+          + `将商品和文案放在画面中部，上方 12%、下方 20% 和两侧 5% 仅延伸背景，供程序合成固定边框。不要绘制边框、品牌字样、品牌标识或工厂宣传语。${text}${noFake}${CLEAN}`
+      }
+      const badges = facts.badges ?? HERO_BADGES
       // Laid out like a 1688 wholesale 首图: headline on top, feature tags beside the product, uses along the bottom,
       // the shop's own terms as a bright corner stamp or banner. Every word is given here; the model only draws it.
       if (copy) return `${base}生成 1688 批发商品首图（决定点击率，必须抓眼球），版式参考 1688 热销首图：`
@@ -280,7 +287,9 @@ export async function productFacts(tenantId: string, collectedProductId: string,
   const p = (await db.query('SELECT id,title,category_path,attributes,main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1 AND tenant_id=$2', [collectedProductId, tenantId])).rows[0]
   if (!p) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
   const skus = (await db.query('SELECT label FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position LIMIT 12', [collectedProductId])).rows.map(r => r.label as string)
-  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, badges: await heroBadges(tenantId), ...productImages(p) }
+  const settings = (await db.query<{ hero_badges: string[]; hero_reference_frame: boolean }>('SELECT hero_badges,hero_reference_frame FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
+  const badges = Array.isArray(settings?.hero_badges) ? settings.hero_badges.filter(b => typeof b === 'string' && b.trim()) : HERO_BADGES
+  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, badges, heroReferenceFrame: settings?.hero_reference_frame, ...productImages(p) }
 }
 const cleanUrls = (list: unknown) => (Array.isArray(list) ? list : []).filter((u): u is string => typeof u === 'string').flatMap(u => { try { return [sourceUrl(u)] } catch { return [] } })
 /** All main pictures of a collected product, main image first, deduplicated. */
@@ -330,12 +339,19 @@ const STORAGE_RETRY_MS = 60 * 60_000
 
 async function complete(asset: Asset, png: Buffer, cost?: number) {
   const { png: decoded, width, height } = await toPng(png)
-  const normalized = asset.options.brand?.logo ? await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id)) : decoded
+  const framed = asset.operation === 'suite_hero' && asset.options.heroFrame === HERO_REFERENCE_FRAME
+  let normalized = decoded
+  if (framed) normalized = await applyHeroReferenceFrame(decoded, width, height)
+  else if (asset.options.brand?.logo) normalized = await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id))
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
   // Made for automatic listing with AI images on: the owner chose to publish generated pictures without screening.
   if (asset.options.unchecked) finding = { readable: true, watermark: false, rightsRisk: false, reason: '未检查：已开启 AI 生图自动上架，生成图不做水印/Logo 复检。' }
-  else try { const url = await imageUrl(key, asset.tenant_id); finding = (await screen(asset.tenant_id, [url], false)).get(url) }
+  else try {
+    const url = await imageUrl(key, asset.tenant_id)
+    const names = framed ? [...await ownBrandNames(asset.tenant_id), ...HERO_REFERENCE_MARKS] : undefined
+    finding = (await screen(asset.tenant_id, [url], false, names)).get(url)
+  }
   catch { finding = { readable: false, watermark: false, rightsRisk: false, reason: '生成结果未能完成复检，请人工确认后再使用。' } }
   await db.query("UPDATE image_assets SET status='completed',oss_key=$2,width=$3,height=$4,bytes=$5,findings=$6,cost=$7,error=NULL,lease_until=NULL,updated_at=now() WHERE id=$1",
     [asset.id, key, width, height, normalized.length, JSON.stringify(finding ?? null), cost ?? null])
@@ -414,16 +430,22 @@ export async function queueReplacements(tenantId: string, productId: string, act
   for (const { index } of bad) {
     if (existing.has(index)) continue
     const type = LISTING_MAIN_TYPES[Math.min(index, LISTING_MAIN_TYPES.length - 1)] // by 1688 position: 首图 first, white fifth
+    const { prompt, options } = suiteDesign(type, facts, brand)
     await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,replaces_index,options,prompt,trigger,created_by)
-      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, ...suiteBrandOption(type, brand) }), suitePrompt(type, facts, suiteBrand(brand)), trigger, actorId])
+      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, ...options }), prompt, trigger, actorId])
     queued++
   }
   return { flagged: bad.length, queued, clean: clean.length }
 }
 
-export const suiteBrand = (brand: OwnBrand | null): SuiteBrand | null => brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
-/** What a queued picture remembers about the brand, so the worker can add the logo (also on a retry). */
-export const suiteBrandOption = (type: GeneratedType, brand: OwnBrand | null) => brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, suiteBrand(brand)) } } : {}
+/** Store the chosen frame or logo with the job so retries use the same design. */
+export function suiteDesign(type: GeneratedType, facts: SuiteFacts, brand: OwnBrand | null) {
+  const framed = type === 'suite_hero' && facts.heroReferenceFrame
+  const selected = brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
+  const options = framed ? { heroFrame: HERO_REFERENCE_FRAME }
+    : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected) } } : {}
+  return { prompt: suitePrompt(type, facts, selected), options }
+}
 
 export function startImageWorker(onError: (error: unknown) => void = () => {}) {
   let stopped = false, ticking = false

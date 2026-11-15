@@ -73,8 +73,38 @@ export async function chargeListing(client: Queryable, tenantId: string, userId:
 
 /** Gives the credits back when the platform definitely refused the listing. */
 export async function refundListing(tenantId: string, ownerId: string, actorId: string, draftId: string) {
-  const row = (await db.query('UPDATE team_ai_settings SET credits=credits+$2,updated_at=now() WHERE owner_user_id=$1 RETURNING credits', [ownerId, CREDITS_PER_LISTING])).rows[0]
-  if (row) await ledger(db, tenantId, ownerId, CREDITS_PER_LISTING, row.credits, 'refund', actorId, draftId, '平台拒绝发布，退回积分')
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN')
+    const row = (await client.query('UPDATE team_ai_settings SET credits=credits+$3,updated_at=now() WHERE tenant_id=$1 AND owner_user_id=$2 RETURNING credits', [tenantId, ownerId, CREDITS_PER_LISTING])).rows[0]
+    if (row) await ledger(client, tenantId, ownerId, CREDITS_PER_LISTING, row.credits, 'refund', actorId, draftId, '平台拒绝发布，退回积分')
+    await client.query('COMMIT')
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+
+/** Reads the team's balance and a page of its ledger from the same snapshot. */
+export async function teamCreditActivity(tenantId: string, userId: string, requestedPage: number, pageSize: number) {
+  const client = await db.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const team = await teamOf(tenantId, userId, client)
+    const scope = [tenantId, team.ownerId]
+    const count = await client.query<{ total: number }>('SELECT count(*)::int AS total FROM team_credit_ledger WHERE tenant_id=$1 AND owner_user_id=$2', scope)
+    const { total } = count.rows[0]
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)))
+    const { rows } = await client.query(`SELECT l.id,l.delta,l.balance_after,l.reason,l.note,l.created_at,
+        a.display_name AS actor_name,coalesce(nullif(d.data_body #>> '{formValues,title}',''),p.name) AS product_title
+      FROM (
+        SELECT id,tenant_id,delta,balance_after,reason,note,created_at,actor_id,ref_id FROM team_credit_ledger
+        WHERE tenant_id=$1 AND owner_user_id=$2 ORDER BY created_at DESC,id DESC LIMIT $3 OFFSET $4
+      ) l
+      LEFT JOIN users a ON a.id=l.actor_id AND a.tenant_id=l.tenant_id
+      LEFT JOIN integration_1688_publish_drafts d ON d.id=l.ref_id AND d.tenant_id=l.tenant_id
+      LEFT JOIN products p ON p.id=d.product_id AND p.tenant_id=l.tenant_id
+      ORDER BY l.created_at DESC,l.id DESC`, [...scope, pageSize, (page - 1) * pageSize])
+    await client.query('COMMIT')
+    return { name: team.ownerName, unlimited: team.unlimited, credits: team.credits, perListing: CREDITS_PER_LISTING, ledger: rows, total, page, pageSize }
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
 }
 
 /** The super administrator's changes to a team: models and/or a credit adjustment (never below zero). */

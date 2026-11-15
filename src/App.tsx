@@ -12,6 +12,7 @@ import AgentSettingsPage from './AgentSettingsPage'
 import PerformancePage, { type View as PerfView } from './PerformancePage'
 import CustomerOpsPage from './CustomerOpsPage'
 import UsersAdminPage from './UsersAdminPage'
+import TeamCreditsPage from './TeamCreditsPage'
 import ChatInquiryPage from './ChatInquiryPage'
 import OrdersPage from './OrdersPage'
 import { ImageEditPage, ImageSuitePage } from './ImageWorkshop'
@@ -76,6 +77,7 @@ function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route
   if (id === 'settings/agents') return <PerformancePage user={user} view="agents" />
   if (id === 'settings/rules') return <PerformancePage user={user} view="settings" />
   if (id === 'settings/automation') return <AgentSettingsPage user={user} />
+  if (id === 'settings/credits') return <TeamCreditsPage />
   if (id === 'settings/users') return <UsersAdminPage user={user} />
   const product = has(user, 'integration:read'), performance = has(user, 'performance:read', 'performance:read_own')
   const operations = id === 'settings/logs'

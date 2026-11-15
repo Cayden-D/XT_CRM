@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:api": "tsx watch server/index.ts",
     "start:api": "tsx server/index.ts",
-    "build:api": "tsc -p tsconfig.server.json",
+    "build:api": "tsc -p tsconfig.server.json && node -e \"require('node:fs').cpSync('server/assets', 'dist-server/server/assets', { recursive: true })\"",
     "create-admin": "tsx scripts/create-admin.ts",
     "test:api": "tsx scripts/test-api.ts",
     "test:customers": "tsx scripts/test-customers.ts",

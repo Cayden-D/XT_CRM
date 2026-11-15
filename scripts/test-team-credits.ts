@@ -9,6 +9,7 @@ process.env.APIMART_API_KEY = 'team-credits-apimart'
 process.env.APIMART_BASE_URL = 'https://apimart.fixture.invalid/v1'
 process.env.APIMART_POLL_MS = '0'
 const [{ buildApp }, { db }, teams, qwen, apimart] = await Promise.all([import('../server/app.js'), import('../server/db.js'), import('../server/integrations/teams.js'), import('../server/llm/qwen.js'), import('../server/llm/apimart-image.js')])
+const { saveConnection } = await import('../server/integrations/1688.js')
 
 const sent: { url: string; body: any }[] = []
 const originalFetch = globalThis.fetch
@@ -78,13 +79,16 @@ try {
     if (collected) await db.query("INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,currency,product_id,collected_by)VALUES($1,'1688',$2,'https://detail.1688.com/offer/1.html','测试','CNY',$3,$4)", [tenant, randomUUID(), id, rep])
     return id
   }
-  const charge = async (sub: string, productId: string) => {
+  const charge = async (sub: string, productId: string, draftId = randomUUID()) => {
     const client = await db.connect()
-    try { await client.query('BEGIN'); const team = await teams.chargeListing(client, tenant, sub, productId, randomUUID()); await client.query('COMMIT'); return team }
+    try { await client.query('BEGIN'); const team = await teams.chargeListing(client, tenant, sub, productId, draftId); await client.query('COMMIT'); return team }
     catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
   }
   const collected = await product(true)
-  assert.equal(await charge(rep, collected), manager)
+  const connection = await saveConnection(tenant, manager, { aliId: `credits-${randomUUID()}`, access_token: 'fixture', expires_in: 36000 })
+  const draftId = (await db.query(`INSERT INTO integration_1688_publish_drafts(tenant_id,connection_id,product_id,cat_id,scene,platform_schema,data_body)
+    VALUES($1,$2,$3,'101','cbu','{}','{"formValues":{"title":"上架商品标题"}}') RETURNING id`, [tenant, connection.id, collected])).rows[0].id
+  assert.equal(await charge(rep, collected, draftId), manager)
   assert.equal(await charge(rep, collected), manager)
   assert.equal((await teams.teamOf(tenant, rep)).credits, 5)
   await assert.rejects(teams.requireListingCredits(tenant, rep), /团队积分不足.*每件需 10 积分，当前剩余 5/, 'checked before any paid work')
@@ -92,12 +96,35 @@ try {
   assert.equal((await teams.teamOf(tenant, rep)).credits, 5, 'a refused charge takes nothing')
   assert.equal(await charge(rep, await product(false)), null, 'a product added by hand costs nothing')
   assert.equal(await charge(owner, collected), null, 'the super administrator is not charged')
-  await teams.refundListing(tenant, manager, rep, randomUUID())
+  await assert.rejects(teams.refundListing(tenant, manager, randomUUID(), draftId), { code: '23503' }, 'a failed ledger insert rolls back the credit refund')
+  assert.equal((await teams.teamOf(tenant, rep)).credits, 5)
+  await teams.refundListing(tenant, manager, rep, draftId)
   assert.equal((await teams.teamOf(tenant, rep)).credits, 15)
   assert.deepEqual((await db.query('SELECT reason,delta,balance_after FROM team_credit_ledger WHERE owner_user_id=$1 ORDER BY created_at', [manager])).rows.map(r => [r.reason, r.delta, r.balance_after]),
     [['adjust', 25, 25], ['publish', -10, 15], ['publish', -10, 5], ['refund', 10, 15]])
 
-  console.log(JSON.stringify({ teamOfSubAccount: 'ok', superAdminOnly: 'ok', modelsAndCredits: 'ok', teamTextModel: 'ok', gptImage2: 'ok', listingCharge: 'ok', shortageBlocks: 'ok', refund: 'ok' }))
+  const creditPath = '/api/users/team/credits'
+  assert.equal((await app.inject({ method: 'GET', url: creditPath })).statusCode, 401)
+  assert.equal((await call('GET', creditPath, rep, ['integration:publish'])).statusCode, 403)
+  assert.equal((await call('GET', creditPath + '?pageSize=51', manager, ['user:manage_team'])).statusCode, 400)
+  const response = await call('GET', creditPath + '?pageSize=2', manager, ['user:manage_team'])
+  assert.equal(response.statusCode, 200, response.body)
+  assert.equal(response.headers['cache-control'], 'no-store')
+  const { data: activity } = response.json()
+  assert.deepEqual([activity.name, activity.credits, activity.total, activity.page, activity.pageSize], ['主管甲', 15, 4, 1, 2])
+  assert.deepEqual(activity.ledger.map((row: any) => [row.reason, row.delta, row.balance_after, row.actor_name, row.product_title]),
+    [['refund', 10, 15, '业务员甲', '上架商品标题'], ['publish', -10, 5, '业务员甲', null]])
+  const last = (await call('GET', creditPath + '?pageSize=2&page=9', manager, ['user:manage_team'])).json().data
+  assert.equal(last.page, 2)
+  assert.deepEqual(last.ledger.map((row: any) => [row.reason, row.product_title, row.note]), [['publish', '上架商品标题', null], ['adjust', null, '首充']])
+  const otherAdmin = await user('管理员乙', 'admin')
+  await teams.updateTeam(tenant, otherAdmin, owner, { delta: 100, note: '管理员乙的额度' })
+  const other = (await call('GET', creditPath, otherAdmin, ['integration:*'])).json().data
+  assert.deepEqual([other.name, other.credits, other.total, other.ledger[0].note], ['管理员乙', 100, 1, '管理员乙的额度'])
+  const root = (await call('GET', creditPath, owner, ['*'])).json().data
+  assert.deepEqual([root.name, root.unlimited, root.ledger], ['超管', true, []])
+
+  console.log(JSON.stringify({ teamOfSubAccount: 'ok', superAdminOnly: 'ok', modelsAndCredits: 'ok', teamTextModel: 'ok', gptImage2: 'ok', listingCharge: 'ok', shortageBlocks: 'ok', refund: 'ok', ownCreditActivity: 'ok' }))
 } finally {
   globalThis.fetch = originalFetch
   await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [tenant]); await db.query('DELETE FROM tenants WHERE id=$1', [tenant])

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { db } from '../db.js'
 import { forgetAccount, hasPermission, requireAuth } from '../auth.js'
 import { IntegrationError } from '../integrations/1688.js'
-import { CREDITS_PER_LISTING, IMAGE_MODEL_CHOICES, listTeams, teamOf, TEXT_MODEL_CHOICES, updateTeam } from '../integrations/teams.js'
+import { CREDITS_PER_LISTING, IMAGE_MODEL_CHOICES, listTeams, teamCreditActivity, teamOf, TEXT_MODEL_CHOICES, updateTeam } from '../integrations/teams.js'
 import { IMAGE_MODEL_NAMES } from '../llm/apimart-image.js'
 
 /**
@@ -95,6 +95,18 @@ export async function userRoutes(app: FastifyInstance) {
   app.get('/team', { preHandler: requireAuth }, async request => {
     const team = await teamOf(tenant(request), request.authUser.sub)
     return { data: { name: team.ownerName, unlimited: team.unlimited, credits: team.credits, perListing: CREDITS_PER_LISTING } }
+  })
+  app.get('/team/credits', { preHandler: requireAuth }, async (request, reply) => {
+    const { sub, permissions } = request.authUser
+    if (!['user:manage', 'user:manage_team', 'integration:manage'].some(permission => hasPermission(permissions, permission))) {
+      throw new AccountError(403, 'FORBIDDEN', '当前账号没有查看团队积分明细的权限。')
+    }
+    const { page, pageSize } = z.object({
+      page: z.coerce.number().int().positive().default(1),
+      pageSize: z.coerce.number().int().min(1).max(50).default(20),
+    }).strict().parse(request.query)
+    reply.header('Cache-Control', 'no-store')
+    return { data: await teamCreditActivity(tenant(request), sub, page, pageSize) }
   })
 
   app.get('/assignable', { preHandler: requireAuth }, async request => {
