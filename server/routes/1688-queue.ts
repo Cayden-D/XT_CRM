@@ -35,7 +35,7 @@ export async function collectionQueueRoutes(app:FastifyInstance){
       if(!input.enabled)await client.query("UPDATE integration_1688_collection_queue_jobs SET status='cancelled',message='队列已关闭，未开始的任务已取消。',updated_at=now() WHERE connection_id=$1 AND tenant_id=$2 AND status='queued'",[id,request.authUser.tenantId])
       await client.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'1688.agent.queue.settings','1688_connection',$3,$4,$5)",[request.authUser.tenantId,request.authUser.sub,id,JSON.stringify({enabled:input.enabled,revision:saved.revision}),request.id])
       await client.query('COMMIT');return {data:saved}
-    }catch(error){await client.query('ROLLBACK');if((error as {code?:string}).code==='23505')throw new IntegrationError('QUEUE_TARGET_EXISTS','每个租户只能开启一个采集自动上品目标店铺。',409);throw error}finally{client.release()}
+    }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
   })
   app.post('/agent/queue/:id',{preHandler:[requirePermission('integration:publish'),requirePermission('collection:read')]},async request=>{
     const {id}=idSchema.parse(request.params),client=await db.connect()

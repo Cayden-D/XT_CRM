@@ -41,9 +41,12 @@ const sourceSku=(source:Json)=>`COL-${createHash('sha256').update(`${source.tena
 
 export async function enqueueCollectedProduct(client:PoolClient,source:Json,actorId:string){
   if(source.source!=='1688'||source.product_id)return null
-  const target=(await client.query(`SELECT q.connection_id FROM integration_1688_collection_queue_settings q JOIN integration_1688_agent_settings a ON a.connection_id=q.connection_id JOIN integration_1688_connections c ON c.id=q.connection_id WHERE q.tenant_id=$1 AND q.enabled AND a.enabled AND c.status='connected' LIMIT 1`,[source.tenant_id])).rows[0]
+  const target=(await client.query(`SELECT connection_id FROM collection_listing_shops WHERE tenant_id=$1 AND ($2::uuid IS NULL OR connection_id=$2) ORDER BY enabled_at,connection_id LIMIT 1`,[source.tenant_id,source.target_connection_id??null])).rows[0]
   if(!target)return null
-  const job=(await client.query(`INSERT INTO integration_1688_collection_queue_jobs(tenant_id,connection_id,collected_product_id,actor_id,source_updated_at)VALUES($1,$2,$3,$4,$5) ON CONFLICT(collected_product_id) DO NOTHING RETURNING id`,[source.tenant_id,target.connection_id,source.id,actorId,source.updated_at])).rows[0]
+  const job=(await client.query(`INSERT INTO integration_1688_collection_queue_jobs(tenant_id,connection_id,collected_product_id,actor_id,source_updated_at)VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(collected_product_id) DO UPDATE SET connection_id=excluded.connection_id,actor_id=excluded.actor_id,source_updated_at=excluded.source_updated_at,
+      status='queued',phase='screening',attempts=0,available_at=now(),worker_id=NULL,lease_until=NULL,message=NULL,report='{}',updated_at=now()
+    WHERE integration_1688_collection_queue_jobs.status='cancelled' AND integration_1688_collection_queue_jobs.product_id IS NULL AND integration_1688_collection_queue_jobs.draft_id IS NULL RETURNING id`,[source.tenant_id,target.connection_id,source.id,actorId,source.updated_at])).rows[0]
   if(job)await client.query("UPDATE collected_products SET processing_status='ai_processing' WHERE id=$1",[source.id])
   return job?.id||null
 }

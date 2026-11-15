@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         销途 CRM · 1688/Alibaba 商品采集器
 // @namespace    https://cc.local
-// @version      2.3.2
+// @version      2.4.0
 // @description  从 1688、Alibaba.com 完整采集商品并直接保存到销途 CRM
 // @author       cc
 // @noframes
@@ -2935,7 +2935,6 @@
         "https://xt.tlh666.cn/api/product-collections").replace(/\/$/, "");
     const API_BASE_STORAGE_KEY = "cc_api_base";
     const STORAGE_KEY = "cc_auth_session";
-    const AUTO_DRAFT_STORAGE_KEY = "cc_auto_platform_draft";
     let authToken = null;
     let authUser = null;
     function gmGet(key) {
@@ -3093,135 +3092,120 @@
             return authEnsurer();
         return false;
     }
-    function loadAutoDraftSettings() {
+    async function collectionShops(platform) {
+        if (platform !== "1688")
+            return { shops: [], message: "此来源的商品会保存到采集箱。" };
         try {
-            const raw = gmGet(AUTO_DRAFT_STORAGE_KEY);
-            if (!raw)
-                return { enabled: false };
-            const parsed = JSON.parse(raw);
-            return { enabled: Boolean(parsed.enabled), storeId: parsed.storeId, categoryId: parsed.categoryId };
+            const user = await getMe();
+            if (!Array.isArray(user.listingShops))
+                return { shops: [], message: "请更新 CRM 服务后再使用上传店铺和百分比调价。" };
+            const shops = user.listingShops;
+            return { shops, message: shops.length ? "" : "当前账号暂无可选店铺。请在 CRM 中确认店铺已启用自动上架。" };
         }
-        catch {
-            return { enabled: false };
+        catch (error) {
+            return { shops: [], message: `无法读取上传店铺：${error.message}。可重新打开采集窗口重试。` };
         }
-    }
-    function saveAutoDraftSettings(settings) {
-        gmSet(AUTO_DRAFT_STORAGE_KEY, JSON.stringify(settings));
-    }
-    async function listListingStores() {
-        return [];
-    }
-    async function getExchangeRate(from, to) {
-        if (from === to)
-            return { rate: 1, source: "same-currency" };
-        throw new Error("采集阶段保留来源价格，不提供汇率换算");
-    }
-    function submitProduct(product, _options) {
-        return new Promise((resolve, reject) => {
-            ensureAuthenticated()
-                .then((ok) => {
-                if (!ok) {
-                    reject(new Error("请先连接销途 CRM"));
-                    return;
-                }
-                if (!authToken) {
-                    reject(new Error("未配置采集密钥"));
-                    return;
-                }
-                const headers = {
-                    "Content-Type": "application/json",
-                    "X-Collector-Key": authToken,
-                };
-                const body = {
-                    source: product.platform,
-                    sourceProductId: String(product.platformId || ""),
-                    sourceUrl: product.sourceUrl || location.href,
-                    title: product.title,
-                    currency: product.currency || "CNY",
-                    priceMin: product.priceMin,
-                    priceMax: product.priceMax,
-                    galleryImages: product.mainImages || [],
-                    mainImageUrl: product.mainImages?.[0] || null,
-                    detailImages: product.detailImages || [],
-                    descriptionUrl: product.descriptionUrl,
-                    videoUrl: product.videoUrl,
-                    attributes: product.attributes || {},
-                    skuProps: product.skuProps || [],
-                    variants: (product.skus || []).map((sku) => ({
-                        externalSkuId: sku.skuId != null ? String(sku.skuId) : null,
-                        label: String(sku.spec || sku.skuId || "默认规格"),
-                        attributes: sku.spec ? { 规格: String(sku.spec) } : {},
-                        imageUrl: sku.image || null,
-                        priceText: sku.price != null ? String(sku.price) : null,
-                        price: Number.isFinite(Number(sku.price)) && Number(sku.price) >= 0 ? Number(sku.price) : null,
-                        stockText: sku.stock != null ? String(sku.stock) : null,
-                        stock: Number.isFinite(Number(sku.stock)) && Number(sku.stock) >= 0 ? Number(sku.stock) : null,
-                        rawData: sku,
-                    })),
-                    sellerName: product.sellerName,
-                    sellerId: product.sellerId,
-                    categoryPath: product.categoryPath,
-                    sourceCategoryId: product.sourceCategoryId,
-                    sourceCategoryAttributes: product.sourceCategoryAttributes || [],
-                    tags: product.tags || [],
-                    collectorNote: product.collectorNote,
-                    sourceCollectedAt: product.collectedAt,
-                    collectorMode: "full-product",
-                    collectorVersion: "2.3.2",
-                    rawData: product,
-                };
-                GM_xmlhttpRequest({
-                    method: "POST",
-                    url: `${getApiBase()}/import`,
-                    headers,
-                    data: JSON.stringify(body),
-                    onload(response) {
-                        if (response.status >= 200 && response.status < 300) {
-                            try {
-                                const json = JSON.parse(response.responseText);
-                                resolve({ code: 0, data: json.data });
-                            }
-                            catch {
-                                reject(new Error("解析响应失败"));
-                            }
-                        }
-                        else if (response.status === 401) {
-                            clearAuth();
-                            reject(new Error("采集器授权已失效，请重新连接 CRM"));
-                        }
-                        else {
-                            reject(new Error(`HTTP ${response.status}: ${response.statusText}`));
-                        }
-                    },
-                    onerror() {
-                        reject(new Error("网络请求失败，请检查服务端是否运行"));
-                    },
-                });
-            })
-                .catch(reject);
-        });
     }
 
-    const DEST_STORAGE_KEY = "cc_collect_destination";
-    function loadCollectDestination() {
-        try {
-            const raw = GM_getValue(DEST_STORAGE_KEY, undefined);
-            if (!raw)
-                return null;
-            const parsed = JSON.parse(raw);
-            if (parsed?.mode === "personal")
-                return { mode: "personal" };
-            if (parsed?.mode === "team" && parsed.teamId)
-                return parsed;
+    function collectionOptions({ shops, message }) {
+        const section = document.createElement("div");
+        section.className = "cc-listing-options";
+        const field = (text, control) => {
+            const label = document.createElement("label");
+            label.append(document.createTextNode(text), control);
+            section.appendChild(label);
+        };
+        const hint = text => {
+            const paragraph = document.createElement("p");
+            paragraph.textContent = text;
+            section.appendChild(paragraph);
+        };
+        const shop = document.createElement("select");
+        shop.appendChild(new Option("仅保存到采集箱", ""));
+        for (const item of shops) {
+            shop.appendChild(new Option(item.name, item.id));
         }
-        catch {
-            // ignore
+        shop.value = shops[0]?.id || "";
+        field("上传店铺", shop);
+        hint(message || "选择店铺后，商品会进入该店铺的自动上架队列。");
+        const percent = document.createElement("input");
+        percent.type = "number";
+        percent.inputMode = "decimal";
+        percent.min = "-99.99";
+        percent.max = "99999.99";
+        percent.step = "0.01";
+        percent.placeholder = "0";
+        field("价格调整（%）", percent);
+        hint("例如 20 表示加价 20%，-10 表示降价 10%。适用于 SKU 价和阶梯价。");
+        return {
+            section,
+            values: () => percent.reportValidity() ? { targetConnectionId: shop.value || null, priceAdjustmentPercent: Number(percent.value) } : null,
+        };
+    }
+
+    async function submitProduct(product, options) {
+        if (!await ensureAuthenticated() || !authToken)
+            throw new Error("请先连接销途 CRM");
+        if (options && !Array.isArray(authUser?.listingShops)) {
+            const user = await getMe();
+            if (!Array.isArray(user.listingShops))
+                throw new Error("请更新 CRM 服务后再使用上传店铺和百分比调价。");
         }
-        return null;
+        const numeric = value => value != null && String(value).trim() && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+        const body = {
+            source: product.platform,
+            sourceProductId: String(product.platformId || ""),
+            sourceUrl: product.sourceUrl || location.href,
+            title: product.title,
+            currency: product.currency || "CNY",
+            priceMin: product.priceMin,
+            priceMax: product.priceMax,
+            galleryImages: product.mainImages || [],
+            mainImageUrl: product.mainImages?.[0] || null,
+            detailImages: product.detailImages || [],
+            descriptionUrl: product.descriptionUrl,
+            videoUrl: product.videoUrl,
+            attributes: product.attributes || {},
+            skuProps: product.skuProps || [],
+            variants: (product.skus || []).map(sku => ({
+                externalSkuId: sku.skuId != null ? String(sku.skuId) : null,
+                label: String(sku.spec || sku.skuId || "默认规格"),
+                attributes: sku.spec ? { 规格: String(sku.spec) } : {},
+                imageUrl: sku.image || null,
+                priceText: sku.price != null ? String(sku.price) : null,
+                price: numeric(sku.price),
+                stockText: sku.stock != null ? String(sku.stock) : null,
+                stock: Number.isFinite(Number(sku.stock)) && Number(sku.stock) >= 0 ? Number(sku.stock) : null,
+                rawData: sku,
+            })),
+            sellerName: product.sellerName,
+            sellerId: product.sellerId,
+            categoryPath: product.categoryPath,
+            sourceCategoryId: product.sourceCategoryId,
+            sourceCategoryAttributes: product.sourceCategoryAttributes || [],
+            tags: product.tags || [],
+            collectorNote: product.collectorNote,
+            sourceCollectedAt: product.collectedAt,
+            collectorMode: "full-product",
+            collectorVersion: "2.4.0",
+            rawData: product,
+            ...options,
+        };
+        const { status, body: reply } = await gmRequest({
+            method: "POST",
+            url: `${getApiBase()}/import`,
+            headers: { "Content-Type": "application/json", "X-Collector-Key": authToken },
+            data: JSON.stringify(body),
+        });
+        if (status === 401) {
+            clearAuth();
+            throw new Error("采集器授权已失效，请重新连接 CRM");
+        }
+        if (status >= 200 && status < 300 && reply.data)
+            return reply.data;
+        throw Object.assign(new Error(reply.message || `采集失败（HTTP ${status}）`), { code: reply.error });
     }
-    function saveCollectDestination(dest) {
-        GM_setValue(DEST_STORAGE_KEY, JSON.stringify(dest));
-    }
+
     function cloneProduct$1(product) {
         return JSON.parse(JSON.stringify(product));
     }
@@ -3360,24 +3344,6 @@
             .filter(Boolean)
             .join("；");
     }
-    function getStoreCategoryOptions$1(store) {
-        const options = [];
-        const seen = new Set();
-        const defaultCategoryId = String(store?.config?.defaultCategoryId || "").trim();
-        const defaultCategoryName = (store?.config?.commonCategories || []).find((item) => String(item.categoryId || "").trim() === defaultCategoryId)?.name;
-        const add = (categoryId, name) => {
-            const id = String(categoryId || "").trim();
-            if (!id || seen.has(id))
-                return;
-            seen.add(id);
-            options.push({ id, label: name ? `${name} (${id})` : id });
-        };
-        add(defaultCategoryId, defaultCategoryName || "默认类目");
-        for (const item of store?.config?.commonCategories || []) {
-            add(item.categoryId, item.name);
-        }
-        return options;
-    }
     /**
      * Create and show the collector preview panel overlay.
      * Returns a promise that resolves when the user confirms submission.
@@ -3388,34 +3354,7 @@
         });
     }
     async function buildCollectorPanel(product, resolve) {
-        const originalProduct = cloneProduct$1(product);
-        let user = getAuthUser();
-        try {
-            user = await getMe();
-        }
-        catch {
-            // 使用缓存用户信息
-        }
-        const teams = user?.teams || [];
-        let listingStores = [];
-        try {
-            listingStores = await listListingStores();
-        }
-        catch {
-            listingStores = [];
-        }
-        const savedDest = loadCollectDestination();
-        const savedAutoDraft = loadAutoDraftSettings();
-        let destMode = savedDest?.mode === "personal"
-            ? "personal"
-            : teams.length > 0
-                ? "team"
-                : "personal";
-        let selectedTeamId = savedDest?.mode === "team" && teams.some((t) => t.id === savedDest.teamId)
-            ? savedDest.teamId
-            : user?.activeTeamId && teams.some((t) => t.id === user.activeTeamId)
-                ? user.activeTeamId
-                : teams[0]?.id;
+        const settings = collectionOptions(await collectionShops(product.platform));
         // ─── Create overlay ──────────────────────────────
         const overlay = document.createElement("div");
         overlay.style.cssText = `
@@ -3427,6 +3366,9 @@
     `;
         // ─── Create panel ────────────────────────────────
         const panel = document.createElement("div");
+        panel.setAttribute("role", "dialog");
+        panel.setAttribute("aria-modal", "true");
+        panel.setAttribute("aria-label", "确认采集商品");
         panel.style.cssText = `
       background: #fff; border-radius: 12px; padding: 24px 24px 0;
       width: 520px; max-width: calc(100vw - 32px);
@@ -3476,7 +3418,7 @@
         const sym = product.currency === "USD" ? "$" : "¥";
         const ladderAttr = product.attributes?.["阶梯价格"];
         if (ladderAttr) {
-            addField("阶梯价格", ladderAttr, true);
+            addField("原阶梯价格", ladderAttr, true);
         }
         let priceInfo = "-";
         if (product.priceMin != null && product.priceMax != null) {
@@ -3484,7 +3426,7 @@
             if (product.priceMax !== product.priceMin) {
                 priceInfo += ` ~ ${sym}${product.priceMax}`;
             }
-            addField("价格区间", priceInfo, !ladderAttr);
+            addField("原价区间", priceInfo, !ladderAttr);
         }
         else if (product.skus && product.skus.length > 0) {
             const prices = product.skus.map((s) => parseFloat(s.price)).filter((p) => !isNaN(p) && p > 0);
@@ -3543,157 +3485,7 @@
         addField("平台", product.platform);
         if (product.categoryPath)
             addField("类目", product.categoryPath.slice(0, 100));
-        // ─── Note input ──────────────────────────────────
-        const repriceSection = document.createElement("div");
-        repriceSection.style.cssText = `
-      margin: 12px 0; padding: 12px; background: #f8fbff;
-      border: 1px solid #d6e4ff; border-radius: 8px;
-    `;
-        const detectedCurrency = detectSourceCurrency(product);
-        const repriceTitle = document.createElement("div");
-        repriceTitle.style.cssText = "font-size:13px;color:#1d39c4;font-weight:600;margin-bottom:8px;";
-        repriceTitle.textContent = "改价";
-        repriceSection.appendChild(repriceTitle);
-        const repriceGrid = document.createElement("div");
-        repriceGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;";
-        const makeInputWrap = (label, input) => {
-            const wrap = document.createElement("label");
-            wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;font-size:12px;color:#666;";
-            const span = document.createElement("span");
-            span.textContent = label;
-            wrap.appendChild(span);
-            wrap.appendChild(input);
-            return wrap;
-        };
-        const inputStyle = "width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #adc6ff;border-radius:6px;background:#fff;font-size:13px;";
-        const sourceCurrencySelect = document.createElement("select");
-        sourceCurrencySelect.style.cssText = inputStyle;
-        const targetCurrencySelect = document.createElement("select");
-        targetCurrencySelect.style.cssText = inputStyle;
-        for (const code of ["CNY", "USD", "EUR", "GBP", "JPY", "HKD"]) {
-            const sourceOpt = document.createElement("option");
-            sourceOpt.value = code;
-            sourceOpt.textContent = code;
-            sourceCurrencySelect.appendChild(sourceOpt);
-            const targetOpt = document.createElement("option");
-            targetOpt.value = code;
-            targetOpt.textContent = code;
-            targetCurrencySelect.appendChild(targetOpt);
-        }
-        sourceCurrencySelect.value = detectedCurrency;
-        targetCurrencySelect.value = "USD";
-        const profitInput = document.createElement("input");
-        profitInput.type = "number";
-        profitInput.min = "0.01";
-        profitInput.step = "0.01";
-        profitInput.value = "1.3";
-        profitInput.style.cssText = inputStyle;
-        const rateInput = document.createElement("input");
-        rateInput.type = "number";
-        rateInput.min = "0.000001";
-        rateInput.step = "0.000001";
-        rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-        rateInput.placeholder = "自动获取";
-        rateInput.style.cssText = inputStyle;
-        repriceGrid.appendChild(makeInputWrap("源币种", sourceCurrencySelect));
-        repriceGrid.appendChild(makeInputWrap("目标币种", targetCurrencySelect));
-        repriceGrid.appendChild(makeInputWrap("利润系数", profitInput));
-        repriceGrid.appendChild(makeInputWrap("汇率", rateInput));
-        repriceSection.appendChild(repriceGrid);
-        const repriceHint = document.createElement("div");
-        repriceHint.style.cssText = "font-size:11px;color:#597ef7;margin-top:8px;line-height:1.5;";
-        repriceHint.textContent = `已识别源币种：${detectedCurrency}。检测到 ¥/￥ 会按 CNY 汇率转换后再乘利润系数。`;
-        repriceSection.appendChild(repriceHint);
-        const repriceResult = document.createElement("div");
-        repriceResult.style.cssText = "font-size:12px;color:#333;margin-top:8px;display:none;background:#fff;padding:8px;border-radius:6px;border:1px solid #e6f4ff;";
-        repriceSection.appendChild(repriceResult);
-        const repriceActions = document.createElement("div");
-        repriceActions.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:10px;";
-        const fetchRateBtn = document.createElement("button");
-        fetchRateBtn.type = "button";
-        fetchRateBtn.textContent = "获取汇率";
-        fetchRateBtn.style.cssText = "padding:6px 10px;border:1px solid #adc6ff;border-radius:6px;background:#fff;color:#1d39c4;cursor:pointer;";
-        const applyRepriceBtn = document.createElement("button");
-        applyRepriceBtn.type = "button";
-        applyRepriceBtn.textContent = "应用改价";
-        applyRepriceBtn.style.cssText = "padding:6px 10px;border:0;border-radius:6px;background:#1677ff;color:#fff;cursor:pointer;";
-        const resetRepriceBtn = document.createElement("button");
-        resetRepriceBtn.type = "button";
-        resetRepriceBtn.textContent = "恢复原价";
-        resetRepriceBtn.style.cssText = "padding:6px 10px;border:1px solid #d9d9d9;border-radius:6px;background:#fff;color:#333;cursor:pointer;";
-        repriceActions.appendChild(fetchRateBtn);
-        repriceActions.appendChild(applyRepriceBtn);
-        repriceActions.appendChild(resetRepriceBtn);
-        repriceSection.appendChild(repriceActions);
-        const syncRate = async () => {
-            const from = sourceCurrencySelect.value;
-            const to = targetCurrencySelect.value;
-            if (from === to) {
-                rateInput.value = "1";
-                return 1;
-            }
-            fetchRateBtn.textContent = "读取中...";
-            fetchRateBtn.disabled = true;
-            try {
-                const result = await getExchangeRate(from, to);
-                rateInput.value = String(result.rate);
-                repriceHint.textContent = `汇率：1 ${from} = ${result.rate} ${to}${result.date ? `（${result.date}）` : ""}，来源：${result.source || "system"}`;
-                return result.rate;
-            }
-            catch (err) {
-                repriceHint.textContent = `汇率自动获取失败：${err?.message || err}。可手动填写汇率。`;
-                throw err;
-            }
-            finally {
-                fetchRateBtn.textContent = "获取汇率";
-                fetchRateBtn.disabled = false;
-            }
-        };
-        fetchRateBtn.onclick = () => {
-            void syncRate();
-        };
-        sourceCurrencySelect.onchange = () => {
-            rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-        };
-        targetCurrencySelect.onchange = () => {
-            rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-        };
-        applyRepriceBtn.onclick = async () => {
-            let rate = Number(rateInput.value);
-            if (!Number.isFinite(rate) || rate <= 0) {
-                try {
-                    rate = await syncRate();
-                }
-                catch {
-                    return;
-                }
-            }
-            const profit = Number(profitInput.value);
-            if (!Number.isFinite(profit) || profit <= 0) {
-                repriceHint.textContent = "利润系数需要大于 0";
-                return;
-            }
-            applyPanelReprice(product, originalProduct, {
-                rate,
-                profit,
-                targetCurrency: targetCurrencySelect.value,
-            });
-            const prefix = currencyPrefix(product.currency || targetCurrencySelect.value);
-            repriceResult.style.display = "block";
-            repriceResult.textContent =
-                `已应用：${sourceCurrencySelect.value} -> ${targetCurrencySelect.value}，汇率 ${rate}，利润系数 ${profit}。` +
-                    (product.priceMin != null
-                        ? ` 新价格区间：${prefix}${product.priceMin}${product.priceMax !== product.priceMin ? ` ~ ${prefix}${product.priceMax}` : ""}`
-                        : "");
-        };
-        resetRepriceBtn.onclick = () => {
-            replaceProduct(product, originalProduct);
-            sourceCurrencySelect.value = detectSourceCurrency(product);
-            rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-            repriceResult.style.display = "none";
-            repriceHint.textContent = `已恢复原价。已识别源币种：${sourceCurrencySelect.value}`;
-        };
-        // 原始价格直接保存，汇率和利润调整交给后续 AI 处理流程。
+        infoTable.appendChild(settings.section);
         const noteLabel = document.createElement("div");
         noteLabel.style.cssText = "font-size: 12px; color: #888; margin: 10px 0 4px;";
         noteLabel.textContent = "📝 采集备注（可选）";
@@ -3707,233 +3499,8 @@
     `;
         noteInput.onfocus = () => { noteInput.style.borderColor = "#1677ff"; };
         noteInput.onblur = () => { noteInput.style.borderColor = "#d9d9d9"; };
-        // ─── Duplicate warning ───────────────────────────
-        const dupWarning = document.createElement("div");
-        dupWarning.style.cssText = `
-      display: none; margin: 8px 0; padding: 8px 12px;
-      background: #fff7e6; border: 1px solid #ffd591; border-radius: 6px;
-      font-size: 12px; color: #d46b08;
-    `;
         infoTable.appendChild(noteLabel);
         infoTable.appendChild(noteInput);
-        infoTable.appendChild(dupWarning);
-        // ─── 采集目标（个人 / 团队公共池）────────────────
-        const destSection = document.createElement("div");
-        destSection.style.cssText = `
-      margin-top: 12px; padding: 12px; background: #fafafa;
-      border: 1px solid #f0f0f0; border-radius: 8px;
-    `;
-        const destTitle = document.createElement("div");
-        destTitle.style.cssText = "font-size: 12px; color: #666; margin-bottom: 8px; font-weight: 600;";
-        destTitle.textContent = "📁 采集到";
-        destSection.appendChild(destTitle);
-        const destRow = document.createElement("div");
-        destRow.style.cssText = "display: flex; flex-wrap: wrap; gap: 8px; align-items: center;";
-        const personalLabel = document.createElement("label");
-        personalLabel.style.cssText = `
-      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-      font-size: 13px; color: #333; padding: 6px 10px; border-radius: 6px;
-      border: 1px solid #d9d9d9; background: #fff;
-    `;
-        const personalRadio = document.createElement("input");
-        personalRadio.type = "radio";
-        personalRadio.name = "cc-collect-dest";
-        personalRadio.value = "personal";
-        personalRadio.checked = destMode === "personal";
-        personalLabel.appendChild(personalRadio);
-        personalLabel.appendChild(document.createTextNode("个人仓库"));
-        destRow.appendChild(personalLabel);
-        const teamLabel = document.createElement("label");
-        teamLabel.style.cssText = personalLabel.style.cssText;
-        const teamRadio = document.createElement("input");
-        teamRadio.type = "radio";
-        teamRadio.name = "cc-collect-dest";
-        teamRadio.value = "team";
-        teamRadio.checked = destMode === "team";
-        teamRadio.disabled = teams.length === 0;
-        if (teams.length === 0) {
-            teamLabel.style.opacity = "0.5";
-            teamLabel.style.cursor = "not-allowed";
-        }
-        teamLabel.appendChild(teamRadio);
-        teamLabel.appendChild(document.createTextNode("团队公共池"));
-        destRow.appendChild(teamLabel);
-        const teamSelect = document.createElement("select");
-        teamSelect.style.cssText = `
-      flex: 1; min-width: 140px; padding: 6px 8px; border: 1px solid #d9d9d9;
-      border-radius: 6px; font-size: 13px; background: #fff;
-    `;
-        teams.forEach((t) => {
-            const opt = document.createElement("option");
-            opt.value = t.id;
-            opt.textContent = t.myRoleLabel ? `${t.name}（${t.myRoleLabel}）` : t.name;
-            teamSelect.appendChild(opt);
-        });
-        if (selectedTeamId)
-            teamSelect.value = selectedTeamId;
-        teamSelect.disabled = teams.length === 0 || destMode !== "team";
-        if (teams.length > 0)
-            destRow.appendChild(teamSelect);
-        const syncDestUi = () => {
-            const isTeam = destMode === "team" && teams.length > 0;
-            personalLabel.style.borderColor = destMode === "personal" ? "#1677ff" : "#d9d9d9";
-            personalLabel.style.background = destMode === "personal" ? "#e6f4ff" : "#fff";
-            teamLabel.style.borderColor = isTeam ? "#1677ff" : "#d9d9d9";
-            teamLabel.style.background = isTeam ? "#e6f4ff" : "#fff";
-            teamSelect.disabled = !isTeam;
-            teamSelect.style.opacity = isTeam ? "1" : "0.5";
-        };
-        syncDestUi();
-        personalRadio.onchange = () => {
-            if (personalRadio.checked) {
-                destMode = "personal";
-                syncDestUi();
-            }
-        };
-        teamRadio.onchange = () => {
-            if (teamRadio.checked && teams.length > 0) {
-                destMode = "team";
-                selectedTeamId = teamSelect.value;
-                syncDestUi();
-            }
-        };
-        teamSelect.onchange = () => {
-            selectedTeamId = teamSelect.value;
-            destMode = "team";
-            teamRadio.checked = true;
-            syncDestUi();
-        };
-        if (teams.length === 0) {
-            const hint = document.createElement("div");
-            hint.style.cssText = "font-size: 11px; color: #999; margin-top: 6px;";
-            hint.textContent = "您尚未加入团队，仅可采集到个人仓库。可在管理系统「团队管理」中创建或加入团队。";
-            destSection.appendChild(destRow);
-            destSection.appendChild(hint);
-        }
-        else {
-            destSection.appendChild(destRow);
-        }
-        const getSubmitTeamId = () => {
-            if (destMode === "personal" || teams.length === 0)
-                return null;
-            return teamSelect.value || selectedTeamId || null;
-        };
-        // ─── AI 完成后自动创建平台草稿 ─────────────────────
-        const autoDraftSection = document.createElement("div");
-        autoDraftSection.style.cssText = `
-      margin-top: 12px; padding: 12px; background: #f6ffed;
-      border: 1px solid #b7eb8f; border-radius: 8px;
-    `;
-        const autoDraftTitle = document.createElement("label");
-        autoDraftTitle.style.cssText = "display:flex;align-items:center;gap:8px;font-size:13px;color:#234f12;font-weight:600;cursor:pointer;";
-        const autoDraftCheckbox = document.createElement("input");
-        autoDraftCheckbox.type = "checkbox";
-        autoDraftCheckbox.checked = Boolean(savedAutoDraft.enabled && savedAutoDraft.storeId);
-        autoDraftTitle.appendChild(autoDraftCheckbox);
-        autoDraftTitle.appendChild(document.createTextNode("AI处理成功后自动创建平台草稿"));
-        autoDraftSection.appendChild(autoDraftTitle);
-        const autoDraftHint = document.createElement("div");
-        autoDraftHint.style.cssText = "font-size:11px;color:#5b8c00;margin:6px 0 8px 22px;line-height:1.5;";
-        autoDraftHint.textContent = "采集完成后等待 AI Agent 标记可上架，再自动上架到所选店铺的平台草稿箱。";
-        autoDraftSection.appendChild(autoDraftHint);
-        const storeSelect = document.createElement("select");
-        storeSelect.style.cssText = `
-      width: 100%; padding: 7px 8px; border: 1px solid #b7eb8f;
-      border-radius: 6px; font-size: 13px; background: #fff;
-    `;
-        if (listingStores.length === 0) {
-            const opt = document.createElement("option");
-            opt.value = "";
-            opt.textContent = "暂无可用店铺，请先到管理系统添加/启用店铺";
-            storeSelect.appendChild(opt);
-            autoDraftCheckbox.checked = false;
-            autoDraftCheckbox.disabled = true;
-        }
-        else {
-            listingStores.forEach((store) => {
-                const opt = document.createElement("option");
-                opt.value = store.id;
-                opt.textContent = `${store.name}（${store.targetPlatform}${store.sellerAccount ? ` · ${store.sellerAccount}` : ""}）`;
-                storeSelect.appendChild(opt);
-            });
-            if (savedAutoDraft.storeId && listingStores.some((s) => s.id === savedAutoDraft.storeId)) {
-                storeSelect.value = savedAutoDraft.storeId;
-            }
-            else {
-                storeSelect.value = listingStores[0].id;
-            }
-        }
-        autoDraftSection.appendChild(storeSelect);
-        const categorySelect = document.createElement("select");
-        categorySelect.style.cssText = `
-      width: 100%; padding: 7px 8px; border: 1px solid #b7eb8f;
-      border-radius: 6px; font-size: 13px; background: #fff; margin-top: 8px;
-    `;
-        const syncCategorySelect = () => {
-            categorySelect.innerHTML = "";
-            const store = listingStores.find((item) => item.id === storeSelect.value);
-            const categories = getStoreCategoryOptions$1(store);
-            if (categories.length === 0) {
-                const opt = document.createElement("option");
-                opt.value = "";
-                opt.textContent = "使用店铺默认发品类目";
-                categorySelect.appendChild(opt);
-                return;
-            }
-            if (product.platform === "alibaba") {
-                const sourceOpt = document.createElement("option");
-                sourceOpt.value = "";
-                sourceOpt.textContent = "自动使用源商品类目（采集失败时使用店铺默认类目）";
-                categorySelect.appendChild(sourceOpt);
-            }
-            for (const category of categories) {
-                const opt = document.createElement("option");
-                opt.value = category.id;
-                opt.textContent = category.label;
-                categorySelect.appendChild(opt);
-            }
-            categorySelect.value =
-                savedAutoDraft.categoryId && categories.some((item) => item.id === savedAutoDraft.categoryId)
-                    ? savedAutoDraft.categoryId
-                    : product.platform === "alibaba"
-                        ? ""
-                        : categories[0].id;
-        };
-        syncCategorySelect();
-        autoDraftSection.appendChild(categorySelect);
-        const syncAutoDraftUi = () => {
-            const enabled = autoDraftCheckbox.checked && listingStores.length > 0;
-            storeSelect.disabled = !enabled;
-            categorySelect.disabled = !enabled;
-            storeSelect.style.opacity = enabled ? "1" : "0.55";
-            categorySelect.style.opacity = enabled ? "1" : "0.55";
-            autoDraftSection.style.background = enabled ? "#f6ffed" : "#fafafa";
-            autoDraftSection.style.borderColor = enabled ? "#b7eb8f" : "#f0f0f0";
-        };
-        syncAutoDraftUi();
-        autoDraftCheckbox.onchange = syncAutoDraftUi;
-        storeSelect.onchange = () => {
-            syncCategorySelect();
-            syncAutoDraftUi();
-        };
-        const persistDestination = () => {
-            if (destMode === "personal") {
-                saveCollectDestination({ mode: "personal" });
-            }
-            else if (teamSelect.value) {
-                saveCollectDestination({ mode: "team", teamId: teamSelect.value });
-            }
-            saveAutoDraftSettings({
-                enabled: autoDraftCheckbox.checked && listingStores.length > 0,
-                storeId: storeSelect.value || undefined,
-                categoryId: categorySelect.value || undefined,
-            });
-        };
-        const getAutoDraftStoreId = () => {
-            if (!autoDraftCheckbox.checked || listingStores.length === 0)
-                return null;
-            return storeSelect.value || null;
-        };
         // ─── Buttons ─────────────────────────────────────
         const btnContainer = document.createElement("div");
         btnContainer.style.cssText = `
@@ -3961,37 +3528,17 @@
         submitBtn.onmouseenter = () => { submitBtn.style.background = "#4096ff"; };
         submitBtn.onmouseleave = () => { submitBtn.style.background = "#1677ff"; };
         submitBtn.onclick = async () => {
-            const manualNote = noteInput.value.trim();
-            if (manualNote) {
-                product.collectorNote = [product.collectorNote, manualNote].filter(Boolean).join("；");
-            }
-            // 禁用按钮显示提交中
+            const options = settings.values();
+            if (!options)
+                return;
+            const collectorNote = [product.collectorNote, noteInput.value.trim()].filter(Boolean).join("；");
             submitBtn.disabled = true;
             submitBtn.textContent = "⏳ 提交中…";
             submitBtn.style.opacity = "0.7";
             cancelBtn.style.display = "none";
             try {
-                persistDestination();
-                const teamId = getSubmitTeamId();
-                const res = await submitProduct(product, {
-                    teamId,
-                    autoDraftStoreId: getAutoDraftStoreId(),
-                    autoDraftCategoryId: categorySelect.value || undefined,
-                });
-                if (res.code === 409) {
-                    const destHint = teamId ? "团队公共池" : "个人仓库";
-                    dupWarning.style.display = "block";
-                    dupWarning.textContent = `⚠️ 该商品已在${destHint}中（ID: ${res.data?.existingId?.slice(0, 8)}...）`;
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = "✅ 确认采集";
-                    submitBtn.style.opacity = "1";
-                    cancelBtn.style.display = "";
-                    return;
-                }
-                const destName = teamId && teams.length > 0
-                    ? teams.find((t) => t.id === teamId)?.name || "团队公共池"
-                    : "个人仓库";
-                showToast(`已采集到${destName}`);
+                const result = await submitProduct({ ...product, collectorNote }, options);
+                showToast(result.queuedShop ? `已采集并加入「${result.queuedShop.name}」上架队列` : "已保存到采集箱");
                 overlay.remove();
                 resolve(true);
             }
@@ -4019,7 +3566,7 @@
         document.body.appendChild(overlay);
         // 点击 overlay 关闭
         overlay.onclick = (e) => {
-            if (e.target === overlay) {
+            if (e.target === overlay && !submitBtn.disabled) {
                 overlay.remove();
                 resolve(false);
             }
@@ -4469,6 +4016,22 @@
     };
     // ─── Add global styles ──────────────────────────────
     GM_addStyle(`
+  .cc-listing-options {
+    display: grid;
+    gap: 6px;
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px solid #d6e4ff;
+    border-radius: 8px;
+    background: #f8fbff;
+  }
+  .cc-listing-options label { display: grid; gap: 5px; color: #243b53; font-size: 13px; font-weight: 600; }
+  .cc-listing-options select, .cc-listing-options input {
+    box-sizing: border-box; width: 100%; min-width: 0; padding: 8px;
+    border: 1px solid #cbd8e8; border-radius: 6px; background: #fff; color: #243b53;
+    font-family: inherit; font-size: 13px; line-height: 1.4;
+  }
+  .cc-listing-options p { margin: 0 0 4px; color: #53677b; font-size: 12px; line-height: 1.55; }
   .cc-collect-btn {
     position: absolute;
     top: 8px;
@@ -4818,10 +4381,12 @@
         pageText.style.cssText = "margin-top:4px;color:#b7ebff;";
         pageText.textContent = `当前第 ${queue.pageIndex || 1} 页${queue.maxPages ? ` / 共 ${queue.maxPages} 页` : " / 全部页"}`;
         box.appendChild(pageText);
-        if (queue.reprice) {
+        if (queue.listingOptions?.priceAdjustmentPercent || queue.reprice) {
             const repriceText = document.createElement("div");
             repriceText.style.cssText = "margin-top:4px;color:#ffd666;";
-            repriceText.textContent = `改价 ${queue.reprice.sourceCurrency}->${queue.reprice.targetCurrency} ×${queue.reprice.profit}`;
+            repriceText.textContent = queue.listingOptions
+                ? `价格调整 ${queue.listingOptions.priceAdjustmentPercent > 0 ? "+" : ""}${queue.listingOptions.priceAdjustmentPercent}%`
+                : `改价 ${queue.reprice.sourceCurrency}->${queue.reprice.targetCurrency} ×${queue.reprice.profit}`;
             box.appendChild(repriceText);
         }
         const stopBtn = document.createElement("button");
@@ -4882,47 +4447,8 @@
     function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
-    function cloneProduct(product) {
-        return JSON.parse(JSON.stringify(product));
-    }
-    function defaultBatchSourceCurrency(platformCode) {
-        if (platformCode === "1688")
-            return "CNY";
-        if (platformCode === "alibaba" || platformCode === "aliexpress")
-            return "USD";
-        return "CNY";
-    }
-    function formatStoreOption(store) {
-        return `${store.name}（${store.targetPlatform}${store.sellerAccount ? ` · ${store.sellerAccount}` : ""}）`;
-    }
-    function getStoreCategoryOptions(store) {
-        const options = [];
-        const seen = new Set();
-        const defaultCategoryId = String(store?.config?.defaultCategoryId || "").trim();
-        const defaultCategoryName = (store?.config?.commonCategories || []).find((item) => String(item.categoryId || "").trim() === defaultCategoryId)?.name;
-        const add = (categoryId, name) => {
-            const id = String(categoryId || "").trim();
-            if (!id || seen.has(id))
-                return;
-            seen.add(id);
-            options.push({ id, label: name ? `${name} (${id})` : id });
-        };
-        add(defaultCategoryId, defaultCategoryName || "默认类目");
-        for (const item of store?.config?.commonCategories || []) {
-            add(item.categoryId, item.name);
-        }
-        return options;
-    }
     async function showBatchCollectDialog(itemCount, canAutoNextPage, platformCode) {
-        let listingStores = [];
-        let storeLoadError = "";
-        try {
-            listingStores = await listListingStores();
-        }
-        catch (err) {
-            storeLoadError = err instanceof Error ? err.message : "获取店铺列表失败";
-        }
-        const savedAutoDraft = loadAutoDraftSettings();
+        const settings = collectionOptions(await collectionShops(platformCode));
         return new Promise((resolve) => {
             const overlay = document.createElement("div");
             overlay.style.cssText = `
@@ -4934,6 +4460,9 @@
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     `;
             const panel = document.createElement("div");
+            panel.setAttribute("role", "dialog");
+            panel.setAttribute("aria-modal", "true");
+            panel.setAttribute("aria-label", "确认批量采集");
             panel.style.cssText = `
       width: 440px; max-width: calc(100vw - 32px); background: #fff;
       max-height: calc(100dvh - 32px); overflow-y: auto;
@@ -4976,217 +4505,7 @@
                 : "当前页面没有识别到下一页能力，只会采集本页商品。";
             pageSection.appendChild(pageHint);
             panel.appendChild(pageSection);
-            const repriceSection = document.createElement("div");
-            repriceSection.style.cssText = `
-      padding: 12px; border: 1px solid #d6e4ff; border-radius: 8px;
-      background: #f8fbff; margin-bottom: 14px;
-    `;
-            const repriceLabel = document.createElement("label");
-            repriceLabel.style.cssText = "display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;color:#1d39c4;";
-            const repriceCheckbox = document.createElement("input");
-            repriceCheckbox.type = "checkbox";
-            repriceLabel.appendChild(repriceCheckbox);
-            repriceLabel.appendChild(document.createTextNode("批量改价"));
-            repriceSection.appendChild(repriceLabel);
-            const repriceHint = document.createElement("div");
-            repriceHint.style.cssText = "font-size:12px;color:#597ef7;line-height:1.5;margin:7px 0 8px 22px;";
-            repriceHint.textContent = "开启后，每个商品提交前都会按：原价 × 汇率 × 利润系数 改价。1688 默认识别为 CNY。";
-            repriceSection.appendChild(repriceHint);
-            const repriceGrid = document.createElement("div");
-            repriceGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;";
-            const inputStyle = "width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #adc6ff;border-radius:6px;background:#fff;font-size:13px;";
-            const wrapInput = (label, input) => {
-                const wrap = document.createElement("label");
-                wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;font-size:12px;color:#666;";
-                const span = document.createElement("span");
-                span.textContent = label;
-                wrap.appendChild(span);
-                wrap.appendChild(input);
-                return wrap;
-            };
-            const sourceCurrencySelect = document.createElement("select");
-            sourceCurrencySelect.style.cssText = inputStyle;
-            const targetCurrencySelect = document.createElement("select");
-            targetCurrencySelect.style.cssText = inputStyle;
-            for (const code of ["CNY", "USD", "EUR", "GBP", "JPY", "HKD"]) {
-                const sourceOpt = document.createElement("option");
-                sourceOpt.value = code;
-                sourceOpt.textContent = code;
-                sourceCurrencySelect.appendChild(sourceOpt);
-                const targetOpt = document.createElement("option");
-                targetOpt.value = code;
-                targetOpt.textContent = code;
-                targetCurrencySelect.appendChild(targetOpt);
-            }
-            sourceCurrencySelect.value = defaultBatchSourceCurrency(platformCode);
-            targetCurrencySelect.value = "USD";
-            const profitInput = document.createElement("input");
-            profitInput.type = "number";
-            profitInput.min = "0.01";
-            profitInput.step = "0.01";
-            profitInput.value = "1.3";
-            profitInput.style.cssText = inputStyle;
-            const rateInput = document.createElement("input");
-            rateInput.type = "number";
-            rateInput.min = "0.000001";
-            rateInput.step = "0.000001";
-            rateInput.placeholder = "自动获取";
-            rateInput.style.cssText = inputStyle;
-            rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-            repriceGrid.appendChild(wrapInput("源币种", sourceCurrencySelect));
-            repriceGrid.appendChild(wrapInput("目标币种", targetCurrencySelect));
-            repriceGrid.appendChild(wrapInput("利润系数", profitInput));
-            repriceGrid.appendChild(wrapInput("汇率", rateInput));
-            repriceSection.appendChild(repriceGrid);
-            const repriceActions = document.createElement("div");
-            repriceActions.style.cssText = "display:flex;justify-content:flex-end;margin-top:8px;";
-            const fetchRateBtn = document.createElement("button");
-            fetchRateBtn.type = "button";
-            fetchRateBtn.textContent = "获取汇率";
-            fetchRateBtn.style.cssText = "padding:6px 10px;border:1px solid #adc6ff;border-radius:6px;background:#fff;color:#1d39c4;cursor:pointer;";
-            repriceActions.appendChild(fetchRateBtn);
-            repriceSection.appendChild(repriceActions);
-            const syncRepriceUi = () => {
-                const enabled = repriceCheckbox.checked;
-                for (const el of [sourceCurrencySelect, targetCurrencySelect, profitInput, rateInput, fetchRateBtn]) {
-                    el.disabled = !enabled;
-                    el.style.opacity = enabled ? "1" : "0.55";
-                }
-                repriceSection.style.background = enabled ? "#f8fbff" : "#fafafa";
-                repriceSection.style.borderColor = enabled ? "#d6e4ff" : "#f0f0f0";
-            };
-            const syncBatchRate = async () => {
-                const from = sourceCurrencySelect.value;
-                const to = targetCurrencySelect.value;
-                if (from === to) {
-                    rateInput.value = "1";
-                    return 1;
-                }
-                fetchRateBtn.textContent = "读取中...";
-                fetchRateBtn.disabled = true;
-                try {
-                    const result = await getExchangeRate(from, to);
-                    rateInput.value = String(result.rate);
-                    repriceHint.textContent = `汇率：1 ${from} = ${result.rate} ${to}${result.date ? `（${result.date}）` : ""}，来源：${result.source || "system"}`;
-                    return result.rate;
-                }
-                catch (err) {
-                    repriceHint.textContent = `汇率自动获取失败，可手动填写汇率：${err instanceof Error ? err.message : String(err)}`;
-                    throw err;
-                }
-                finally {
-                    fetchRateBtn.textContent = "获取汇率";
-                    fetchRateBtn.disabled = !repriceCheckbox.checked;
-                }
-            };
-            fetchRateBtn.onclick = () => {
-                void syncBatchRate();
-            };
-            repriceCheckbox.onchange = syncRepriceUi;
-            sourceCurrencySelect.onchange = () => {
-                rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-            };
-            targetCurrencySelect.onchange = () => {
-                rateInput.value = sourceCurrencySelect.value === targetCurrencySelect.value ? "1" : "";
-            };
-            syncRepriceUi();
-            panel.appendChild(repriceSection);
-            const autoDraftSection = document.createElement("div");
-            autoDraftSection.style.cssText = `
-      padding: 12px; border: 1px solid #f0f0f0; border-radius: 8px;
-      background: #fafafa; margin-bottom: 14px;
-    `;
-            const checkboxLabel = document.createElement("label");
-            checkboxLabel.style.cssText = "display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;";
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.checked = Boolean(savedAutoDraft.enabled && savedAutoDraft.storeId && listingStores.some((s) => s.id === savedAutoDraft.storeId));
-            checkbox.disabled = listingStores.length === 0;
-            checkboxLabel.appendChild(checkbox);
-            checkboxLabel.appendChild(document.createTextNode("AI处理成功后自动创建平台草稿"));
-            autoDraftSection.appendChild(checkboxLabel);
-            const hint = document.createElement("div");
-            hint.style.cssText = "font-size:12px;color:#666;line-height:1.5;margin:7px 0 8px 22px;";
-            hint.textContent = storeLoadError || "采集完成后等待 AI Agent 标记可上架，再自动上架到所选店铺的平台草稿箱。";
-            autoDraftSection.appendChild(hint);
-            const select = document.createElement("select");
-            select.style.cssText = `
-      width: 100%; box-sizing: border-box; padding: 8px 10px;
-      border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px;
-      background: #fff;
-    `;
-            if (listingStores.length === 0) {
-                const opt = document.createElement("option");
-                opt.value = "";
-                opt.textContent = storeLoadError || "暂无可用店铺，请先到管理系统添加/启用店铺";
-                select.appendChild(opt);
-            }
-            else {
-                for (const store of listingStores) {
-                    const opt = document.createElement("option");
-                    opt.value = store.id;
-                    opt.textContent = formatStoreOption(store);
-                    select.appendChild(opt);
-                }
-                select.value = savedAutoDraft.storeId && listingStores.some((s) => s.id === savedAutoDraft.storeId)
-                    ? savedAutoDraft.storeId
-                    : listingStores[0].id;
-            }
-            autoDraftSection.appendChild(select);
-            const categorySelect = document.createElement("select");
-            categorySelect.style.cssText = `
-      width: 100%; box-sizing: border-box; padding: 8px 10px;
-      border: 1px solid #d9d9d9; border-radius: 6px; font-size: 13px;
-      background: #fff; margin-top: 8px;
-    `;
-            const syncCategorySelect = () => {
-                categorySelect.innerHTML = "";
-                const store = listingStores.find((item) => item.id === select.value);
-                const categories = getStoreCategoryOptions(store);
-                if (categories.length === 0) {
-                    const opt = document.createElement("option");
-                    opt.value = "";
-                    opt.textContent = "使用店铺默认发品类目";
-                    categorySelect.appendChild(opt);
-                    return;
-                }
-                if (platformCode === "alibaba") {
-                    const sourceOpt = document.createElement("option");
-                    sourceOpt.value = "";
-                    sourceOpt.textContent = "自动使用源商品类目（采集失败时使用店铺默认类目）";
-                    categorySelect.appendChild(sourceOpt);
-                }
-                for (const category of categories) {
-                    const opt = document.createElement("option");
-                    opt.value = category.id;
-                    opt.textContent = category.label;
-                    categorySelect.appendChild(opt);
-                }
-                categorySelect.value =
-                    savedAutoDraft.categoryId && categories.some((item) => item.id === savedAutoDraft.categoryId)
-                        ? savedAutoDraft.categoryId
-                        : platformCode === "alibaba"
-                            ? ""
-                            : categories[0].id;
-            };
-            syncCategorySelect();
-            autoDraftSection.appendChild(categorySelect);
-            const syncAutoDraftUi = () => {
-                const enabled = checkbox.checked && listingStores.length > 0;
-                select.disabled = !enabled;
-                categorySelect.disabled = !enabled;
-                select.style.opacity = enabled ? "1" : "0.55";
-                categorySelect.style.opacity = enabled ? "1" : "0.55";
-                autoDraftSection.style.background = enabled ? "#f6ffed" : "#fafafa";
-                autoDraftSection.style.borderColor = enabled ? "#b7eb8f" : "#f0f0f0";
-            };
-            checkbox.onchange = syncAutoDraftUi;
-            select.onchange = () => {
-                syncCategorySelect();
-                syncAutoDraftUi();
-            };
-            syncAutoDraftUi();
-            panel.appendChild(autoDraftSection);
+            panel.appendChild(settings.section);
             const actions = document.createElement("div");
             actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#fff;padding:12px 0 16px;border-top:1px solid #f0f0f0;z-index:2;";
             const cancelBtn = document.createElement("button");
@@ -5199,43 +4518,16 @@
             const startBtn = document.createElement("button");
             startBtn.textContent = "开始采集";
             startBtn.style.cssText = "padding:8px 16px;border:0;border-radius:6px;background:#1677ff;color:#fff;cursor:pointer;font-weight:600;";
-            startBtn.onclick = async () => {
-                const autoDraftStoreId = checkbox.checked && listingStores.length > 0 ? select.value || null : null;
-                const autoDraftCategoryId = autoDraftStoreId ? categorySelect.value || null : null;
+            startBtn.onclick = () => {
+                const listingOptions = settings.values();
+                if (!listingOptions)
+                    return;
                 const maxPagesRaw = Number(pageInput.value);
                 const maxPages = canAutoNextPage && Number.isFinite(maxPagesRaw) && maxPagesRaw >= 1
                     ? Math.floor(maxPagesRaw)
                     : null;
-                let reprice = null;
-                if (repriceCheckbox.checked) {
-                    const profit = Number(profitInput.value);
-                    if (!Number.isFinite(profit) || profit <= 0) {
-                        repriceHint.textContent = "利润系数需要大于 0";
-                        return;
-                    }
-                    let rate = Number(rateInput.value);
-                    if (!Number.isFinite(rate) || rate <= 0) {
-                        try {
-                            rate = await syncBatchRate();
-                        }
-                        catch {
-                            return;
-                        }
-                    }
-                    reprice = {
-                        sourceCurrency: sourceCurrencySelect.value,
-                        targetCurrency: targetCurrencySelect.value,
-                        rate,
-                        profit,
-                    };
-                }
-                saveAutoDraftSettings({
-                    enabled: Boolean(autoDraftStoreId),
-                    storeId: autoDraftStoreId || undefined,
-                    categoryId: autoDraftCategoryId || undefined,
-                });
                 overlay.remove();
-                resolve({ autoDraftStoreId, autoDraftCategoryId, maxPages, reprice });
+                resolve({ listingOptions, maxPages });
             };
             actions.appendChild(cancelBtn);
             actions.appendChild(startBtn);
@@ -5379,35 +4671,35 @@
             if (isBatchStopped(queue))
                 return;
             if (queue.reprice) {
-                const originalProduct = cloneProduct(product);
+                const originalProduct = cloneProduct$1(product);
                 applyPanelReprice(product, originalProduct, {
                     rate: queue.reprice.rate,
                     profit: queue.reprice.profit,
                     targetCurrency: queue.reprice.targetCurrency,
                 });
             }
-            const submitOptions = queue.autoDraftStoreId !== undefined
-                ? {
-                    autoDraftStoreId: queue.autoDraftStoreId,
-                    autoDraftCategoryId: queue.autoDraftCategoryId,
-                }
-                : undefined;
-            const res = await submitProduct(product, submitOptions);
-            if (res.code === 409) {
-                queue.stats.duplicate += 1;
-                showToast("商品已存在，继续下一个");
-            }
-            else {
-                queue.stats.success += 1;
-                showToast("采集成功，继续下一个");
-            }
+            await submitProduct(product, queue.listingOptions);
+            queue.stats.success += 1;
+            showToast("采集成功，继续下一个");
         }
         catch (err) {
             if (isBatchStopped(queue))
                 return;
-            queue.stats.failed += 1;
-            console.error("[CC] Batch submit failed:", err);
-            showToast("提交失败，继续下一个", "error");
+            if (err.code === "QUEUE_ACTIVE" || err.code === "COLLECTION_ALREADY_LISTED") {
+                queue.stats.duplicate += 1;
+                showToast("商品已入队或已有上架记录，继续下一个");
+            }
+            else if (err.code === "COLLECTOR_SHOP_UNAVAILABLE" || err.code === "COLLECTOR_PUBLISH_FORBIDDEN") {
+                markBatchStopped(queue);
+                document.querySelector(".cc-batch-status")?.remove();
+                showToast(`批量采集已停止：${err.message}`, "error");
+                return;
+            }
+            else {
+                queue.stats.failed += 1;
+                console.error("[CC] Batch submit failed:", err);
+                showToast(`提交失败：${err.message}`, "error");
+            }
         }
         if (isBatchStopped(queue))
             return;
@@ -5433,9 +4725,7 @@
             autoNextPage: !!platform.goToNextListPage,
             maxPages: options.maxPages,
             awaitingNextPage: false,
-            autoDraftStoreId: options.autoDraftStoreId,
-            autoDraftCategoryId: options.autoDraftCategoryId,
-            reprice: options.reprice,
+            listingOptions: options.listingOptions,
             pageIndex: 1,
             seenIds: items.map((item) => item.id || item.url).filter(Boolean),
             index: 0,
@@ -5473,7 +4763,6 @@
                 const confirmed = await showCollectorPanel(product);
                 if (confirmed) {
                     setLauncherState("已采集", "success");
-                    showToast("采集成功！");
                     window.setTimeout(() => setLauncherState(), 1800);
                 }
             },
@@ -5642,7 +4931,7 @@
     (async function init() {
         if (!isTopFrame())
             return;
-        console.log("[CC] 商品采集器 v1.1 已加载");
+        console.log("[CC] 商品采集器 v2.4.0 已加载");
         await initAuth();
         const code = detectPlatform();
         const platform = platforms[code];

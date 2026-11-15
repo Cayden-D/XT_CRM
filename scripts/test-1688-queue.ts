@@ -38,7 +38,6 @@ try{
   assert.equal((await request('PUT',`/connections/${connection.id}/agent-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
   assert.equal((await request('PUT',`/connections/${other.id}/agent-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
   assert.equal((await request('PUT',`/connections/${connection.id}/agent-queue-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
-  assert.equal((await request('PUT',`/connections/${other.id}/agent-queue-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,409)
   assert.deepEqual(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'999',source_category_attributes:[{attrName:'材质',attrValue:'棉'}]}),{})
   assert.equal(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'101',source_category_attributes:[{attrName:'材质',attrNameId:'1',attrValue:'棉',attrValueIds:['1']}],attributes:{}})['p-1'].value,1)
   assert.deepEqual(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'101',source_category_attributes:[],attributes:{材质:'棉',功率:'120',风量:'详情可咨询客服'}}),{'p-1':{value:1,text:'棉'},'p-2':'120'})
@@ -108,5 +107,53 @@ try{
   assert.equal((await request('GET','/agent/queue?page=0')).statusCode,400)
   assert.equal((await request('GET','/agent/queue?pageSize=101')).statusCode,400)
   assert.equal((await request('GET','/agent/queue?status=invalid')).statusCode,400)
-  console.log(JSON.stringify({queueDefaultOff:'ok',singleTarget:'ok',transactionalEnqueue:'ok',categoryDefaults:'ok',categoryRecollect:'ok',imageScreening:'ok',safePublish:'ok',watermarkBlocked:'ok',missingStockBlocked:'ok',expiredLeaseNoRetry:'ok',safeScreeningRetry:'ok',disableCancelsQueued:'ok',stopBeforePublish:'ok',platformUnknownNoRetry:'ok',mockGatewayPublishCalls:published,livePlatformWrites:0,textCalls:text,visionCalls:vision}))
+  // Two shops can be enabled concurrently. A collector import routes to the selected one and adjusts every quote.
+  assert.equal((await request('PUT',`/connections/${other.id}/agent-queue-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
+  const enabledShops=(await request('GET','/agent/queue')).json().data.settings.filter((item:any)=>item.enabled)
+  assert.deepEqual(new Set(enabledShops.map((item:any)=>item.id)),new Set([connection.id,other.id]))
+  const role=(await db.query("INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,'test_publisher','测试发布','[\"integration:publish\"]') RETURNING id",[tenant])).rows[0].id
+  await db.query('INSERT INTO user_roles(user_id,role_id) VALUES($1,$2)',[actor.id,role])
+  const key=(await app.inject({method:'POST',url:'/api/product-collections/access-key',headers:{authorization:`Bearer ${token}`}})).json().data.key
+  const headers={'x-collector-key':key}
+  const importProduct=(payload:object)=>app.inject({method:'POST',url:'/api/product-collections/import',headers,payload})
+  const session=await app.inject({method:'GET',url:'/api/product-collections/session',headers})
+  assert.deepEqual(session.json().data.listingShops.map((item:any)=>item.id),[connection.id,other.id])
+  const selectedId=randomUUID()
+  const payload={source:'1688',sourceProductId:selectedId,sourceUrl:'https://detail.1688.com/offer/123.html',
+    sourceCategoryId:'101',title:'多店铺调价测试',mainImageUrl:'https://cbu01.alicdn.com/img/main.jpg',detailImages:['https://cbu01.alicdn.com/img/detail.jpg'],
+    priceMin:10.05,priceMax:12.55,attributes:{材质:'棉',阶梯价格:'¥12.55 (2 pieces) / ¥10.05 (10 pieces)'},
+    rawData:{priceMin:10.05},variants:[{label:'红色',price:12.55,stock:7}],priceAdjustmentPercent:10}
+  const unavailable=await importProduct({...payload,targetConnectionId:randomUUID()})
+  assert.equal(unavailable.json().error,'COLLECTOR_SHOP_UNAVAILABLE')
+  const selected=await importProduct({...payload,targetConnectionId:other.id})
+  assert.equal(selected.statusCode,201,selected.body)
+  assert.equal(selected.json().data.queuedShop.id,other.id)
+  const selectedSource=selected.json().data.id
+  const source=(await db.query('SELECT * FROM collected_products WHERE id=$1',[selectedSource])).rows[0]
+  assert.deepEqual([Number(source.price_min),Number(source.price_max),source.raw_data.priceMin,source.attributes.阶梯价格],[11.06,13.81,10.05,'¥13.81 (2 pieces) / ¥11.06 (10 pieces)'])
+  assert.equal((await importProduct({...payload,targetConnectionId:connection.id})).json().error,'QUEUE_ACTIVE')
+  const worker=randomUUID()
+  const selectedJob=(await db.query("UPDATE integration_1688_collection_queue_jobs SET status='processing',worker_id=$2,lease_until=now()+interval '1 hour' WHERE collected_product_id=$1 RETURNING id",[selectedSource,worker])).rows[0].id
+  uncertainPublish=false
+  await runClaimedCollectionQueueJob(selectedJob,worker)
+  const listed=(await db.query(`SELECT j.status,d.connection_id,d.data_body,p.base_price,v.unit_price FROM integration_1688_collection_queue_jobs j
+    JOIN integration_1688_publish_drafts d ON d.id=j.draft_id JOIN products p ON p.id=j.product_id JOIN product_variants v ON v.product_id=p.id WHERE j.id=$1`,[selectedJob])).rows[0]
+  assert.deepEqual([listed.status,listed.connection_id,Number(listed.base_price),Number(listed.unit_price)],['published',other.id,13.81,13.81])
+  assert.deepEqual(listed.data_body.formValues.priceRange.map((tier:any)=>tier.pricerange_price),[13.81,11.06])
+  const savedOnly={...payload,sourceProductId:randomUUID(),targetConnectionId:null,priceAdjustmentPercent:-20}
+  for(let i=0;i<2;i++){
+    const saved=await importProduct(savedOnly)
+    assert.equal(saved.statusCode,201,saved.body)
+    assert.equal(saved.json().data.queuedShop,null)
+    const row=(await db.query('SELECT price_min,price_max FROM collected_products WHERE id=$1',[saved.json().data.id])).rows[0]
+    assert.deepEqual([Number(row.price_min),Number(row.price_max)],[8.04,10.04])
+  }
+  assert.equal((await importProduct({...savedOnly,priceAdjustmentPercent:-100})).statusCode,400)
+  const legacy=await importProduct({...payload,sourceProductId:randomUUID(),priceAdjustmentPercent:undefined})
+  assert.equal(legacy.json().data.queuedShop.id,connection.id)
+  assert.equal((await request('PUT',`/connections/${other.id}/agent-queue-settings`,{enabled:false,revision:1,confirmed:true})).statusCode,200)
+  assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:other.id})).json().error,'COLLECTOR_SHOP_UNAVAILABLE')
+  await db.query('DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2',[actor.id,role])
+  assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:connection.id})).statusCode,403)
+  console.log(JSON.stringify({queueDefaultOff:'ok',multipleTargets:'ok',selectedShop:'ok',adjustedQuotes:'ok',saveOnly:'ok',transactionalEnqueue:'ok',categoryDefaults:'ok',categoryRecollect:'ok',imageScreening:'ok',safePublish:'ok',watermarkBlocked:'ok',missingStockBlocked:'ok',expiredLeaseNoRetry:'ok',safeScreeningRetry:'ok',disableCancelsQueued:'ok',stopBeforePublish:'ok',platformUnknownNoRetry:'ok',mockGatewayPublishCalls:published,livePlatformWrites:0,textCalls:text,visionCalls:vision}))
 }finally{globalThis.fetch=originalFetch;await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[tenant]);await db.query('DELETE FROM tenants WHERE id=$1',[tenant]);await app.close();await db.end()}

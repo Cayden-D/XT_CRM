@@ -5,6 +5,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
+import { adjustedCollectorPrices } from '../integrations/collector-pricing.js'
+import { IntegrationError } from '../integrations/1688.js'
 import { collectorExtensionZip } from '../integrations/collector-extension.js'
 import { saveCollectedPackage } from '../integrations/product-attributes.js'
 
@@ -16,14 +18,22 @@ const stageSql=`CASE WHEN q.status='published' THEN 'published' WHEN q.status IN
   WHEN cp.product_id IS NOT NULL THEN 'promoted' ELSE 'pending' END`
 const nullableUrl=z.union([z.string().url().max(2000),z.literal(''),z.null()]).optional().transform(value=>value||null)
 const variantSchema=z.object({externalSkuId:z.string().trim().max(200).optional().nullable(),label:z.string().trim().min(1).max(500),attributes:z.record(z.string(),z.string()).default({}),imageUrl:nullableUrl,priceText:z.string().trim().max(200).optional().nullable(),price:z.coerce.number().min(0).optional().nullable(),stockText:z.string().trim().max(200).optional().nullable(),stock:z.coerce.number().min(0).optional().nullable(),rawData:z.record(z.string(),z.unknown()).default({})})
-const importSchema=z.object({source:z.enum(['1688','alibaba']),sourceProductId:z.string().trim().min(1).max(200),sourceUrl:z.string().url().max(2000),title:z.string().trim().min(1).max(500),mainImageUrl:nullableUrl,galleryImages:z.array(z.string().url().max(2000)).max(200).default([]),detailImages:z.array(z.string().url().max(2000)).max(500).default([]),videoUrl:nullableUrl,descriptionUrl:nullableUrl,currency:z.string().trim().min(1).max(10).default('CNY'),priceMin:z.coerce.number().min(0).optional().nullable(),priceMax:z.coerce.number().min(0).optional().nullable(),attributes:z.record(z.string(),z.string()).default({}),skuProps:z.array(z.unknown()).max(100).default([]),sellerName:z.string().trim().max(500).optional().nullable(),sellerId:z.string().trim().max(200).optional().nullable(),categoryPath:z.string().trim().max(1000).optional().nullable(),sourceCategoryId:z.string().trim().max(200).optional().nullable(),sourceCategoryAttributes:z.array(z.unknown()).max(1000).default([]),tags:z.array(z.string().trim().max(100)).max(100).default([]),collectorNote:z.string().trim().max(10000).optional().nullable(),sourceCollectedAt:z.string().datetime().optional().nullable(),collectorMode:z.string().trim().max(100).optional().nullable(),collectorVersion:z.string().trim().max(30).optional().nullable(),rawData:z.record(z.string(),z.unknown()).default({}),variants:z.array(variantSchema).max(2000).default([])}).refine(d=>d.priceMin==null||d.priceMax==null||d.priceMax>=d.priceMin,{message:'priceMax must be greater than or equal to priceMin',path:['priceMax']})
+const importSchema=z.object({source:z.enum(['1688','alibaba']),sourceProductId:z.string().trim().min(1).max(200),sourceUrl:z.string().url().max(2000),title:z.string().trim().min(1).max(500),mainImageUrl:nullableUrl,galleryImages:z.array(z.string().url().max(2000)).max(200).default([]),detailImages:z.array(z.string().url().max(2000)).max(500).default([]),videoUrl:nullableUrl,descriptionUrl:nullableUrl,currency:z.string().trim().min(1).max(10).default('CNY'),priceMin:z.coerce.number().min(0).optional().nullable(),priceMax:z.coerce.number().min(0).optional().nullable(),attributes:z.record(z.string(),z.string()).default({}),skuProps:z.array(z.unknown()).max(100).default([]),sellerName:z.string().trim().max(500).optional().nullable(),sellerId:z.string().trim().max(200).optional().nullable(),categoryPath:z.string().trim().max(1000).optional().nullable(),sourceCategoryId:z.string().trim().max(200).optional().nullable(),sourceCategoryAttributes:z.array(z.unknown()).max(1000).default([]),tags:z.array(z.string().trim().max(100)).max(100).default([]),collectorNote:z.string().trim().max(10000).optional().nullable(),sourceCollectedAt:z.string().datetime().optional().nullable(),collectorMode:z.string().trim().max(100).optional().nullable(),collectorVersion:z.string().trim().max(30).optional().nullable(),rawData:z.record(z.string(),z.unknown()).default({}),variants:z.array(variantSchema).max(2000).default([]),
+  targetConnectionId:z.string().uuid().nullable().optional(),
+  priceAdjustmentPercent:z.number().min(-99.99).max(99999.99).refine(v=>Number(v.toFixed(2))===v).optional(),
+}).refine(d=>d.priceMin==null||d.priceMax==null||d.priceMax>=d.priceMin,{message:'priceMax must be greater than or equal to priceMin',path:['priceMax']})
 
 const hashKey=(key:string)=>createHash('sha256').update(key).digest('hex')
 
 async function getCollectorIdentity(request:FastifyRequest,reply:FastifyReply){
   const key=request.headers['x-collector-key']
   if(typeof key!=='string'||!key.startsWith('crm1688_')){reply.code(401).send({error:'INVALID_COLLECTOR_KEY',message:'采集密钥缺失或格式无效。'});return null}
-  const result=await db.query<{id:string;tenant_id:string;user_id:string}>(`SELECT id,tenant_id,user_id FROM product_collector_keys WHERE key_hash=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())`,[hashKey(key)])
+  const result=await db.query<{id:string;tenant_id:string;user_id:string;email:string;display_name:string;can_publish:boolean}>(`
+    SELECT k.id,k.tenant_id,k.user_id,u.email::text,u.display_name,
+      EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id AND r.tenant_id=k.tenant_id
+        WHERE ur.user_id=u.id AND r.permissions ?| ARRAY['*','integration:*','integration:publish']) AS can_publish
+    FROM product_collector_keys k JOIN users u ON u.id=k.user_id AND u.tenant_id=k.tenant_id AND u.status='active' AND u.deleted_at IS NULL
+    WHERE k.key_hash=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`,[hashKey(key)])
   const identity=result.rows[0]
   if(!identity){reply.code(401).send({error:'INVALID_COLLECTOR_KEY',message:'采集密钥无效或已被吊销。'});return null}
   await db.query('UPDATE product_collector_keys SET last_used_at=now() WHERE id=$1',[identity.id])
@@ -59,7 +69,14 @@ export async function productCollectionRoutes(app:FastifyInstance){
   })
   app.get('/collector-script.user.js',async(_request,reply)=>{const script=await readFile(resolve(process.cwd(),'scripts','1688-product-collector.user.js'),'utf8');return reply.type('application/javascript; charset=utf-8').header('Content-Disposition','inline; filename="1688-product-collector.user.js"').send(script)})
 
-  app.get('/session',async(request,reply)=>{const identity=await getCollectorIdentity(request,reply);if(!identity)return;const user=(await db.query(`SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL`,[identity.user_id,identity.tenant_id])).rows[0];if(!user)return reply.code(401).send({error:'INVALID_COLLECTOR_KEY',message:'采集密钥所属账号不可用。'});return{data:{id:user.id,email:user.email,username:user.display_name,displayName:user.display_name,teams:[]}}})
+  app.get('/session',async(request,reply)=>{
+    const identity=await getCollectorIdentity(request,reply)
+    if(!identity)return
+    const listingShops=identity.can_publish?(await db.query(
+      'SELECT connection_id AS id,display_name AS name FROM collection_listing_shops WHERE tenant_id=$1 ORDER BY enabled_at,connection_id',[identity.tenant_id])).rows:[]
+    reply.header('Cache-Control','no-store')
+    return {data:{id:identity.user_id,email:identity.email,username:identity.display_name,displayName:identity.display_name,teams:[],listingShops}}
+  })
 
   // Connect by approval: the signed-in user approves a challenge; the collector redeems the matching verifier for a key.
   app.post('/connect/approve',{preHandler:requirePermission('collection:create')},async(request,reply)=>{
@@ -138,5 +155,82 @@ export async function productCollectionRoutes(app:FastifyInstance){
     }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}
   })
 
-  app.post('/import',async(request,reply)=>{const identity=await getCollectorIdentity(request,reply);if(!identity)return;const input=importSchema.safeParse(request.body);if(!input.success)return reply.code(400).send({error:'VALIDATION_ERROR',message:'采集数据格式不正确。',details:input.error.flatten()});const d=input.data;const client=await db.connect();try{await client.query('BEGIN');const product=(await client.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,video_url,description_url,currency,price_min,price_max,attributes,sku_props,seller_name,seller_id,category_path,source_category_id,source_category_attributes,tags,collector_note,source_collected_at,raw_data,collector_mode,collector_version,collected_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) ON CONFLICT(tenant_id,source,source_product_id) DO UPDATE SET source_url=excluded.source_url,title=excluded.title,main_image_url=excluded.main_image_url,gallery_images=excluded.gallery_images,detail_images=excluded.detail_images,video_url=excluded.video_url,description_url=excluded.description_url,currency=excluded.currency,price_min=excluded.price_min,price_max=excluded.price_max,attributes=excluded.attributes,sku_props=excluded.sku_props,seller_name=excluded.seller_name,seller_id=excluded.seller_id,category_path=excluded.category_path,source_category_id=excluded.source_category_id,source_category_attributes=excluded.source_category_attributes,tags=excluded.tags,collector_note=excluded.collector_note,source_collected_at=excluded.source_collected_at,raw_data=excluded.raw_data,collector_mode=excluded.collector_mode,collector_version=excluded.collector_version,collected_by=excluded.collected_by,collected_at=now(),updated_at=now() RETURNING *`,[identity.tenant_id,d.source,d.sourceProductId,d.sourceUrl,d.title,d.mainImageUrl,JSON.stringify(d.galleryImages),JSON.stringify(d.detailImages),d.videoUrl,d.descriptionUrl,d.currency,d.priceMin,d.priceMax,JSON.stringify(d.attributes),JSON.stringify(d.skuProps),d.sellerName,d.sellerId,d.categoryPath,d.sourceCategoryId,JSON.stringify(d.sourceCategoryAttributes),JSON.stringify(d.tags),d.collectorNote,d.sourceCollectedAt,JSON.stringify(d.rawData),d.collectorMode,d.collectorVersion,identity.user_id])).rows[0];await client.query('DELETE FROM collected_product_variants WHERE collected_product_id=$1',[product.id]);for(const [position,v] of d.variants.entries())await client.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,external_sku_id,label,attributes,image_url,price_text,price,stock_text,stock,raw_data)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[identity.tenant_id,product.id,position,v.externalSkuId,v.label,JSON.stringify(v.attributes),v.imageUrl,v.priceText,v.price,v.stockText,v.stock,JSON.stringify(v.rawData)]);await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'collection.import','collected_product',$3,$4,$5)`,[identity.tenant_id,identity.user_id,product.id,JSON.stringify({source:d.source,sourceProductId:d.sourceProductId,title:d.title,variantCount:d.variants.length}),request.id]);await client.query('COMMIT');return reply.code(201).send({data:{id:product.id,title:product.title,variantCount:d.variants.length,collectedAt:product.collected_at}})}catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}})
+  app.post('/import',async(request,reply)=>{
+    const identity=await getCollectorIdentity(request,reply)
+    if(!identity)return
+    const input=importSchema.safeParse(request.body)
+    if(!input.success){
+      const fields=input.error.flatten().fieldErrors
+      const message=fields.priceAdjustmentPercent?'调价必须大于 -100%，最多保留两位小数。':fields.targetConnectionId?'上传店铺无效，请重新选择。':'采集数据格式不正确。'
+      return reply.code(400).send({error:'VALIDATION_ERROR',message,details:input.error.flatten()})
+    }
+    const d=input.data, tenantId=identity.tenant_id
+    const client=await db.connect()
+    try{
+      await client.query('BEGIN')
+      // Serialize imports of the same source, including before the first row exists.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[JSON.stringify([tenantId,d.source,d.sourceProductId])])
+      const previous=(await client.query(`SELECT id,product_id,target_connection_id,use_default_listing_shop,price_adjustment_percent
+        FROM collected_products WHERE tenant_id=$1 AND source=$2 AND source_product_id=$3 FOR UPDATE`,[tenantId,d.source,d.sourceProductId])).rows[0]
+      const priorJob=previous?(await client.query('SELECT status,product_id,draft_id FROM integration_1688_collection_queue_jobs WHERE collected_product_id=$1 FOR UPDATE',[previous.id])).rows[0]:null
+      if(previous?.product_id||priorJob?.product_id||priorJob?.draft_id||['published','unknown'].includes(priorJob?.status)){
+        throw new IntegrationError('COLLECTION_ALREADY_LISTED','该商品已有正式产品、发布草稿或上架结果待核对，请在 CRM 中处理。',409)
+      }
+      if(['queued','processing'].includes(priorJob?.status)){
+        throw new IntegrationError('QUEUE_ACTIVE','该商品已在上架队列中，请在 CRM 核对，避免重复提交。',409)
+      }
+      const target=d.targetConnectionId===undefined?previous?.target_connection_id??null:d.targetConnectionId
+      const useDefault=d.targetConnectionId===undefined&&(previous?.use_default_listing_shop??true)
+      if(target){
+        if(d.source!=='1688')throw new IntegrationError('COLLECTOR_SOURCE_UNSUPPORTED','只有 1688 商品支持采集后自动上架。',400)
+        if(!identity.can_publish)throw new IntegrationError('COLLECTOR_PUBLISH_FORBIDDEN','该账号没有选择上架店铺的权限。',403)
+        const shop=(await client.query('SELECT 1 FROM collection_listing_shops WHERE tenant_id=$1 AND connection_id=$2',[tenantId,target])).rows[0]
+        if(!shop)throw new IntegrationError('COLLECTOR_SHOP_UNAVAILABLE','目标店铺不可用，请重新选择已启用自动上架的店铺。',409)
+      }
+      const percent=d.priceAdjustmentPercent??Number(previous?.price_adjustment_percent??0)
+      const pricing=adjustedCollectorPrices(percent)
+      const min=pricing.price(d.priceMin),max=pricing.price(d.priceMax),attributes=pricing.attributes(d.attributes,min,max)
+      const product=(await client.query(`INSERT INTO collected_products(
+          tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,video_url,description_url,currency,
+          price_min,price_max,attributes,sku_props,seller_name,seller_id,category_path,source_category_id,source_category_attributes,tags,
+          collector_note,source_collected_at,raw_data,collector_mode,collector_version,collected_by,target_connection_id,use_default_listing_shop,price_adjustment_percent)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+        ON CONFLICT(tenant_id,source,source_product_id) DO UPDATE SET
+          source_url=excluded.source_url,title=excluded.title,main_image_url=excluded.main_image_url,gallery_images=excluded.gallery_images,
+          detail_images=excluded.detail_images,video_url=excluded.video_url,description_url=excluded.description_url,currency=excluded.currency,
+          price_min=excluded.price_min,price_max=excluded.price_max,attributes=excluded.attributes,sku_props=excluded.sku_props,seller_name=excluded.seller_name,
+          seller_id=excluded.seller_id,category_path=excluded.category_path,source_category_id=excluded.source_category_id,
+          source_category_attributes=excluded.source_category_attributes,tags=excluded.tags,collector_note=excluded.collector_note,
+          source_collected_at=excluded.source_collected_at,raw_data=excluded.raw_data,collector_mode=excluded.collector_mode,
+          collector_version=excluded.collector_version,collected_by=excluded.collected_by,target_connection_id=excluded.target_connection_id,
+          use_default_listing_shop=excluded.use_default_listing_shop,price_adjustment_percent=excluded.price_adjustment_percent,collected_at=now(),updated_at=now()
+        RETURNING id,title,collected_at`,[tenantId,d.source,d.sourceProductId,d.sourceUrl,d.title,d.mainImageUrl,JSON.stringify(d.galleryImages),
+        JSON.stringify(d.detailImages),d.videoUrl,d.descriptionUrl,d.currency,min,max,JSON.stringify(attributes),JSON.stringify(d.skuProps),d.sellerName,
+        d.sellerId,d.categoryPath,d.sourceCategoryId,JSON.stringify(d.sourceCategoryAttributes),JSON.stringify(d.tags),d.collectorNote,d.sourceCollectedAt,
+        JSON.stringify(d.rawData),d.collectorMode,d.collectorVersion,identity.user_id,target,useDefault,percent])).rows[0]
+      await client.query('DELETE FROM collected_product_variants WHERE collected_product_id=$1',[product.id])
+      for(const [position,v] of d.variants.entries()){
+        const price=pricing.price(v.price)
+        const priceText=percent!==0&&price!==null?String(price):v.priceText
+        await client.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,external_sku_id,label,attributes,image_url,price_text,price,stock_text,stock,raw_data)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [tenantId,product.id,position,v.externalSkuId,v.label,JSON.stringify(v.attributes),v.imageUrl,priceText,price,v.stockText,v.stock,JSON.stringify(v.rawData)])
+      }
+      const queued=(await client.query(`SELECT j.connection_id,c.display_name FROM integration_1688_collection_queue_jobs j
+        JOIN integration_1688_connections c ON c.id=j.connection_id AND c.tenant_id=j.tenant_id
+        WHERE j.collected_product_id=$1 AND j.status='queued'`,[product.id])).rows[0]
+      if(target&&!priorJob&&!queued)throw new IntegrationError('COLLECTOR_SHOP_UNAVAILABLE','目标店铺刚刚关闭自动上架，请重新选择。',409)
+      await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)
+        VALUES($1,$2,'collection.import','collected_product',$3,$4,$5)`,
+      [tenantId,identity.user_id,product.id,JSON.stringify({source:d.source,sourceProductId:d.sourceProductId,title:d.title,variantCount:d.variants.length,
+        priceAdjustmentPercent:percent,targetConnectionId:queued?.connection_id??target}),request.id])
+      await client.query('COMMIT')
+      return reply.code(201).send({data:{id:product.id,title:product.title,variantCount:d.variants.length,collectedAt:product.collected_at,
+        queuedShop:queued?{id:queued.connection_id,name:queued.display_name}:null}})
+    }catch(error){
+      await client.query('ROLLBACK')
+      if(error instanceof IntegrationError)return reply.code(error.statusCode).send({error:error.code,message:error.message})
+      throw error
+    }finally{client.release()}
+  })
 }
