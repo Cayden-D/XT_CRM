@@ -34,6 +34,11 @@ const audit = (ctx: AlbumContext, action: string, entityId: string, data: object
  * is checked by reading the picture back from its album address.
  */
 export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>, connectionId?: string, albumId?: string, options: { retry?: boolean } = {}) {
+  const frameShop = asset.options?.heroShopId
+  const destination = connectionId ?? asset.photo_connection_id
+  if (asset.operation === 'suite_hero' && frameShop && destination && frameShop !== destination) {
+    throw new IntegrationError('HERO_SHOP_MISMATCH', '请为首图选择模板所属的店铺相册。', 409)
+  }
   if (asset.photo_status === 'uploaded' && asset.photo_url && (!connectionId || connectionId === asset.photo_connection_id)) return asset.photo_url as string
   if (asset.photo_status === 'unknown' && !options.retry) throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '上次上传相册的结果未确认，请先到店铺相册核对，避免重复上传。', 409)
   if (asset.photo_status === 'uploading') throw new IntegrationError('PHOTO_UPLOADING', '这张图片正在上传相册，请稍候。', 409)

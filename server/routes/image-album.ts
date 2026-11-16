@@ -47,7 +47,13 @@ export async function imageAlbumRoutes(app: FastifyInstance) {
     const productId = input.collectedProductId ?? asset.collected_product_id
     if (!productId) throw new IntegrationError('PRODUCT_REQUIRED', '请选择要替换主图的采集商品。', 400)
     if (input.placement === 'replace' && input.index === undefined) throw new IntegrationError('INDEX_REQUIRED', '请选择要替换的主图。', 400)
-    if (!(await db.query('SELECT 1 FROM collected_products WHERE id=$1 AND tenant_id=$2', [productId, tenant(request)])).rows.length) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
+    const product = (await db.query(`SELECT coalesce(j.connection_id,p.target_connection_id) AS shop_id
+      FROM collected_products p LEFT JOIN integration_1688_collection_queue_jobs j ON j.collected_product_id=p.id AND j.tenant_id=p.tenant_id AND j.status<>'cancelled'
+      WHERE p.id=$1 AND p.tenant_id=$2`, [productId, tenant(request)])).rows[0]
+    if (!product) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
+    if (asset.operation === 'suite_hero' && asset.options?.heroShopId && product.shop_id && product.shop_id !== asset.options.heroShopId) {
+      throw new IntegrationError('HERO_SHOP_MISMATCH', '请选择与首图模板同店铺的采集商品。', 409)
+    }
     const ctx = { tenantId: tenant(request), actorId: request.authUser.sub, requestId: request.id }
     const url = await ensurePhoto(ctx, asset, input.connectionId, input.albumId)
     const applied = await applyAssetToProduct(ctx, asset, productId, input.placement, input.index, url)

@@ -10,6 +10,8 @@ import { requireListingCredits, teamOf } from './teams.js'
 import { ownBrandNames } from './brands.js'
 import { DETAIL_TYPES, LISTING_MAIN_TYPES, heroCopy, productFacts, suiteDesign, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
+import { heroFrameForShop } from './shop-hero-templates.js'
+import { CUSTOM_HERO_FRAME } from './hero-reference-frame.js'
 import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
 
@@ -107,38 +109,42 @@ async function defer(job:QueueJob,message:string,report:Json,seconds=IMAGE_POLL_
 
 /** Generates the listing's pictures (or reuses an unfinished batch), then puts them into the album and the product. */
 async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string},state:Json):Promise<ImageStep>{
-  // Pictures the provider finished but that could not be fetched or saved are fetched and saved again (not generated
-  // again, so nothing is paid twice), a few times per queue entry.
-  if(Number(state.storageRevivals||0)<MAX_STORAGE_REVIVALS){
+  const frame=state.imageBatch?null:await heroFrameForShop(job.tenant_id,job.connection_id)
+  const storageFailure=`status='failed' AND task_id IS NOT NULL AND
+    (error LIKE '图片保存到 OSS 失败%' OR error LIKE '无法读取已保存的图片%' OR error LIKE '生成图片下载失败%')`
+  if(!state.imageBatch){
+    // A new queue attempt may reuse its images only for the same shop and template revision.
+    const key=frame?.mode===CUSTOM_HERO_FRAME?frame.key:null
+    const reusable=(await db.query(`SELECT batch_id FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2
+      AND options->>'unchecked'='true' AND options->>'listingConnectionId'=$5 AND applied_to IS NULL
+      GROUP BY batch_id HAVING count(*)=$3 AND count(DISTINCT operation) FILTER (WHERE operation=ANY($4))=$3
+        AND bool_and(status<>'failed' OR (${storageFailure}))
+        AND bool_or(operation='suite_hero' AND options->>'heroFrame' IS NOT DISTINCT FROM $6 AND options->>'heroFrameKey' IS NOT DISTINCT FROM $7)
+      ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED,job.connection_id,frame?.mode??null,key])).rows[0]
+    if(reusable)state.imageBatch=reusable.batch_id
+  }
+  if(state.imageBatch&&Number(state.storageRevivals||0)<MAX_STORAGE_REVIVALS){
     const revived=(await db.query(`UPDATE image_assets SET status='processing',next_poll_at=now(),lease_until=NULL,error=NULL,updated_at=now()
-      WHERE collected_product_id=$1 AND tenant_id=$2 AND options->>'unchecked'='true' AND applied_to IS NULL AND status='failed' AND task_id IS NOT NULL
-        AND (error LIKE '图片保存到 OSS 失败%' OR error LIKE '无法读取已保存的图片%' OR error LIKE '生成图片下载失败%') RETURNING batch_id`,[source.id,job.tenant_id])).rows
+      WHERE batch_id=$1 AND tenant_id=$2 AND applied_to IS NULL AND ${storageFailure} RETURNING id`,[state.imageBatch,job.tenant_id])).rows
     if(revived.length){
       state.storageRevivals=Number(state.storageRevivals||0)+1
-      state.imageBatch??=revived[0].batch_id
       return {kind:'wait',message:`有 ${revived.length} 张 AI 图已生成但未保存成功，正在重新保存（不会重新生图），完成后继续上架。`}
     }
   }
   if(!state.imageBatch){
-    // A batch from an earlier attempt that never failed is reused, so a retry does not pay twice.
-    const reusable=(await db.query(`SELECT batch_id FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2 AND options->>'unchecked'='true' AND applied_to IS NULL
-      GROUP BY batch_id HAVING count(*)=$3 AND count(DISTINCT operation) FILTER (WHERE operation=ANY($4))=$3 AND bool_and(status<>'failed') ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED])).rows[0]
-    if(reusable)state.imageBatch=reusable.batch_id
-    else{
-      const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
-      if(!refs.length)return {kind:'block',message:'没有可用作参考的商品主图，无法生成新图。'}
-      const brand=await defaultBrand(job.tenant_id),batch=randomUUID()
-      // The 首图's words are written for this product first (team's text model); without them it falls back to the shop terms.
-      facts.heroCopy=await heroCopy(facts,(await teamOf(job.tenant_id,actor.id)).textModel)
-      for(const type of GENERATED){
-        const { prompt, options } = suiteDesign(type,facts,brand)
-        await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,trigger,created_by)
-          VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,'agent',$9)`,[job.tenant_id,source.id,batch,type,settings.suite_model,JSON.stringify(refs),
-          JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',resolution:'1k',quality:settings.suite_quality,unchecked:true,...options}),prompt,actor.id])
-      }
-      state.imageBatch=batch
-      return {kind:'wait',message:`正在用 AI 生成 ${LISTING_MAIN_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}
+    const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
+    if(!refs.length)return {kind:'block',message:'没有可用作参考的商品主图，无法生成新图。'}
+    const brand=await defaultBrand(job.tenant_id),batch=randomUUID()
+    facts.heroReferenceFrame=frame
+    facts.heroCopy=await heroCopy(facts,(await teamOf(job.tenant_id,actor.id)).textModel)
+    for(const type of GENERATED){
+      const { prompt, options } = suiteDesign(type,facts,brand)
+      await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,trigger,created_by)
+        VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,'agent',$9)`,[job.tenant_id,source.id,batch,type,settings.suite_model,JSON.stringify(refs),
+        JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',resolution:'1k',quality:settings.suite_quality,unchecked:true,listingConnectionId:job.connection_id,...options}),prompt,actor.id])
     }
+    state.imageBatch=batch
+    return {kind:'wait',message:`正在用 AI 生成 ${LISTING_MAIN_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}
   }
   const rows=(await db.query('SELECT * FROM image_assets WHERE batch_id=$1 AND tenant_id=$2',[state.imageBatch,job.tenant_id])).rows
   const ordered=GENERATED.map(type=>rows.find(r=>r.operation===type)).filter(Boolean) as Json[]

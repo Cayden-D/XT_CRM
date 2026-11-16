@@ -11,6 +11,7 @@ const message = (cause:unknown) => cause instanceof Error ? cause.message : '操
  * main-picture slot of the collected product (or appends it). The replaced picture is kept and can be restored.
  */
 export default function ApplyDialog({asset, close, done}:{asset:ImageAsset;close:()=>void;done:(asset:ImageAsset, note:string)=>void}) {
+  const frameShop = asset.operation === 'suite_hero' && typeof asset.options.heroShopId === 'string' ? asset.options.heroShopId : null
   const [shops, setShops] = useState<AlbumShop[]>([]), [shopId, setShopId] = useState(asset.photo_connection_id ?? ''), [albumId, setAlbumId] = useState(asset.photo_album_id ?? '')
   const [product, setProduct] = useState<{id:string;title:string}|null>(asset.collected_product_id ? { id:asset.collected_product_id, title:asset.product_title ?? '' } : null)
   const [gallery, setGallery] = useState<ProductImage[]|null>(null), [placement, setPlacement] = useState<'replace'|'append'>('replace'), [index, setIndex] = useState(asset.replaces_index ?? 0)
@@ -19,8 +20,9 @@ export default function ApplyDialog({asset, close, done}:{asset:ImageAsset;close
   const uploaded = asset.photo_status === 'uploaded' && Boolean(asset.photo_url)
   useEffect(() => {
     getAlbums().then(r => {
-      setShops(r.data)
-      const first = r.data.find(s => s.id === asset.photo_connection_id) ?? r.data.find(s => s.status === 'connected')
+      const available = frameShop ? r.data.filter(s => s.id === frameShop) : r.data
+      setShops(available)
+      const first = available.find(s => s.id === asset.photo_connection_id) ?? available.find(s => s.status === 'connected')
       if (first && !shopId) { setShopId(first.id); setAlbumId(first.album_id ?? '') }
     }).catch(cause => setError(message(cause)))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

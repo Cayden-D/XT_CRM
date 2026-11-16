@@ -7,7 +7,8 @@ import { inspectPublishingImages } from './1688-agent.js'
 import { imagePreviewClient, putPrivateImage, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
 import { brandById, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
-import { applyHeroReferenceFrame, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS } from './hero-reference-frame.js'
+import { applyCustomHeroFrame, applyHeroReferenceFrame, CUSTOM_HERO_FRAME, HERO_BOTTOM_PERCENT, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS, HERO_TOP_PERCENT } from './hero-reference-frame.js'
+import { heroFrameForShop, type HeroFrame } from './shop-hero-templates.js'
 import { generateQwenText, type QwenModel } from '../llm/qwen.js'
 import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type SuiteModel, type SuiteQuality } from '../llm/apimart-image.js'
 
@@ -197,7 +198,7 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
   return `${KEEP}把背景换成：${scene}。光线方向、色温和透视与商品一致，商品自然融入场景，主体清晰突出，真实摄影质感。${CLEAN}`
 }
 
-export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string; badges?: string[]; heroCopy?: HeroCopy | null; heroReferenceFrame?: boolean }
+export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; points?: string; badges?: string[]; heroCopy?: HeroCopy | null; heroReferenceFrame?: HeroFrame | null }
 /** Words for the 1688 首图, written per product from its own facts. */
 export type HeroCopy = { headline: string; subline: string; features: string[]; uses: string[] }
 
@@ -250,11 +251,13 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
     case 'suite_hero': {
       const copy = facts.heroCopy
       if (facts.heroReferenceFrame) {
+        const builtin = facts.heroReferenceFrame.mode === HERO_REFERENCE_FRAME
         const groundedCopy = copy
-          ? `主标题“${copy.headline}”${copy.subline ? `，副标题“${copy.subline}”` : ''}，金色圆角标签分别写：${copy.features.map(f => `“${f}”`).join('、')}。以上文案一字不差。`
+          ? `主标题“${copy.headline}”${copy.subline ? `，副标题“${copy.subline}”` : ''}，卖点标签分别写：${copy.features.map(f => `“${f}”`).join('、')}。以上文案一字不差。`
           : `主标题使用商品名称的简短写法。从商品资料中提炼有明确依据的短卖点，资料不足时减少标签数量。${facts.points ? `用户提供的产品卖点：${facts.points}。` : ''}`
-        return `${base}生成 1688 批发商品首图的中间内容：深蓝黑渐变背景，左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。主标题用大号粗体和浅色描边，副标题较小，卖点用纵排的金色圆角标签。${groundedCopy}`
-          + `将商品和文案放在画面中部，上方 12%、下方 20% 和两侧 5% 仅延伸背景，供程序合成固定边框。不要绘制边框、品牌字样、品牌标识或工厂宣传语。${text}${noFake}${CLEAN}`
+        const style = builtin ? '深蓝黑渐变背景，主标题用大号粗体和浅色描边，卖点用纵排的金色圆角标签。' : '按商品选取简洁、对比清晰的背景，主标题清楚醒目，卖点用纵排标签。'
+        return `${base}生成 1688 批发商品首图的中间内容：左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。${style}${groundedCopy}`
+          + `将商品和文案放在画面中部，上方 ${HERO_TOP_PERCENT}%、下方 ${HERO_BOTTOM_PERCENT}% 和两侧 5% 仅延伸背景，供程序合成固定边框。不要绘制边框、品牌字样、品牌标识或工厂宣传语。${text}${noFake}${CLEAN}`
       }
       const badges = facts.badges ?? HERO_BADGES
       // Laid out like a 1688 wholesale 首图: headline on top, feature tags beside the product, uses along the bottom,
@@ -283,13 +286,16 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
   }
 }
 
-export async function productFacts(tenantId: string, collectedProductId: string, points?: string): Promise<SuiteFacts & { gallery: string[]; details: string[] }> {
-  const p = (await db.query('SELECT id,title,category_path,attributes,main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1 AND tenant_id=$2', [collectedProductId, tenantId])).rows[0]
+export async function productFacts(tenantId: string, collectedProductId: string, points?: string): Promise<SuiteFacts & { gallery: string[]; details: string[]; heroShopId: string | null }> {
+  const p = (await db.query(`SELECT p.title,p.category_path,p.attributes,p.main_image_url,p.gallery_images,p.detail_images,
+      coalesce(j.connection_id,p.target_connection_id) AS hero_shop_id
+    FROM collected_products p LEFT JOIN integration_1688_collection_queue_jobs j ON j.collected_product_id=p.id AND j.tenant_id=p.tenant_id AND j.status<>'cancelled'
+    WHERE p.id=$1 AND p.tenant_id=$2`, [collectedProductId, tenantId])).rows[0]
   if (!p) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
   const skus = (await db.query('SELECT label FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position LIMIT 12', [collectedProductId])).rows.map(r => r.label as string)
-  const settings = (await db.query<{ hero_badges: string[]; hero_reference_frame: boolean }>('SELECT hero_badges,hero_reference_frame FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
+  const settings = (await db.query<{ hero_badges: string[] }>('SELECT hero_badges FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
   const badges = Array.isArray(settings?.hero_badges) ? settings.hero_badges.filter(b => typeof b === 'string' && b.trim()) : HERO_BADGES
-  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, badges, heroReferenceFrame: settings?.hero_reference_frame, ...productImages(p) }
+  return { title: p.title, category: p.category_path, attributes: p.attributes ?? {}, skus, points, badges, heroShopId: p.hero_shop_id, ...productImages(p) }
 }
 const cleanUrls = (list: unknown) => (Array.isArray(list) ? list : []).filter((u): u is string => typeof u === 'string').flatMap(u => { try { return [sourceUrl(u)] } catch { return [] } })
 /** All main pictures of a collected product, main image first, deduplicated. */
@@ -339,9 +345,10 @@ const STORAGE_RETRY_MS = 60 * 60_000
 
 async function complete(asset: Asset, png: Buffer, cost?: number) {
   const { png: decoded, width, height } = await toPng(png)
-  const framed = asset.operation === 'suite_hero' && asset.options.heroFrame === HERO_REFERENCE_FRAME
+  const mode = asset.operation === 'suite_hero' ? asset.options.heroFrame : undefined
   let normalized = decoded
-  if (framed) normalized = await applyHeroReferenceFrame(decoded, width, height)
+  if (mode === HERO_REFERENCE_FRAME) normalized = await applyHeroReferenceFrame(decoded, width, height)
+  else if (mode === CUSTOM_HERO_FRAME) normalized = await applyCustomHeroFrame(decoded, width, height, await readImage(asset.options.heroFrameKey, asset.tenant_id))
   else if (asset.options.brand?.logo) normalized = await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id))
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
@@ -349,7 +356,8 @@ async function complete(asset: Asset, png: Buffer, cost?: number) {
   if (asset.options.unchecked) finding = { readable: true, watermark: false, rightsRisk: false, reason: '未检查：已开启 AI 生图自动上架，生成图不做水印/Logo 复检。' }
   else try {
     const url = await imageUrl(key, asset.tenant_id)
-    const names = framed ? [...await ownBrandNames(asset.tenant_id), ...HERO_REFERENCE_MARKS] : undefined
+    const frameNames = mode === HERO_REFERENCE_FRAME ? HERO_REFERENCE_MARKS : mode === CUSTOM_HERO_FRAME ? [asset.options.heroShopName as string] : []
+    const names = frameNames.length ? [...await ownBrandNames(asset.tenant_id), ...frameNames] : undefined
     finding = (await screen(asset.tenant_id, [url], false, names)).get(url)
   }
   catch { finding = { readable: false, watermark: false, rightsRisk: false, reason: '生成结果未能完成复检，请人工确认后再使用。' } }
@@ -415,16 +423,22 @@ export async function screenNextProduct() {
 }
 
 /** Returns how many flagged main pictures there are and how many replacements were queued. */
-export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', model: SuiteModel, quality: SuiteQuality) {
-  const facts: SuiteFacts & { gallery: string[] } = await productFacts(tenantId, productId)
+export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', model: SuiteModel, quality: SuiteQuality, connectionId?: string | null) {
+  const facts = await productFacts(tenantId, productId)
   const brand = await defaultBrand(tenantId)
   const findings = await screen(tenantId, facts.gallery)
   const bad = facts.gallery.map((url, index) => ({ url, index })).filter(g => flagged(findings.get(g.url)))
   // The first position becomes a 1688 首图: its words are written for this product.
-  if (bad.some(g => g.index === 0) && apimartConfigured()) facts.heroCopy = await heroCopy(facts)
+  if (bad.some(g => g.index === 0) && apimartConfigured()) {
+    facts.heroReferenceFrame = await heroFrameForShop(tenantId, connectionId === undefined ? facts.heroShopId : connectionId)
+    facts.heroCopy = await heroCopy(facts)
+  }
   const clean = facts.gallery.filter(url => !flagged(findings.get(url)))
   if (!bad.length || !clean.length || !apimartConfigured()) return { flagged: bad.length, queued: 0, clean: clean.length }
-  const existing = new Set((await db.query("SELECT replaces_index FROM image_assets WHERE collected_product_id=$1 AND replaces_index IS NOT NULL AND status<>'failed'", [productId])).rows.map(r => r.replaces_index))
+  const frame = facts.heroReferenceFrame
+  const existing = new Set((await db.query(`SELECT replaces_index FROM image_assets WHERE collected_product_id=$1 AND replaces_index IS NOT NULL AND status<>'failed'
+    AND (replaces_index<>0 OR (options->>'heroFrame' IS NOT DISTINCT FROM $2 AND options->>'heroShopId' IS NOT DISTINCT FROM $3
+      AND options->>'heroFrameKey' IS NOT DISTINCT FROM $4))`, [productId, frame?.mode ?? null, frame?.connectionId ?? null, frame?.mode === CUSTOM_HERO_FRAME ? frame.key : null])).rows.map(r => r.replaces_index))
   const batch = randomUUID()
   let queued = 0
   for (const { index } of bad) {
@@ -442,7 +456,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
 export function suiteDesign(type: GeneratedType, facts: SuiteFacts, brand: OwnBrand | null) {
   const framed = type === 'suite_hero' && facts.heroReferenceFrame
   const selected = brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
-  const options = framed ? { heroFrame: HERO_REFERENCE_FRAME }
+  const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name, ...(framed.mode === CUSTOM_HERO_FRAME ? { heroFrameKey: framed.key } : {}) }
     : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected) } } : {}
   return { prompt: suitePrompt(type, facts, selected), options }
 }

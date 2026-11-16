@@ -90,7 +90,7 @@ try {
   // Settings: off by default; turning the agent on needs explicit consent; stale revisions are rejected.
   const initial = (await call('GET', '/settings')).json()
   assert.deepEqual([initial.data.auto_replace, initial.data.revision, initial.services.apimart], [false, 0, true])
-  assert.equal(initial.data.hero_reference_frame, false)
+  assert.equal(initial.data.hero_reference_frame, undefined)
   assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 })).statusCode, 400)
   assert.equal((await call('PUT', '/settings', { autoReplace: false, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 }, token(tenant, ['collection:read']))).statusCode, 403)
 
@@ -290,13 +290,16 @@ try {
   assert.ok(!objects.has(`image-workshop/${tenant}/${resized.id}.png`))
 
   // The frame setting is captured at enqueue time and applies only to first-slot images.
-  const current = (await call('GET', '/settings')).json().data
-  const changeFrame = (heroReferenceFrame: boolean, revision: number) => call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroReferenceFrame, revision })
-  assert.equal((await changeFrame(true, current.revision)).json().data.hero_reference_frame, true)
-  assert.equal((await call('GET', '/settings', undefined, token(tenants[1]))).json().data.hero_reference_frame, false)
+  const petShop = await saveConnection(tenant, actor, { aliId: `pets-${randomUUID()}`, resource_owner: '义乌市智珀宠物', access_token: 'fixture', expires_in: 36000 })
+  const changeFrame = (id: string, mode: string, revision: number, content?: string, bearer = token()) => call('PUT', `/hero-templates/${id}`, { mode, revision, content }, bearer)
+  assert.equal((await changeFrame(shop.id, 'tuoyang-v1', 0)).json().data.mode, 'tuoyang-v1')
+  assert.equal((await changeFrame(shop.id, 'none', 0)).statusCode, 409)
+  assert.equal((await changeFrame(shop.id, 'none', 1, undefined, token(tenants[1]))).statusCode, 404)
+  assert.equal((await changeFrame(petShop.id, 'custom-v1', 0, undefined, token(tenant, ['collection:read']))).statusCode, 403)
+  assert.deepEqual((await call('GET', '/hero-templates', undefined, token(tenants[1]))).json().data, [])
   const logoKey = await workshop.storeImage(tenant, randomUUID(), png)
   const brandId = (await db.query('INSERT INTO brands(tenant_id,name,logo_key,is_default,rights_confirmed_at) VALUES($1,$2,$3,true,now()) RETURNING id', [tenant, '测试店铺品牌', logoKey])).rows[0].id
-  const frameSuite = await call('POST', '/suites', { title: '车载充气泵', points: '数显胎压', references: [{ url: cdn('main') }], types: ['suite_hero', 'suite_white', 'suite_scene'], brandId })
+  const frameSuite = await call('POST', '/suites', { title: '车载充气泵', points: '数显胎压', references: [{ url: cdn('main') }], types: ['suite_hero', 'suite_white', 'suite_scene'], brandId, connectionId: shop.id })
   assert.equal(frameSuite.statusCode, 200, frameSuite.body)
   const [framed, white, scene] = frameSuite.json().data.assets
   assert.equal(framed.options.heroFrame, 'tuoyang-v1')
@@ -306,17 +309,29 @@ try {
   assert.equal(scene.options.heroFrame, undefined)
   assert.equal(scene.options.brand.logo, true)
   const replacementProduct = await product([cdn('mark-front'), cdn('clean-side')])
+  await db.query('UPDATE collected_products SET target_connection_id=$2,use_default_listing_shop=false WHERE id=$1', [replacementProduct, shop.id])
   assert.equal((await call('POST', '/products/' + replacementProduct + '/replace-flagged', {})).json().data.queued, 1)
   const replacement = (await db.query('SELECT options,prompt FROM image_assets WHERE collected_product_id=$1 AND replaces_index=0', [replacementProduct])).rows[0]
   assert.equal(replacement.options.heroFrame, 'tuoyang-v1')
   assert.match(replacement.prompt, /左侧居中排产品文案/)
-  assert.equal((await changeFrame(false, current.revision + 1)).json().data.hero_reference_frame, false)
+  assert.equal((await changeFrame(shop.id, 'none', 1)).json().data.mode, 'none')
+  const coloredFrame = async (background: string) => (await sharp({ create: { width: 640, height: 640, channels: 3, background } }).png().toBuffer()).toString('base64')
+  const uploadedFrame = (await changeFrame(petShop.id, 'custom-v1', 0, await coloredFrame('#ca1224'))).json().data
+  assert.equal(uploadedFrame.mode, 'custom-v1')
+  assert.ok(uploadedFrame.previewUrl)
+  const customHero = (await call('POST', '/suites', { title: '宠物玩具', references: [{ url: cdn('main') }], types: ['suite_hero'], connectionId: petShop.id })).json().data.assets[0]
+  assert.equal(customHero.options.heroFrame, 'custom-v1')
+  assert.equal(customHero.options.heroShopId, petShop.id)
+  assert.equal(customHero.options.heroFrameKey, undefined)
+  assert.equal(customHero.options.brand, undefined)
+  const changedFrame = await changeFrame(petShop.id, 'custom-v1', 1, await coloredFrame('#13681d'))
+  assert.equal(changedFrame.statusCode, 200, changedFrame.body)
   const defaultSuite = (await call('POST', '/suites', { title: '车载充气泵', references: [{ url: cdn('main') }], types: ['suite_hero'] })).json().data.assets[0]
   assert.equal(defaultSuite.options.brand.logo, true)
   assert.equal(defaultSuite.options.heroFrame, undefined)
   frameToScreen = framed.id
   for (let i = 0; i < 4; i++) await drain()
-  const processed = (await call('GET', '/assets?ids=' + framed.id + ',' + white.id)).json().data
+  const processed = (await call('GET', '/assets?ids=' + framed.id + ',' + white.id + ',' + customHero.id)).json().data
   assert.ok(processed.every((a: any) => a.status === 'completed' && !a.risky))
   const savedFrame = objects.get('image-workshop/' + tenant + '/' + framed.id + '.png')!
   const pixel = async (x: number, y: number) => [...await sharp(savedFrame).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
@@ -325,6 +340,13 @@ try {
   const footer = await pixel(1000, 1000)
   assert.ok(footer[0] > footer[1] && footer[1] > footer[2], 'the original gold footer is present')
   assert.deepEqual(objects.get('image-workshop/' + tenant + '/' + white.id + '.png'), (await workshop.toPng(png)).png)
+  const customBytes = objects.get('image-workshop/' + tenant + '/' + customHero.id + '.png')!
+  const customPixel = async (y: number) => [...await sharp(customBytes).extract({ left: 512, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  assert.deepEqual(await customPixel(16), [202, 18, 36], 'the queued task retains its first uploaded version')
+  assert.deepEqual(await customPixel(512), [215, 226, 220], 'the sample center does not cover the generated product')
+  assert.deepEqual(await customPixel(1000), [202, 18, 36], 'the matching custom footer is used')
+  const wrongAlbum = await call('POST', `/assets/${customHero.id}/photo`, { connectionId: shop.id, albumId: '1001', confirmed: true })
+  assert.equal(wrongAlbum.json().error, 'HERO_SHOP_MISMATCH')
 
   console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', heroBadges: 'ok', heroTextBrand: 'ok', heroReferenceFrame: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {

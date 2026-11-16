@@ -87,9 +87,9 @@ try {
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
   const imageSettings = (on: boolean) => db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,enabled_at,revision) VALUES($1,$2,'gpt-image-2.5-flare','medium',now(),1)
     ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace`, [tenant, on])
-  const collect = async () => {
-    const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by,raw_data)
-      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,$8,'101',$7,$9) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor, JSON.stringify({ 阶梯价格: '¥39.00 (2 pieces) / ¥35.00 (10 pieces) / ¥30.00 (50 pieces) / ¥28.00 (100 pieces)' }), JSON.stringify({ packageInfo: [{ skuId: '1', spec: '黑色', lengthCm: 3, widthCm: 3, heightCm: 4, weightG: 75 }, { skuId: '2', spec: '白色', lengthCm: 3, widthCm: 3, heightCm: 4.5, weightG: 80 }] })])).rows[0]
+  const collect = async (shopId?: string) => {
+    const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by,raw_data,target_connection_id,use_default_listing_shop)
+      VALUES($1,'1688',$2,$3,'车载香薰机',$4,$5,$6,'CNY',39,39,$8,'101',$7,$9,$10,$11) RETURNING id`, [tenant, randomUUID(), `https://detail.1688.com/offer/${randomUUID()}.html`, cdn('main-mark'), JSON.stringify([cdn('main-mark'), cdn('side')]), JSON.stringify([cdn('detail-ok'), cdn('detail-mark')]), actor, JSON.stringify({ 阶梯价格: '¥39.00 (2 pieces) / ¥35.00 (10 pieces) / ¥30.00 (50 pieces) / ¥28.00 (100 pieces)' }), JSON.stringify({ packageInfo: [{ skuId: '1', spec: '黑色', lengthCm: 3, widthCm: 3, heightCm: 4, weightG: 75 }, { skuId: '2', spec: '白色', lengthCm: 3, widthCm: 3, heightCm: 4.5, weightG: 80 }] }), shopId ?? null, !shopId])).rows[0]
     await db.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,label,attributes,image_url,price,stock)VALUES($1,$2,0,'黑色','{"颜色":"黑色"}',$3,39,10)`, [tenant, source.id, cdn('sku-mark')])
     return source.id as string
   }
@@ -118,7 +118,7 @@ try {
 
   // On: eight new pictures are generated (five main, three detail) without screening, with the frame on the first.
   await imageSettings(true)
-  await db.query('UPDATE image_workshop_settings SET hero_reference_frame=true WHERE tenant_id=$1', [tenant])
+  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode) VALUES($1,'tuoyang-v1')", [connection.id])
   const before = visionCalls
   const sourceId = await collect()
   let state = await run(sourceId)
@@ -133,6 +133,7 @@ try {
   assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
   assert.deepEqual(generated.filter(r => r.options.heroFrame === 'tuoyang-v1').map(r => r.operation), ['suite_hero'])
+  assert.equal(generated.find(r => r.operation === 'suite_hero').options.heroShopId, connection.id)
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])
   // OSS times out three times on the first finished picture: it is saved again later instead of failing.
   ossFailures = 3
@@ -219,7 +220,25 @@ try {
   const { ensureAlbum } = await import('../server/integrations/image-album.js')
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesNine: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
+  const second = await saveConnection(tenant, actor, { aliId: `queue-pets-${randomUUID()}`, resource_owner: '义乌市智珀宠物', access_token: 'fixture', expires_in: 36000 })
+  await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
+  await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
+  const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
+  const customKey = await workshop.storeImage(tenant, randomUUID(), await prepareCustomHeroFrame(png, 800, 800))
+  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,custom_key) VALUES($1,'custom-v1',$2)", [second.id, customKey])
+  const secondSource = await collect(second.id)
+  const routed = await run(secondSource)
+  assert.equal(routed.connection_id, second.id)
+  const secondHero = (await db.query("SELECT options,prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [routed.report.imageBatch])).rows[0]
+  assert.deepEqual([secondHero.options.heroFrame, secondHero.options.heroFrameKey, secondHero.options.heroShopId], ['custom-v1', customKey, second.id])
+  assert.doesNotMatch(secondHero.prompt, /深蓝黑渐变/)
+  // Resetting the report simulates requeueing a product to a different shop. The old batch cannot follow it.
+  await db.query("UPDATE integration_1688_collection_queue_jobs SET connection_id=$2,report='{}' WHERE id=$1", [routed.id, connection.id])
+  const rerouted = await run(secondSource)
+  assert.notEqual(rerouted.report.imageBatch, routed.report.imageBatch)
+  const reroutedFrame = (await db.query("SELECT options->>'heroFrame' AS frame FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [rerouted.report.imageBatch])).rows[0]
+  assert.equal(reroutedFrame.frame, 'tuoyang-v1')
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesEight: 'ok', shopTemplates: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

@@ -11,7 +11,9 @@ export type ImageAsset = {
   applied_to:{ collectedProductId:string; index:number; placement:'replace'|'append'|'detail'; previousUrl:string|null; productId:string|null }|null; applied_at:string|null
 }
 export type AlbumShop = { id:string; display_name:string; status:string; album_id:string|null }
-export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; hero_badges:string[]; hero_reference_frame:boolean; enabled_at:string|null; revision:number }
+export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; hero_badges:string[]; enabled_at:string|null; revision:number }
+export type HeroTemplateMode = 'none'|'tuoyang-v1'|'custom-v1'
+export type HeroTemplateShop = { id:string; display_name:string; mode:HeroTemplateMode; revision:number; hasCustom:boolean; previewUrl:string|null }
 export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
@@ -33,13 +35,15 @@ export const flagged = (f:Finding|null|undefined) => Boolean(f && (!f.readable |
 const base = '/api/image-workshop'
 const json = (method:string, body:unknown) => ({ method, body:JSON.stringify(body) })
 export const getImageSettings = () => request<{data:ImageSettings;services:ImageServices}>(`${base}/settings`)
-export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];heroReferenceFrame?:boolean;revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
+export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
+export const getHeroTemplateShops = () => request<{data:HeroTemplateShop[]}>(`${base}/hero-templates`)
+export const saveHeroTemplate = (id:string, input:{mode:HeroTemplateMode;revision:number;content?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}`, json('PUT', input))
 export const getProductImages = (id:string) => request<{data:ProductImages}>(`${base}/products/${id}`)
 export const screenProductImages = (id:string, details=false) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details }))
-export const replaceFlagged = (id:string) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', {}))
+export const replaceFlagged = (id:string, connectionId?:string|null) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', { connectionId }))
 export const uploadImage = (content:string, collectedProductId?:string) => request<{data:ImageAsset}>(`${base}/uploads`, json('POST', { content, collectedProductId }))
 export const createEdit = (input:{source:ImageSource;operation:'white_bg'|'background'|'resize';collectedProductId?:string;scene?:string;model?:string;preset?:string;width?:number;height?:number;fit?:'pad'|'crop'}) => request<{data:ImageAsset}>(`${base}/edits`, json('POST', input))
-export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];model?:string;quality?:string;size?:'1:1'|'3:4';resolution?:'1k'|'2k';brandId?:string|null}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
+export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];model?:string;quality?:string;size?:'1:1'|'3:4';resolution?:'1k'|'2k';brandId?:string|null;connectionId?:string|null}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
 export function getAssets(params:{kind?:'edit'|'suite'|'upload';collectedProductId?:string;batchId?:string;ids?:string[];page?:number;pageSize?:number}) {
   const q = new URLSearchParams()
   Object.entries(params).forEach(([k,v]) => { if (v !== undefined && v !== '') q.set(k, Array.isArray(v) ? v.join(',') : String(v)) })
