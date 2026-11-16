@@ -17,6 +17,7 @@ import { collectionQueueRoutes } from './1688-queue.js'
 import { buildSkuRows, mapReviewedVariants, platformSaleValues, saleDimensions, skuKey, type SkuRow } from '../../shared/1688-skus.js'
 import { appCredentials, callProductApi, connectionToken, getGrant, IntegrationError, parseBusinessData, parsePlatformJson, publicConnectionColumns, recordOperation, saveConnection, stateHash, testMember, uploadPhoto } from '../integrations/1688.js'
 import { createDraftFromProduct, MIN_WHOLESALE, wholesaleRanges } from '../integrations/1688-drafts.js'
+import { loadReviewedVariants } from '../integrations/1688-collected-skus.js'
 import { chargeListing, refundListing } from '../integrations/teams.js'
 import { applyDraftChanges, draftProductChanges, loadProductData } from '../integrations/product-attributes.js'
 
@@ -443,7 +444,7 @@ export async function integration1688Routes(app: FastifyInstance) {
     const { id } = idSchema.parse(request.params)
     const draft = (await db.query('SELECT product_id FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2', [id, request.authUser.tenantId])).rows[0]
     if (!draft) throw new IntegrationError('NOT_FOUND', '发布草稿不存在。', 404)
-    return { data: (await db.query('SELECT id,label,attributes,unit_price,stock,image_url FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position', [draft.product_id, request.authUser.tenantId])).rows }
+    return { data: await loadReviewedVariants(request.authUser.tenantId,draft.product_id) }
   })
   app.post('/drafts/:id/map-variants', { preHandler: [requirePermission('integration:publish'), requirePermission('product:read')] }, async request => {
     const { id } = idSchema.parse(request.params)
@@ -451,7 +452,7 @@ export async function integration1688Routes(app: FastifyInstance) {
     const draft = (await db.query("SELECT * FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2", [id, request.authUser.tenantId])).rows[0]
     if (!draft) throw new IntegrationError('NOT_FOUND', '发布草稿不存在。', 404)
     if (draft.revision !== input.revision || !['draft','failed'].includes(draft.status)) throw new IntegrationError('DRAFT_CONFLICT', '草稿已变化或不可编辑。', 409)
-    const variants = (await db.query('SELECT id,label,attributes,unit_price,stock,image_url FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position', [draft.product_id, request.authUser.tenantId])).rows
+    const variants = await loadReviewedVariants(request.authUser.tenantId,draft.product_id)
     let mapped
     try { mapped = mapReviewedVariants(saleDimensions(draft.platform_schema), variants, input.mapping) } catch (error) { throw new IntegrationError('INVALID_MAPPING', error instanceof Error ? error.message : '规格映射不合法。', 400) }
     const formValues = { ...draft.data_body.formValues, ...mapped }

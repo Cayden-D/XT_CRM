@@ -110,5 +110,27 @@ await db.query("INSERT INTO product_variants(tenant_id,product_id,position,label
   assert.equal((await request('PUT','/publish-template',{revision:0,values:{cbuUnit:'件'}})).statusCode,200)
   const templateRun=await run(templateDraft);assert.equal(templateRun.json().data.status,'published',templateRun.body)
   assert.deepEqual(lastPublished.formValues.cbuUnit,{unit:'件'})
+  // Retry an existing empty draft whose formal SKUs predate dimension recovery.
+  const feederDimensions=[{name:'p-2',label:'颜色',required:true,customizable:true},{name:'p-4',label:'规格',required:true,customizable:true}]
+  const feederSchema={...schema,data:{...schema.data,saleProp:{fields:{dataSource:feederDimensions}}}}
+  await db.query('UPDATE integration_1688_publish_drafts SET platform_schema=$2 WHERE id=$1',[emptySkuDraft.id,JSON.stringify(feederSchema)])
+  const skuProps=[{name:'颜色',values:[{name:'6L 按键款'},{name:'6L WiFi款-VI365'}]},{name:'规格',values:[{name:'塑料碗'},{name:'不锈钢碗'}]}]
+  const source=(await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,attributes,sku_props,source_category_id,product_id,collected_by)
+    VALUES($1,'1688',$2,'https://detail.1688.com/offer/123.html','6L 喂食器',$3,$4,'101',$5,$6) RETURNING id`,[tenant,randomUUID(),JSON.stringify({材质:'棉'}),JSON.stringify(skuProps),emptySkuDraft.product_id,actor])).rows[0]
+  await db.query('DELETE FROM product_variants WHERE product_id=$1',[emptySkuDraft.product_id])
+  const feederSkus=[{color:'6L 按键款',bowl:'塑料碗',price:118.8,stock:10},{color:'6L WiFi款-VI365',bowl:'不锈钢碗',price:152.9,stock:100}]
+  for(const [position,sku] of feederSkus.entries()){
+    const label=`${sku.color}>${sku.bowl}`,attributes=JSON.stringify({规格:label})
+    const original=(await db.query(`INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,label,attributes,price,stock)
+      VALUES($1,$2,$3,$4,$5,100,1) RETURNING id`,[tenant,source.id,position,label,attributes])).rows[0]
+    await db.query(`INSERT INTO product_variants(tenant_id,product_id,source_variant_id,position,label,attributes,unit_price,stock)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[tenant,emptySkuDraft.product_id,original.id,position,label,attributes,sku.price,sku.stock])
+  }
+  const preview=await request('GET',`/drafts/${emptySkuDraft.id}/variants`)
+  assert.equal(preview.statusCode,200,preview.body)
+  assert.deepEqual(preview.json().data.map((sku:any)=>sku.attributes),feederSkus.map(sku=>({颜色:sku.color,规格:sku.bowl})))
+  const retried=await run(emptySkuDraft)
+  assert.equal(retried.json().data.status,'published',retried.body)
+  assert.deepEqual(lastPublished.formValues.skuTable.map((row:any)=>[...row.sku_props.map((prop:any)=>prop.text),row.sku_price,row.sku_amountOnSale]),feederSkus.map(sku=>[sku.color,sku.bowl,sku.price,sku.stock]))
   console.log(JSON.stringify({modeDefaultOff:'ok',agentSettingsCors:'ok',permissions:'ok',tenantIsolation:'ok',settingsRevision:'ok',model:'qwen3.8-flash',automaticPublish:'ok',reviewedSkuPrices:'ok',allImagesInspected:'ok',riskBlocking:'ok',speculativeLogoAllowed:'ok',invalidProposalIgnored:'ok',invalidRequiredBlocked:'ok',unreadableBlocking:'ok',incompleteBlocking:'ok',disableBeforePublish:'ok',draftRace:'ok',duplicateJob:'ok',cancel:'ok',unknownNoRetry:'ok',imageHostGuard:'ok',enumGuard:'ok',economicFieldGuard:'ok',textCalls,visionCalls,mockPublishCalls:publishCalls,livePlatformWrites:0}))
 }finally{globalThis.fetch=originalFetch;for(const tenant of tenants){await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[tenant]);await db.query('DELETE FROM tenants WHERE id=$1',[tenant])}await app.close();await db.end()}

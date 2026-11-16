@@ -3,6 +3,7 @@ import { fillPublishTemplate } from './1688-publish-template.js'
 import { db } from '../db.js'
 import { callProductApi, IntegrationError, parseBusinessData } from './1688.js'
 import { collectedCategoryDefaults } from './1688-collected-attributes.js'
+import { loadReviewedVariants } from './1688-collected-skus.js'
 
 /** 1688 is wholesale: the minimum order and the first quantity tier must be at least 2 (CHK_WHOLESALE_BEGIN_AMOUNT_LIMIT). */
 export const MIN_WHOLESALE=2
@@ -42,7 +43,7 @@ export async function createDraftFromProduct(input:{tenantId:string;actorId:stri
   // Quantity tiers of the product (from the collected ladder or entered by hand), lowest quantity first; at most three.
   const tiers=(await db.query('SELECT min_quantity,unit_price FROM product_prices WHERE product_id=$1 AND tenant_id=$2 AND customer_level IS NULL ORDER BY min_quantity LIMIT 3',[product.id,tenantId])).rows
   const formValues={...defaults,title:product.name,primaryPicture:{imageList:(product.images||[]).slice(0,maxImages).map((url:string)=>({url}))},description:withDetail(defaults.description,product.description||''),...(schema.data.priceRange?{priceRange:tiers.length?wholesaleRanges(tiers.map(t=>({pricerange_beginAmount:Number(t.min_quantity),pricerange_price:Number(t.unit_price)}))):[{pricerange_beginAmount:MIN_WHOLESALE,pricerange_price:Number(product.base_price)}]}:{}),...(Object.keys(category).length?{catProp:{...(defaults.catProp||{}),...category}}:{})}
-  const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[product.id,tenantId])).rows
+  const variants=await loadReviewedVariants(tenantId,product.id)
   const dimensions=saleDimensions(schema)
   const mapping=Object.fromEntries(dimensions.filter(d=>variants.length&&variants.every(v=>typeof v.attributes?.[d.label]==='string'&&v.attributes[d.label].trim())).map(d=>[d.name,d.label]))
   if(variants.length&&Object.keys(mapping).length){

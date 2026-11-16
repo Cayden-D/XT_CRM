@@ -38,6 +38,21 @@ assert.deepEqual(second,{颜色分类:'黑色',规格尺寸:'无线款'})
 assert.deepEqual(collectedSkuAttributes(collected,{label:'无线款>黑色',attributes:{}}),{})
 assert.deepEqual(collectedSkuAttributes(collected,{label:'黑色>未知款',attributes:{}}),{})
 assert.deepEqual(collectedSkuAttributes(collected,{label:'黑色>有线款',attributes:{颜色分类:'白色'}}),{})
+const feederColors=['6L 按键款','6L WiFi款-VI365【APP远程 千里加餐】（不含适配器）','6L WiFi款-TUYA','6L 广角视频款-TUYA']
+const bowlTypes=['塑料碗','不锈钢碗']
+const feederSource={sku_props:[{name:'颜色',values:feederColors.map(name=>({name}))},{name:'规格',values:bowlTypes.map(name=>({name}))}]}
+const feederCombinations=feederColors.flatMap((color,index)=>bowlTypes.slice(0,index===0?1:2).map(bowl=>({color,bowl})))
+const feederVariants=feederCombinations.map(({color,bowl},index)=>{
+  const label=`${color} > ${bowl}`
+  return {id:String(index),label,attributes:collectedSkuAttributes(feederSource,{label,attributes:{规格:label}}),unit_price:118.8+index,stock:10+index,image_url:null}
+})
+assert.deepEqual(feederVariants.map(v=>v.attributes),feederCombinations.map(({color,bowl})=>({颜色:color,规格:bowl})))
+assert.deepEqual(collectedSkuAttributes(feederSource,{label:`${feederColors[0]}>塑料碗`,attributes:{规格:'不锈钢碗'}}),{})
+const feederDimensions:SaleDimension[]=[{name:'p-11',label:'颜色',required:true,customizable:true},{name:'p-12',label:'规格',required:true,customizable:true}]
+const feederMapped=mapReviewedVariants(feederDimensions,feederVariants,{'p-11':'颜色','p-12':'规格'})
+assert.equal(feederMapped.skuTable.length,7)
+assert.deepEqual(feederMapped.skuTable.map(row=>[...row.sku_props.map(p=>p.text),row.sku_price,row.sku_amountOnSale]),feederCombinations.map(({color,bowl},index)=>[color,bowl,118.8+index,10+index]))
+assert.deepEqual(validatePublishBody({data:{saleProp:{fields:{dataSource:feederDimensions}}}},{formValues:{...body.formValues,...feederMapped}}),[])
 const sourceDimensions:SaleDimension[]=[{name:'p-1627207',propertyId:1627207,label:'颜色分类',customizable:true,fieldType:'string'},{name:'p-1235',propertyId:1235,label:'规格尺寸',customizable:true,fieldType:'string'}]
 const sourceMapped=mapReviewedVariants(sourceDimensions,[{id:'1',label:'黑色>有线款',attributes:first,unit_price:18,stock:1134,image_url:null},{id:'2',label:'黑色>无线款',attributes:second,unit_price:28,stock:4142,image_url:null}],{'p-1627207':'颜色分类','p-1235':'规格尺寸'})
 assert.equal(sourceMapped.skuTable.length,2);assert.equal(sourceMapped.skuTable[0].sku_props[0].text,'黑色');assert.equal(sourceMapped.skuTable[1].sku_props[1].text,'无线款')

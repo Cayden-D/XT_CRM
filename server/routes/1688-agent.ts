@@ -10,7 +10,7 @@ import { IntegrationError } from '../integrations/1688.js'
 import { inspectPublishingImages, prepareAgentFields, publishingImages, sourceNames } from '../integrations/1688-agent.js'
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
-import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
+import { loadReviewedVariants } from '../integrations/1688-collected-skus.js'
 import { defaultBrand, otherShopBrandNames, ownBrandNames } from '../integrations/brands.js'
 import { attributeFacts, attributePictures, BRAND_FIELD, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
 import { validatePublishBody } from './1688.js'
@@ -84,18 +84,12 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
     if(!settings?.enabled)throw new IntegrationError('AGENT_DISABLED','请先在“设置 → 自动上架”开启该店铺 Agent 上品。',409)
     const product=(await db.query("SELECT * FROM products WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL",[draft.product_id,tenant])).rows[0]
     if(!product)throw new IntegrationError('PRODUCT_INACTIVE','请选择已启用的正式产品。',409)
-    const variants=(await db.query('SELECT * FROM product_variants WHERE product_id=$1 AND tenant_id=$2 ORDER BY position',[draft.product_id,tenant])).rows
+    const reviewed=await loadReviewedVariants(tenant,draft.product_id)
     let job
     try{job=(await db.query("INSERT INTO integration_1688_agent_jobs(tenant_id,connection_id,draft_id,actor_id,settings_revision,draft_revision,status)VALUES($1,$2,$3,$4,$5,$6,'analyzing')RETURNING *",[tenant,draft.connection_id,id,request.authUser.sub,settings.revision,revision])).rows[0]}catch(error){if((error as {code?:string}).code==='23505')throw new IntegrationError('AGENT_BUSY','已有 Agent 任务，请查看任务或发布核对结果，不要重复提交。',409);throw error}
     let report:Record<string,unknown>={model:currentTextModel(),imageRepairAvailable:true}
     try{
       const source=(await db.query('SELECT * FROM collected_products WHERE tenant_id=$1 AND product_id=$2 ORDER BY updated_at DESC LIMIT 1',[tenant,product.id])).rows[0]||null
-      const sourceVariants=source?(await db.query('SELECT id,label,attributes FROM collected_product_variants WHERE tenant_id=$1 AND collected_product_id=$2',[tenant,source.id])).rows:[]
-      const sourceById=new Map(sourceVariants.map(variant=>[variant.id,variant]))
-      const reviewed=variants.map(variant=>{
-        const original=sourceById.get(variant.source_variant_id)
-        return original?{...variant,attributes:{...variant.attributes,...collectedSkuAttributes(source,original)}}:variant
-      })
       const defaults=collectedCategoryDefaults(draft.platform_schema,source),ownBrand=await defaultBrand(tenant,draft.connection_id)
       const ownNames=await ownBrandNames(tenant,draft.connection_id)
       const foreignNames=await otherShopBrandNames(tenant,draft.connection_id,ownNames)
