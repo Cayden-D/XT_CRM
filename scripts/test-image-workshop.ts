@@ -83,7 +83,7 @@ try {
   const tenant = tenants[0]
   const actor = (await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'图片测试','active')RETURNING id", [tenant, `${randomUUID()}@fixture.local`])).rows[0].id
   const token = (tenantId = tenant, permissions = ['*']) => app.jwt.sign({ sub: actor, tenantId, email: 't', displayName: 't', roles: [], permissions })
-  const call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, payload?: object, bearer = token()) => app.inject({ method, url: `/api/image-workshop${path}`, headers: { authorization: `Bearer ${bearer}` }, ...(payload ? { payload } : {}) })
+  const call = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, payload?: object, bearer = token()) => app.inject({ method, url: `/api/image-workshop${path}`, headers: { authorization: `Bearer ${bearer}` }, ...(payload ? { payload } : {}) })
   const product = async (gallery: string[], extra: Record<string, unknown> = {}) => (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,attributes,collected_by)
     VALUES($1,'1688',$2,'https://detail.1688.com/offer/1.html','车载充气泵 便携式',$3,$4,$5,$6,$7) RETURNING id`, [tenant, randomUUID().slice(0, 12), gallery[0], JSON.stringify(gallery), JSON.stringify([cdn('detail-1'), cdn('detail-2')]), JSON.stringify({ 电压: '12V', 尺寸: '15×7×5cm', ...extra }), actor])).rows[0].id as string
 
@@ -291,7 +291,7 @@ try {
 
   // The frame setting is captured at enqueue time and applies only to first-slot images.
   const petShop = await saveConnection(tenant, actor, { aliId: `pets-${randomUUID()}`, resource_owner: '义乌市智珀宠物', access_token: 'fixture', expires_in: 36000 })
-  const changeFrame = (id: string, mode: string, revision: number, content?: string, bearer = token()) => call('PUT', `/hero-templates/${id}`, { mode, revision, content }, bearer)
+  const changeFrame = (id: string, mode: string, revision: number, templateId?: string, bearer = token()) => call('PUT', `/hero-templates/${id}`, { mode, revision, templateId }, bearer)
   assert.equal((await changeFrame(shop.id, 'tuoyang-v1', 0)).json().data.mode, 'tuoyang-v1')
   assert.equal((await changeFrame(shop.id, 'none', 0)).statusCode, 409)
   assert.equal((await changeFrame(shop.id, 'none', 1, undefined, token(tenants[1]))).statusCode, 404)
@@ -316,16 +316,51 @@ try {
   assert.match(replacement.prompt, /左侧居中排产品文案/)
   assert.equal((await changeFrame(shop.id, 'none', 1)).json().data.mode, 'none')
   const coloredFrame = async (background: string) => (await sharp({ create: { width: 640, height: 640, channels: 3, background } }).png().toBuffer()).toString('base64')
-  const uploadedFrame = (await changeFrame(petShop.id, 'custom-v1', 0, await coloredFrame('#ca1224'))).json().data
-  assert.equal(uploadedFrame.mode, 'custom-v1')
-  assert.ok(uploadedFrame.previewUrl)
+  const customPath = `/hero-templates/${petShop.id}/custom`
+  const firstContent = await coloredFrame('#ca1224'), secondContent = await coloredFrame('#13681d')
+  const first = await call('POST', customPath, { name: '宠物红框', revision: 0, content: firstContent })
+  assert.equal(first.statusCode, 201, first.body)
+  const uploadedFrame = first.json().data
+  assert.equal(uploadedFrame.mode, 'none', 'adding a template keeps the current selection')
+  const firstTemplate = uploadedFrame.templates[0]
+  assert.ok(firstTemplate.previewUrl)
+  assert.equal(firstTemplate.storage_key, undefined)
+  assert.equal((await changeFrame(shop.id, 'custom-v1', 2, firstTemplate.id)).statusCode, 404)
+  assert.equal((await changeFrame(petShop.id, 'custom-v1', 1, firstTemplate.id)).json().data.activeTemplateId, firstTemplate.id)
   const customHero = (await call('POST', '/suites', { title: '宠物玩具', references: [{ url: cdn('main') }], types: ['suite_hero'], connectionId: petShop.id })).json().data.assets[0]
   assert.equal(customHero.options.heroFrame, 'custom-v1')
   assert.equal(customHero.options.heroShopId, petShop.id)
   assert.equal(customHero.options.heroFrameKey, undefined)
   assert.equal(customHero.options.brand, undefined)
-  const changedFrame = await changeFrame(petShop.id, 'custom-v1', 1, await coloredFrame('#13681d'))
-  assert.equal(changedFrame.statusCode, 200, changedFrame.body)
+  const duplicate = await call('POST', customPath, { name: '宠物红框', revision: 2, content: secondContent })
+  assert.equal(duplicate.json().error, 'HERO_TEMPLATE_NAME_TAKEN')
+  const secondUpload = await call('POST', customPath, { name: '宠物绿框', revision: 2, content: secondContent })
+  assert.equal(secondUpload.statusCode, 201, secondUpload.body)
+  const secondShopState = secondUpload.json().data
+  const secondTemplate = secondShopState.templates.find((template: any) => template.name === '宠物绿框')
+  assert.deepEqual(secondShopState.templates.map((template: any) => template.name).sort(), ['宠物红框', '宠物绿框'].sort())
+  assert.equal(secondShopState.activeTemplateId, firstTemplate.id)
+  const renamed = await call('PATCH', `${customPath}/${firstTemplate.id}`, { name: '宠物节日红框', revision: 3 })
+  assert.equal(renamed.json().data.templates.find((template: any) => template.id === firstTemplate.id).name, '宠物节日红框')
+  assert.equal(renamed.json().data.activeTemplateId, firstTemplate.id)
+  assert.equal((await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 3 })).statusCode, 409)
+  assert.equal((await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 4 }, token(tenants[1]))).statusCode, 404)
+  assert.equal((await changeFrame(petShop.id, 'custom-v1', 4, secondTemplate.id)).json().data.activeTemplateId, secondTemplate.id)
+  const removeInactive = (await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 5 })).json().data
+  assert.equal(removeInactive.activeTemplateId, secondTemplate.id)
+  assert.deepEqual(removeInactive.templates.map((template: any) => template.id), [secondTemplate.id])
+  const updatedImage = await call('PATCH', `${customPath}/${secondTemplate.id}`, { name: '宠物绿框', revision: 6, content: await coloredFrame('#179f47') })
+  assert.equal(updatedImage.statusCode, 200, updatedImage.body)
+  assert.equal(updatedImage.json().data.activeTemplateId, secondTemplate.id)
+  assert.notEqual(updatedImage.json().data.templates[0].previewUrl, secondTemplate.previewUrl)
+  const selectedFrame = await (await import('../server/integrations/shop-hero-templates.js')).heroFrameForShop(tenant, petShop.id)
+  assert.equal(selectedFrame?.mode, 'custom-v1')
+  const secondBytes = objects.get(selectedFrame.key)!
+  assert.deepEqual([...await sharp(secondBytes).extract({ left: 16, top: 16, width: 1, height: 1 }).removeAlpha().raw().toBuffer()], [23, 159, 71])
+  const removeActive = (await call('DELETE', `${customPath}/${secondTemplate.id}`, { revision: 7 })).json().data
+  assert.deepEqual([removeActive.mode, removeActive.activeTemplateId, removeActive.templates], ['none', null, []])
+  const currentShops = (await call('GET', '/hero-templates')).json().data
+  assert.deepEqual(currentShops.find((row: any) => row.id === petShop.id), removeActive)
   const defaultSuite = (await call('POST', '/suites', { title: '车载充气泵', references: [{ url: cdn('main') }], types: ['suite_hero'] })).json().data.assets[0]
   assert.equal(defaultSuite.options.brand.logo, true)
   assert.equal(defaultSuite.options.heroFrame, undefined)

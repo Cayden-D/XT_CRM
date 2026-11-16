@@ -4,5 +4,5 @@ export function titleLength(title:string){
 }
 export function titleLimit(schema:Record<string,any>):number{
   const limit=schema.data?.title?.fields?.maxLength
-  return typeof limit==='number'&&Number.isInteger(limit)&&limit>0?limit:60
+  return typeof limit==='number'&&Number.isInteger(limit)&&limit>0?Math.min(limit,60):60
 }

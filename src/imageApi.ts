@@ -13,7 +13,8 @@ export type ImageAsset = {
 export type AlbumShop = { id:string; display_name:string; status:string; album_id:string|null }
 export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; hero_badges:string[]; enabled_at:string|null; revision:number }
 export type HeroTemplateMode = 'none'|'tuoyang-v1'|'custom-v1'
-export type HeroTemplateShop = { id:string; display_name:string; mode:HeroTemplateMode; revision:number; hasCustom:boolean; previewUrl:string|null }
+export type CustomHeroTemplate = { id:string; name:string; previewUrl:string|null }
+export type HeroTemplateShop = { id:string; display_name:string; mode:HeroTemplateMode; revision:number; activeTemplateId:string|null; templates:CustomHeroTemplate[] }
 export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
@@ -37,7 +38,10 @@ const json = (method:string, body:unknown) => ({ method, body:JSON.stringify(bod
 export const getImageSettings = () => request<{data:ImageSettings;services:ImageServices}>(`${base}/settings`)
 export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
 export const getHeroTemplateShops = () => request<{data:HeroTemplateShop[]}>(`${base}/hero-templates`)
-export const saveHeroTemplate = (id:string, input:{mode:HeroTemplateMode;revision:number;content?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}`, json('PUT', input))
+export const saveHeroTemplate = (id:string, input:{mode:HeroTemplateMode;revision:number;templateId?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}`, json('PUT', input))
+export const addHeroTemplate = (id:string, input:{name:string;revision:number;content:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}/custom`, json('POST', input))
+export const editHeroTemplate = (id:string, templateId:string, input:{name:string;revision:number;content?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}/custom/${templateId}`, json('PATCH', input))
+export const deleteHeroTemplate = (id:string, templateId:string, revision:number) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}/custom/${templateId}`, json('DELETE', { revision }))
 export const getProductImages = (id:string, connectionId?:string|null) => request<{data:ProductImages}>(`${base}/products/${id}${connectionId === undefined ? '' : `?connectionId=${connectionId ?? 'shared'}`}`)
 export const screenProductImages = (id:string, details=false, connectionId?:string|null) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details, connectionId }))
 export const replaceFlagged = (id:string, connectionId?:string|null) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', { connectionId }))

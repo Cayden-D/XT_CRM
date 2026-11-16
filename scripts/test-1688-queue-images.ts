@@ -228,7 +228,8 @@ try {
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
   const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
   const customKey = await workshop.storeImage(tenant, randomUUID(), await prepareCustomHeroFrame(png, 800, 800))
-  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,custom_key) VALUES($1,'custom-v1',$2)", [second.id, customKey])
+  const active = (await db.query("INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key) VALUES($1,'宠物首图',$2) RETURNING id", [second.id, customKey])).rows[0].id
+  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id) VALUES($1,'custom-v1',$2)", [second.id, active])
   const secondSource = await collect(second.id)
   const routed = await run(secondSource)
   assert.equal(routed.connection_id, second.id)
