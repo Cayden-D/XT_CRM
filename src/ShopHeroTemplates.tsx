@@ -17,15 +17,15 @@ function useHeroTemplateShops() {
   return { shops, setShops, error }
 }
 
-export function HeroShopPicker({ shopId, change, followProduct, disabled }:{
-  shopId?:string|null; change:(id:string|null|undefined)=>void; followProduct:boolean; disabled?:boolean
+export function HeroShopPicker({ shopId, change, followProduct, disabled, label = '首图店铺' }:{
+  shopId?:string|null; change:(id:string|null|undefined)=>void; followProduct:boolean; disabled?:boolean; label?:string
 }) {
   const { shops, error } = useHeroTemplateShops()
   const value = shopId === undefined && followProduct ? 'product' : shopId ?? ''
-  return <label className="iw-field iw-hero-shop-picker">首图店铺
+  return <label className="iw-field iw-hero-shop-picker">{label}
     <select value={value} disabled={disabled || !shops} onChange={e => change(e.target.value === 'product' ? undefined : e.target.value || null)}>
       {followProduct && <option value="product">跟随商品的目标店铺</option>}
-      <option value="">普通首图</option>
+      <option value="">企业通用</option>
       {shops?.map(s => <option value={s.id} key={s.id}>{s.display_name} · {modes[s.mode]}</option>)}
     </select>
     {error && <small className="iw-error" role="status">{error}</small>}

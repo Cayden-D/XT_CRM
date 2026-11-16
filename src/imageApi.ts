@@ -18,7 +18,7 @@ export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
 export type ImageSource = { url:string }|{ assetId:string }
-export type Brand = { id:string; name:string; aliases:string[]; is_default:boolean; logo_url:string|null; logo_width:number|null; logo_height:number|null; updated_at:string }
+export type Brand = { id:string; connection_id:string|null; name:string; aliases:string[]; is_default:boolean; logo_url:string|null; logo_width:number|null; logo_height:number|null; updated_at:string }
 
 export const suiteTypes:[SuiteType,string,string][] = [
   ['suite_hero','1688 首图','抓眼球的批发首图：AI 按商品写大标题、特点标签和用途，店铺优势做角标，左上角品牌 Logo'],
@@ -38,8 +38,8 @@ export const getImageSettings = () => request<{data:ImageSettings;services:Image
 export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
 export const getHeroTemplateShops = () => request<{data:HeroTemplateShop[]}>(`${base}/hero-templates`)
 export const saveHeroTemplate = (id:string, input:{mode:HeroTemplateMode;revision:number;content?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}`, json('PUT', input))
-export const getProductImages = (id:string) => request<{data:ProductImages}>(`${base}/products/${id}`)
-export const screenProductImages = (id:string, details=false) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details }))
+export const getProductImages = (id:string, connectionId?:string|null) => request<{data:ProductImages}>(`${base}/products/${id}${connectionId === undefined ? '' : `?connectionId=${connectionId ?? 'shared'}`}`)
+export const screenProductImages = (id:string, details=false, connectionId?:string|null) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details, connectionId }))
 export const replaceFlagged = (id:string, connectionId?:string|null) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', { connectionId }))
 export const uploadImage = (content:string, collectedProductId?:string) => request<{data:ImageAsset}>(`${base}/uploads`, json('POST', { content, collectedProductId }))
 export const createEdit = (input:{source:ImageSource;operation:'white_bg'|'background'|'resize';collectedProductId?:string;scene?:string;model?:string;preset?:string;width?:number;height?:number;fit?:'pad'|'crop'}) => request<{data:ImageAsset}>(`${base}/edits`, json('POST', input))
@@ -49,9 +49,14 @@ export function getAssets(params:{kind?:'edit'|'suite'|'upload';collectedProduct
   Object.entries(params).forEach(([k,v]) => { if (v !== undefined && v !== '') q.set(k, Array.isArray(v) ? v.join(',') : String(v)) })
   return request<{data:ImageAsset[];total:number}>(`${base}/assets?${q}`)
 }
-export const getBrands = () => request<{data:Brand[]}>(`${base}/brands`)
-export const createBrand = (input:{name:string;aliases:string[];logoContent?:string;isDefault:boolean;rightsConfirmed:true}) => request<{data:Brand}>(`${base}/brands`, json('POST', input))
-export const updateBrand = (id:string, input:{name?:string;aliases?:string[];logoContent?:string;removeLogo?:boolean;isDefault?:true;rightsConfirmed?:boolean}) => request<{data:Brand}>(`${base}/brands/${id}`, json('PATCH', input))
+export function getBrands(scope?:{ connectionId?:string|null; collectedProductId?:string }) {
+  const query = scope?.connectionId != null ? `?connectionId=${scope.connectionId}`
+    : scope?.connectionId !== null && scope?.collectedProductId ? `?collectedProductId=${scope.collectedProductId}`
+    : scope ? '?connectionId=shared' : ''
+  return request<{data:Brand[]}>(`${base}/brands${query}`)
+}
+export const createBrand = (input:{name:string;aliases:string[];logoContent?:string;connectionId?:string|null;isDefault:boolean;rightsConfirmed:true}) => request<{data:Brand}>(`${base}/brands`, json('POST', input))
+export const updateBrand = (id:string, input:{name?:string;aliases?:string[];logoContent?:string;removeLogo?:boolean;connectionId?:string|null;isDefault?:true;rightsConfirmed?:boolean}) => request<{data:Brand}>(`${base}/brands/${id}`, json('PATCH', input))
 export const deleteBrand = (id:string) => request<{ok:true}>(`${base}/brands/${id}`, { method:'DELETE' })
 export const getAlbums = () => request<{data:AlbumShop[]}>(`${base}/albums`)
 export const uploadToAlbum = (id:string, input:{connectionId?:string;albumId?:string}) => request<{data:ImageAsset}>(`${base}/assets/${id}/photo`, json('POST', { ...input, confirmed:true }))

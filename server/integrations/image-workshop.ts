@@ -6,7 +6,7 @@ import { IntegrationError } from './1688.js'
 import { inspectPublishingImages } from './1688-agent.js'
 import { imagePreviewClient, putPrivateImage, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
-import { brandById, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
+import { brandById, brandPolicy, checkBrandShop, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
 import { applyCustomHeroFrame, applyHeroReferenceFrame, CUSTOM_HERO_FRAME, HERO_BOTTOM_PERCENT, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS, HERO_TOP_PERCENT } from './hero-reference-frame.js'
 import { heroFrameForShop, type HeroFrame } from './shop-hero-templates.js'
 import { generateQwenText, type QwenModel } from '../llm/qwen.js'
@@ -39,7 +39,7 @@ export type GeneratedType = SuiteType | DetailType
 export const detailNames: Record<DetailType, string> = { detail_poster: '详情 · 主海报', detail_advantages: '详情 · 产品优势', detail_features: '详情 · 产品特点' }
 export const suiteNames: Record<SuiteType, string> = { suite_hero: '1688 首图', suite_white: '白底图', suite_scene: '场景氛围图', suite_detail: '细节图', suite_model: '模特场景图', suite_selling: '卖点图', suite_spec: '规格尺寸图' }
 type Json = Record<string, any>
-export type Finding = { readable: boolean; watermark: boolean; rightsRisk: boolean; reason: string }
+export type Finding = { readable: boolean; watermark: boolean; rightsRisk: boolean; reason: string; brandPolicy?: string }
 export const flagged = (f: Finding | null | undefined) => Boolean(f && (!f.readable || f.watermark || f.rightsRisk))
 const RIGHTS_PROMPT = /(?:去|除|删|擦|消|抹|隐藏|遮).{0,6}(?:水印|商标|版权|logo|标志|品牌)|(?:remove|erase|hide|clean).{0,15}(?:watermark|copyright|logo|brand|trademark)/i
 export function checkPrompt(text: string) {
@@ -135,51 +135,70 @@ export function sourceUrl(raw: string) {
   return url.href
 }
 
-/** Screening results by URL; checks only what is not cached yet. Asset links are signed, so they are not cached. */
+/** Screening results are reusable only under the same set of allowed brand names. */
 export async function screen(tenantId: string, urls: string[], cache = true, ownBrands?: string[]): Promise<Map<string, Finding>> {
-  const result = new Map<string, Finding>()
-  if (cache && urls.length) {
-    const rows = (await db.query('SELECT url,readable,watermark,rights_risk,reason FROM image_inspections WHERE tenant_id=$1 AND url=ANY($2::text[])', [tenantId, urls])).rows
-    for (const r of rows) result.set(r.url, { readable: r.readable, watermark: r.watermark, rightsRisk: r.rights_risk, reason: r.reason })
-  }
+  if (!urls.length) return new Map()
+  const names = ownBrands ?? await ownBrandNames(tenantId)
+  const policy = brandPolicy(names)
+  const result = cache ? await cachedFindings(tenantId, urls, names) : new Map<string, Finding>()
   const missing = [...new Set(urls.filter(u => !result.has(u)))]
   if (missing.length) {
-    const findings = await inspectPublishingImages(missing, ownBrands ?? await ownBrandNames(tenantId))
-    for (const f of findings) {
-      const finding = { readable: f.readable, watermark: f.watermark, rightsRisk: f.rightsRisk, reason: f.reason }
+    for (const f of await inspectPublishingImages(missing, names)) {
+      const finding = { readable: f.readable, watermark: f.watermark, rightsRisk: f.rightsRisk, reason: f.reason, brandPolicy: policy }
       result.set(f.url, finding)
-      if (cache) await db.query(`INSERT INTO image_inspections(tenant_id,url,readable,watermark,rights_risk,reason) VALUES($1,$2,$3,$4,$5,$6)
-        ON CONFLICT(tenant_id,url) DO UPDATE SET readable=excluded.readable,watermark=excluded.watermark,rights_risk=excluded.rights_risk,reason=excluded.reason,checked_at=now()`,
-      [tenantId, f.url, f.readable, f.watermark, f.rightsRisk, f.reason])
+      if (cache) await rememberFinding(tenantId, f.url, finding)
     }
   }
   return result
 }
 
-export async function cachedFindings(tenantId: string, urls: string[]) {
-  if (!urls.length) return new Map<string, Finding>()
-  const rows = (await db.query('SELECT url,readable,watermark,rights_risk,reason FROM image_inspections WHERE tenant_id=$1 AND url=ANY($2::text[])', [tenantId, urls])).rows
-  return new Map(rows.map(r => [r.url as string, { readable: r.readable, watermark: r.watermark, rightsRisk: r.rights_risk, reason: r.reason } as Finding]))
+export async function rememberFinding(tenantId: string, url: string, finding: Finding) {
+  if (!finding.brandPolicy) return
+  await db.query(`INSERT INTO image_inspections(tenant_id,url,brand_policy,readable,watermark,rights_risk,reason) VALUES($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT(tenant_id,url,brand_policy) DO UPDATE SET readable=excluded.readable,watermark=excluded.watermark,rights_risk=excluded.rights_risk,reason=excluded.reason,checked_at=now()`,
+    [tenantId, url, finding.brandPolicy, finding.readable, finding.watermark, finding.rightsRisk, finding.reason])
 }
 
-/** Resolves a picture chosen by the user to a URL the models can read, and refuses flagged pictures. */
-export async function usableSource(tenantId: string, source: { url?: string; assetId?: string }) {
+export async function cachedFindings(tenantId: string, urls: string[], names: string[]) {
+  if (!urls.length) return new Map<string, Finding>()
+  const policy = brandPolicy(names)
+  const rows = (await db.query('SELECT url,readable,watermark,rights_risk,reason FROM image_inspections WHERE tenant_id=$1 AND url=ANY($2::text[]) AND brand_policy=$3', [tenantId, urls, policy])).rows
+  return new Map(rows.map(r => [r.url as string, { readable: r.readable, watermark: r.watermark, rightsRisk: r.rights_risk, reason: r.reason, brandPolicy: policy }]))
+}
+
+export const assetShop = (options: Json): string | null => options?.heroShopId ?? options?.brand?.connectionId ?? options?.referenceShopId ?? null
+
+async function assetBrandNames(tenantId: string, options: Json, connectionId: string | null) {
+  const names = await ownBrandNames(tenantId, connectionId)
+  if (options?.heroFrame === HERO_REFERENCE_FRAME && options.heroShopId === connectionId) names.push(...HERO_REFERENCE_MARKS)
+  if (options?.heroFrame === CUSTOM_HERO_FRAME && options.heroShopId === connectionId && options.heroShopName) names.push(options.heroShopName)
+  return names
+}
+
+export async function checkAssetFinding(tenantId: string, asset: { oss_key: string; findings?: Finding | null; options?: Json }, connectionId: string | null) {
+  const names = await assetBrandNames(tenantId, asset.options ?? {}, connectionId)
+  if (asset.findings?.brandPolicy === brandPolicy(names)) return asset.findings
+  const url = await imageUrl(asset.oss_key, tenantId)
+  return (await screen(tenantId, [url], false, names)).get(url) ?? null
+}
+
+/** Resolves the reference under the destination's brand policy. */
+export async function usableSource(tenantId: string, source: { url?: string; assetId?: string }, connectionId?: string | null) {
   if (source.assetId) {
-    const asset = (await db.query("SELECT id,oss_key,findings FROM image_assets WHERE id=$1 AND tenant_id=$2 AND status='completed'", [source.assetId, tenantId])).rows[0]
+    const asset = (await db.query("SELECT id,oss_key,findings,options FROM image_assets WHERE id=$1 AND tenant_id=$2 AND status='completed'", [source.assetId, tenantId])).rows[0]
     if (!asset?.oss_key) throw new IntegrationError('IMAGE_SOURCE', '图片不存在或尚未生成完成。', 404)
-    const url = await imageUrl(asset.oss_key, tenantId)
-    let finding = asset.findings as Finding | null
-    if (!finding) {
-      finding = (await screen(tenantId, [url], false)).get(url) ?? null
-      if (finding) await db.query('UPDATE image_assets SET findings=$2 WHERE id=$1', [asset.id, JSON.stringify(finding)])
-    }
+    const requiredShop = assetShop(asset.options)
+    const target = connectionId === undefined ? asset.options?.listingConnectionId ?? requiredShop : connectionId
+    if (requiredShop && requiredShop !== target) throw new IntegrationError('IMAGE_SHOP_MISMATCH', '请选择同店铺的参考图片。', 409)
+    const finding = await checkAssetFinding(tenantId, asset, target)
+    if (!asset.findings && finding) await db.query('UPDATE image_assets SET findings=$2 WHERE id=$1', [asset.id, JSON.stringify(finding)])
     if (flagged(finding)) throw new IntegrationError('IMAGE_SOURCE_RISK', `这张图片不能用于 AI 处理：${finding!.reason}`, 400)
-    return { url, ref: `asset:${asset.id}` }
+    return { url: await imageUrl(asset.oss_key, tenantId), ref: `asset:${asset.id}`, connectionId: target, requiredShop }
   }
   const url = sourceUrl(source.url ?? '')
-  const finding = (await screen(tenantId, [url])).get(url)
+  const finding = (await screen(tenantId, [url], true, await ownBrandNames(tenantId, connectionId))).get(url)
   if (flagged(finding)) throw new IntegrationError('IMAGE_SOURCE_RISK', `这张图片不能用于 AI 处理：${finding!.reason} 请更换图片，或用「电商套图」基于其他干净图片重新生成。`, 400)
-  return { url, ref: url }
+  return { url, ref: url, connectionId: connectionId ?? null, requiredShop: null }
 }
 
 /** A stored reference is either an Alibaba CDN URL or "asset:<id>" (signed again when the task runs). */
@@ -356,8 +375,9 @@ async function complete(asset: Asset, png: Buffer, cost?: number) {
   if (asset.options.unchecked) finding = { readable: true, watermark: false, rightsRisk: false, reason: '未检查：已开启 AI 生图自动上架，生成图不做水印/Logo 复检。' }
   else try {
     const url = await imageUrl(key, asset.tenant_id)
-    const frameNames = mode === HERO_REFERENCE_FRAME ? HERO_REFERENCE_MARKS : mode === CUSTOM_HERO_FRAME ? [asset.options.heroShopName as string] : []
-    const names = frameNames.length ? [...await ownBrandNames(asset.tenant_id), ...frameNames] : undefined
+    const target = asset.options.listingConnectionId ?? assetShop(asset.options)
+    const names = await assetBrandNames(asset.tenant_id, asset.options, target)
+    if (mode === HERO_REFERENCE_FRAME && !asset.options.heroShopId) names.push(...HERO_REFERENCE_MARKS)
     finding = (await screen(asset.tenant_id, [url], false, names)).get(url)
   }
   catch { finding = { readable: false, watermark: false, rightsRisk: false, reason: '生成结果未能完成复检，请人工确认后再使用。' } }
@@ -425,20 +445,22 @@ export async function screenNextProduct() {
 /** Returns how many flagged main pictures there are and how many replacements were queued. */
 export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', model: SuiteModel, quality: SuiteQuality, connectionId?: string | null) {
   const facts = await productFacts(tenantId, productId)
-  const brand = await defaultBrand(tenantId)
-  const findings = await screen(tenantId, facts.gallery)
+  const target = connectionId === undefined ? facts.heroShopId : connectionId
+  await checkBrandShop(tenantId, target)
+  const brand = await defaultBrand(tenantId, target)
+  const findings = await screen(tenantId, facts.gallery, true, await ownBrandNames(tenantId, target))
   const bad = facts.gallery.map((url, index) => ({ url, index })).filter(g => flagged(findings.get(g.url)))
   // The first position becomes a 1688 首图: its words are written for this product.
   if (bad.some(g => g.index === 0) && apimartConfigured()) {
-    facts.heroReferenceFrame = await heroFrameForShop(tenantId, connectionId === undefined ? facts.heroShopId : connectionId)
+    facts.heroReferenceFrame = await heroFrameForShop(tenantId, target)
     facts.heroCopy = await heroCopy(facts)
   }
   const clean = facts.gallery.filter(url => !flagged(findings.get(url)))
   if (!bad.length || !clean.length || !apimartConfigured()) return { flagged: bad.length, queued: 0, clean: clean.length }
   const frame = facts.heroReferenceFrame
   const existing = new Set((await db.query(`SELECT replaces_index FROM image_assets WHERE collected_product_id=$1 AND replaces_index IS NOT NULL AND status<>'failed'
-    AND (replaces_index<>0 OR (options->>'heroFrame' IS NOT DISTINCT FROM $2 AND options->>'heroShopId' IS NOT DISTINCT FROM $3
-      AND options->>'heroFrameKey' IS NOT DISTINCT FROM $4))`, [productId, frame?.mode ?? null, frame?.connectionId ?? null, frame?.mode === CUSTOM_HERO_FRAME ? frame.key : null])).rows.map(r => r.replaces_index))
+    AND options->>'listingConnectionId' IS NOT DISTINCT FROM $2
+    AND (replaces_index<>0 OR (options->>'heroFrame' IS NOT DISTINCT FROM $3 AND options->>'heroFrameKey' IS NOT DISTINCT FROM $4))`, [productId, target, frame?.mode ?? null, frame?.mode === CUSTOM_HERO_FRAME ? frame.key : null])).rows.map(r => r.replaces_index))
   const batch = randomUUID()
   let queued = 0
   for (const { index } of bad) {
@@ -446,7 +468,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
     const type = LISTING_MAIN_TYPES[Math.min(index, LISTING_MAIN_TYPES.length - 1)] // by 1688 position: 首图 first, white fifth
     const { prompt, options } = suiteDesign(type, facts, brand)
     await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,replaces_index,options,prompt,trigger,created_by)
-      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, ...options }), prompt, trigger, actorId])
+      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, listingConnectionId: target, ...options }), prompt, trigger, actorId])
     queued++
   }
   return { flagged: bad.length, queued, clean: clean.length }
@@ -457,7 +479,7 @@ export function suiteDesign(type: GeneratedType, facts: SuiteFacts, brand: OwnBr
   const framed = type === 'suite_hero' && facts.heroReferenceFrame
   const selected = brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
   const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name, ...(framed.mode === CUSTOM_HERO_FRAME ? { heroFrameKey: framed.key } : {}) }
-    : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected) } } : {}
+    : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected), ...(type === 'suite_white' || !brand.connection_id ? {} : { connectionId: brand.connection_id }) } } : {}
   return { prompt: suitePrompt(type, facts, selected), options }
 }
 

@@ -168,7 +168,40 @@ try {
   for (let y = 0; y < 400; y++) for (let x = 0; x < 400; x++) if (lit(x, y)) { right = Math.max(right, x); bottom = Math.max(bottom, y) }
   const margin = Math.round(2048 * 0.03)
   assert.ok(right > margin && right - margin < 200 && bottom - margin < 200, `logo area ${right - margin}×${bottom - margin}`)
-  console.log(JSON.stringify({ logoWithin200: 'ok', permissions: 'ok', rightsStatement: 'ok', rasterOnly: 'ok', foreignLogoRefused: 'ok', ownNameRecognised: 'ok', defaultBrand: 'ok', tenantIsolation: 'ok', sourceBrandRemoved: 'ok', logoExact: 'ok', whiteStaysClean: 'ok', textOnlyBrand: 'ok', deleteGuard: 'ok', noPayWithoutLogo: 'ok', attributeBrand: 'ok', liveModelCalls: 0 }))
+  const { defaultBrand, ownBrandNames } = await import('../server/integrations/brands.js')
+  const shop = async (tenantId: string, display: string) => (await db.query(`INSERT INTO integration_1688_connections
+    (tenant_id,app_key,ali_id,display_name,token_ciphertext,access_expires_at) VALUES($1,'test',$2,$3,'unused',now()) RETURNING id`,
+    [tenantId, randomUUID(), display])).rows[0].id as string
+  const shopA = await shop(tenant, '拓洋店铺'), shopB = await shop(tenant, '智珀店铺'), otherShop = await shop(tenants[1], '其他企业')
+  assert.equal((await create({ name: '跨企业品牌', connectionId: otherShop })).statusCode, 404)
+  const a = (await create({ name: '拓洋', aliases: ['TOYANG'], connectionId: shopA, logoContent: b64(logo) })).json().data
+  const b = (await create({ name: '智珀', connectionId: shopB })).json().data
+  assert.deepEqual([a.connection_id, b.connection_id, a.is_default, b.is_default], [shopA, shopB, true, true])
+  assert.equal((await defaultBrand(tenant, shopA))?.id, a.id)
+  assert.equal((await defaultBrand(tenant, shopB))?.id, b.id)
+  assert.deepEqual((await call('GET', `/brands?connectionId=${shopA}`)).json().data.map((item: { id: string }) => item.id), [a.id, third.id])
+  assert.equal((await suite({ connectionId: shopB, brandId: a.id })).statusCode, 404)
+  assert.equal((await suite({ connectionId: null, brandId: a.id })).statusCode, 404)
+  const draft = await suite({ connectionId: shopA })
+  assert.equal(draft.statusCode, 200, draft.body)
+  const scoped = await rows(draft.json().data.batchId)
+  assert.match(scoped.suite_selling.prompt, /品牌：拓洋/)
+  assert.equal(scoped.suite_scene.options.brand.connectionId, shopA)
+  assert.equal(scoped.suite_white.options.brand.connectionId, undefined)
+  await drain(); await drain()
+  const sceneAsset = draft.json().data.assets.find((item: { operation: string }) => item.operation === 'suite_scene')
+  const crossAlbum = await call('POST', `/assets/${sceneAsset.id}/photo`, { connectionId: shopB, albumId: '1001', confirmed: true })
+  assert.equal(crossAlbum.json().error, 'BRAND_SHOP_MISMATCH')
+  seen = { brand: 'TOYANG' }
+  const ref = cdn('brand-policy')
+  assert.equal((await workshop.screen(tenant, [ref], true, await ownBrandNames(tenant, shopA))).get(ref)?.rightsRisk, false)
+  assert.equal((await workshop.screen(tenant, [ref], true, await ownBrandNames(tenant, shopB))).get(ref)?.rightsRisk, true, 'same URL uses a separate policy')
+  seen = {}
+  const moved = await call('PATCH', `/brands/${third.id}`, { connectionId: shopB })
+  assert.equal(moved.statusCode, 200, moved.body)
+  assert.equal((await defaultBrand(tenant, shopB))?.id, b.id, 'moving a brand preserves the destination default')
+  assert.equal(await defaultBrand(tenant, null), null)
+  console.log(JSON.stringify({ logoWithin200: 'ok', permissions: 'ok', rightsStatement: 'ok', rasterOnly: 'ok', foreignLogoRefused: 'ok', ownNameRecognised: 'ok', defaultBrand: 'ok', tenantIsolation: 'ok', sourceBrandRemoved: 'ok', logoExact: 'ok', whiteStaysClean: 'ok', textOnlyBrand: 'ok', deleteGuard: 'ok', noPayWithoutLogo: 'ok', attributeBrand: 'ok', shopBrandIsolation: 'ok', liveModelCalls: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

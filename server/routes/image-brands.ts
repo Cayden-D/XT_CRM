@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { PoolClient } from 'pg'
 import sharp from 'sharp'
 import { z } from 'zod'
-import { requirePermission } from '../auth.js'
+import { hasPermission, requirePermission } from '../auth.js'
 import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
-import { checkPrompt, imageUrl, removeImage, screen, storeImage } from '../integrations/image-workshop.js'
+import { BRAND_SCOPE, checkBrandShop } from '../integrations/brands.js'
+import { checkPrompt, imageUrl, productFacts, removeImage, screen, storeImage } from '../integrations/image-workshop.js'
 
 const tenant = (request: FastifyRequest) => request.authUser.tenantId
 const idParams = z.object({ id: z.string().uuid() })
@@ -13,9 +15,10 @@ const name = z.string().trim().min(1).max(40).regex(/^[^<>\n\r]+$/)
 const logoContent = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(7_500_000)
 const aliases = z.array(name).max(5)
 const LOGO_FORMATS = ['png', 'jpeg', 'webp'], MIN_LOGO_SIDE = 120, MAX_LOGO_SIDE = 1024
-const COLUMNS = 'id,tenant_id,name,aliases,logo_key,logo_width,logo_height,is_default,rights_confirmed_at,created_at,updated_at'
+const COLUMNS = 'id,tenant_id,connection_id,name,aliases,logo_key,logo_width,logo_height,is_default,rights_confirmed_at,created_at,updated_at'
+const shopId = z.string().uuid().nullable().optional()
 
-const audit = (request: FastifyRequest, action: string, entityId: string, data: object) => db.query(
+const audit = (request: FastifyRequest, action: string, entityId: string, data: object, client: Pick<PoolClient, 'query'> = db) => client.query(
   "INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,$3,'brand',$4,$5,$6)",
   [tenant(request), request.authUser.sub, action, entityId, JSON.stringify(data), request.id])
 
@@ -50,63 +53,81 @@ const pendingWork = async (tenantId: string, id: string) => Boolean((await db.qu
 
 export async function brandRoutes(app: FastifyInstance) {
   app.get('/brands', { preHandler: requirePermission('collection:read') }, async request => {
-    const rows = (await db.query(`SELECT ${COLUMNS} FROM brands WHERE tenant_id=$1 ORDER BY is_default DESC,created_at`, [tenant(request)])).rows
+    const { connectionId, collectedProductId } = z.object({ connectionId: z.union([z.string().uuid(), z.literal('shared')]).optional(), collectedProductId: z.string().uuid().optional() }).parse(request.query)
+    const target = connectionId === 'shared' ? null : connectionId ?? (collectedProductId
+      ? (await productFacts(tenant(request), collectedProductId)).heroShopId
+      : hasPermission(request.authUser.permissions, 'integration:manage') ? undefined : null)
+    await checkBrandShop(tenant(request), target)
+    const scope = target === undefined ? '' : ` AND ${BRAND_SCOPE}`
+    const rows = (await db.query(`SELECT ${COLUMNS} FROM brands WHERE tenant_id=$1${scope}
+      ORDER BY is_default DESC,connection_id NULLS LAST,created_at,id`, target === undefined ? [tenant(request)] : [tenant(request), target])).rows
     return { data: await Promise.all(rows.map(present)) }
   })
 
   app.post('/brands', { preHandler: requirePermission('integration:manage'), bodyLimit: 8_000_000 }, async request => {
-    const input = z.object({ name, aliases: aliases.default([]), logoContent: logoContent.optional(), isDefault: z.boolean().default(false), rightsConfirmed: z.literal(true, { error: '请确认拥有该品牌或已获授权。' }) }).strict().parse(request.body)
+    const input = z.object({ name, aliases: aliases.default([]), logoContent: logoContent.optional(), isDefault: z.boolean().default(false), connectionId: shopId, rightsConfirmed: z.literal(true, { error: '请确认拥有该品牌或已获授权。' }) }).strict().parse(request.body)
     checkPrompt(input.name)
+    const target = input.connectionId ?? null
+    await checkBrandShop(tenant(request), target)
     const logo = input.logoContent ? await storeLogo(tenant(request), input.logoContent, [input.name, ...input.aliases]) : null
     const client = await db.connect()
+    let row
     try {
       await client.query('BEGIN')
-      const first = !(await client.query('SELECT 1 FROM brands WHERE tenant_id=$1 LIMIT 1', [tenant(request)])).rows.length
-      if (input.isDefault) await client.query('UPDATE brands SET is_default=false WHERE tenant_id=$1 AND is_default', [tenant(request)])
-      const row = (await client.query(`INSERT INTO brands(tenant_id,name,aliases,logo_key,logo_width,logo_height,is_default,rights_confirmed_by,rights_confirmed_at,created_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,now(),$8) RETURNING ${COLUMNS}`, [tenant(request), input.name, input.aliases, logo?.key ?? null, logo?.width ?? null, logo?.height ?? null, input.isDefault || first, request.authUser.sub])).rows[0]
+      await client.query('SELECT 1 FROM tenants WHERE id=$1 FOR NO KEY UPDATE', [tenant(request)])
+      const first = !(await client.query('SELECT 1 FROM brands WHERE tenant_id=$1 AND connection_id IS NOT DISTINCT FROM $2::uuid LIMIT 1', [tenant(request), target])).rows.length
+      if (input.isDefault) await client.query('UPDATE brands SET is_default=false WHERE tenant_id=$1 AND connection_id IS NOT DISTINCT FROM $2::uuid AND is_default', [tenant(request), target])
+      row = (await client.query(`INSERT INTO brands(tenant_id,name,aliases,logo_key,logo_width,logo_height,is_default,rights_confirmed_by,rights_confirmed_at,created_by,connection_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,now(),$8,$9) RETURNING ${COLUMNS}`, [tenant(request), input.name, input.aliases, logo?.key ?? null, logo?.width ?? null, logo?.height ?? null, input.isDefault || first, request.authUser.sub, target])).rows[0]
+      await audit(request, 'brand.create', row.id, { name: input.name, aliases: input.aliases, logo: Boolean(logo), rightsConfirmed: true, connectionId: target }, client)
       await client.query('COMMIT')
-      await audit(request, 'brand.create', row.id, { name: input.name, aliases: input.aliases, logo: Boolean(logo), rightsConfirmed: true })
-      return { data: await present(row) }
     } catch (error) {
       await client.query('ROLLBACK')
       if (logo) await removeImage(logo.key, tenant(request)).catch(() => {})
       throw conflict(error)
     } finally { client.release() }
+    return { data: await present(row) }
   })
 
   app.patch('/brands/:id', { preHandler: requirePermission('integration:manage'), bodyLimit: 8_000_000 }, async request => {
     const { id } = idParams.parse(request.params)
-    const input = z.object({ name: name.optional(), aliases: aliases.optional(), logoContent: logoContent.optional(), removeLogo: z.boolean().optional(), isDefault: z.literal(true).optional(), rightsConfirmed: z.boolean().optional() }).strict().parse(request.body)
+    const input = z.object({ name: name.optional(), aliases: aliases.optional(), logoContent: logoContent.optional(), removeLogo: z.boolean().optional(), isDefault: z.literal(true).optional(), connectionId: shopId, rightsConfirmed: z.boolean().optional() }).strict().parse(request.body)
     if (input.logoContent && input.removeLogo) throw new IntegrationError('BRAND_LOGO', '不能同时上传和移除 Logo。', 400)
-    const current = (await db.query('SELECT name,aliases,logo_key FROM brands WHERE id=$1 AND tenant_id=$2', [id, tenant(request)])).rows[0]
+    const current = (await db.query('SELECT name,aliases,logo_key,connection_id,is_default,xmin::text AS version FROM brands WHERE id=$1 AND tenant_id=$2', [id, tenant(request)])).rows[0]
     if (!current) throw new IntegrationError('NOT_FOUND', '品牌不存在。', 404)
-    const identityChanged = input.name !== undefined && input.name !== current.name || input.aliases !== undefined || input.logoContent !== undefined
+    const identityChanged = input.name !== undefined && input.name !== current.name || input.aliases !== undefined && JSON.stringify(input.aliases) !== JSON.stringify(current.aliases) || input.logoContent !== undefined
     if (identityChanged && input.rightsConfirmed !== true) throw new IntegrationError('RIGHTS_REQUIRED', '修改品牌名称或 Logo 前，请确认拥有该品牌或已获授权。', 400)
     if (input.name) checkPrompt(input.name)
+    const target = input.connectionId === undefined ? current.connection_id : input.connectionId
+    const moved = target !== current.connection_id
+    await checkBrandShop(tenant(request), target)
     if ((input.logoContent || input.removeLogo) && await pendingWork(tenant(request), id)) throw new IntegrationError('BRAND_BUSY', '该品牌有套图正在生成，请完成后再更换 Logo。', 409)
     const nextName = input.name ?? current.name, nextAliases = input.aliases ?? current.aliases
     const logo = input.logoContent ? await storeLogo(tenant(request), input.logoContent, [nextName, ...nextAliases]) : null
     const client = await db.connect()
+    let row
     try {
       await client.query('BEGIN')
-      if (input.isDefault) await client.query('UPDATE brands SET is_default=false WHERE tenant_id=$1 AND is_default AND id<>$2', [tenant(request), id])
-      const row = (await client.query(`UPDATE brands SET name=$3,aliases=$4,is_default=is_default OR $5,
+      await client.query('SELECT 1 FROM tenants WHERE id=$1 FOR NO KEY UPDATE', [tenant(request)])
+      const foundDefault = moved && (await client.query('SELECT 1 FROM brands WHERE tenant_id=$1 AND connection_id IS NOT DISTINCT FROM $2::uuid AND is_default', [tenant(request), target])).rows.length > 0
+      const isDefault = input.isDefault || (moved ? !foundDefault : current.is_default)
+      if (input.isDefault) await client.query('UPDATE brands SET is_default=false WHERE tenant_id=$1 AND is_default AND id<>$2 AND connection_id IS NOT DISTINCT FROM $3::uuid', [tenant(request), id, target])
+      row = (await client.query(`UPDATE brands SET name=$3,aliases=$4,is_default=$5,connection_id=$12,
           logo_key=CASE WHEN $6 THEN NULL WHEN $7::text IS NOT NULL THEN $7 ELSE logo_key END,
           logo_width=CASE WHEN $6 THEN NULL WHEN $7::text IS NOT NULL THEN $8::int ELSE logo_width END,
           logo_height=CASE WHEN $6 THEN NULL WHEN $7::text IS NOT NULL THEN $9::int ELSE logo_height END,
           rights_confirmed_by=CASE WHEN $10 THEN $11::uuid ELSE rights_confirmed_by END,rights_confirmed_at=CASE WHEN $10 THEN now() ELSE rights_confirmed_at END,updated_at=now()
-        WHERE id=$1 AND tenant_id=$2 RETURNING ${COLUMNS}`, [id, tenant(request), nextName, nextAliases, input.isDefault === true, input.removeLogo === true, logo?.key ?? null, logo?.width ?? null, logo?.height ?? null, identityChanged, request.authUser.sub])).rows[0]
-      if (!row) throw new IntegrationError('NOT_FOUND', '品牌不存在。', 404)
+        WHERE id=$1 AND tenant_id=$2 AND xmin::text=$13 RETURNING ${COLUMNS}`, [id, tenant(request), nextName, nextAliases, isDefault, input.removeLogo === true, logo?.key ?? null, logo?.width ?? null, logo?.height ?? null, identityChanged, request.authUser.sub, target, current.version])).rows[0]
+      if (!row) throw new IntegrationError('BRAND_CONFLICT', '品牌已变更，请刷新后重试。', 409)
+      await audit(request, 'brand.update', id, { name: nextName, aliases: nextAliases, logoChanged: Boolean(logo || input.removeLogo), isDefault, connectionId: target }, client)
       await client.query('COMMIT')
-      if ((logo || input.removeLogo) && current.logo_key) await removeImage(current.logo_key, tenant(request)).catch(() => {})
-      await audit(request, 'brand.update', id, { name: nextName, aliases: nextAliases, logoChanged: Boolean(logo || input.removeLogo), isDefault: input.isDefault === true })
-      return { data: await present(row) }
     } catch (error) {
       await client.query('ROLLBACK')
       if (logo) await removeImage(logo.key, tenant(request)).catch(() => {})
       throw conflict(error)
     } finally { client.release() }
+    if ((logo || input.removeLogo) && current.logo_key) await removeImage(current.logo_key, tenant(request)).catch(() => {})
+    return { data: await present(row) }
   })
 
   app.delete('/brands/:id', { preHandler: requirePermission('integration:manage') }, async request => {

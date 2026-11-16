@@ -26,7 +26,7 @@ let ossFailures = 0
 
 const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob, resumeImageBlockedJobs }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
-const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
+const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [{ name: 'p-brand', label: '品牌', uiType: 'input' }] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true, uploadFailures = 0, uploadAttempts = 0, unreachable = 0
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
@@ -83,6 +83,7 @@ try {
   // Listing collected products costs team credits; this team has enough for the whole test.
   await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor, tenant])
   const connection = await saveConnection(tenant, actor, { aliId: `queue-img-${randomUUID()}`, access_token: 'fixture', expires_in: 36000 })
+  await db.query("INSERT INTO brands(tenant_id,connection_id,name,is_default,rights_confirmed_at) VALUES($1,$2,'拓洋',true,now())", [tenant, connection.id])
   await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
   const imageSettings = (on: boolean) => db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,enabled_at,revision) VALUES($1,$2,'gpt-image-2.5-flare','medium',now(),1)
@@ -200,6 +201,7 @@ try {
   assert.equal((await db.query('SELECT v.image_url FROM product_variants v JOIN collected_products p ON p.product_id=v.product_id WHERE p.id=$1', [sourceId])).rows[0].image_url, 'https://cbu01.alicdn.com/img/ibank/album-9.jpg')
   assert.deepEqual(published.formValues.saleProp['p-3216'], [{ value: -1, text: '黑色', custom: true, imgUrl: 'img/ibank/album-9.jpg' }])
   assert.equal(published.formValues.skuTable[0].sku_props[0].value, -1)
+  assert.equal(published.formValues.catProp['p-brand'], '拓洋', 'the destination brand goes into the platform form')
   assert.equal(published.formValues.beginAmount, 2, 'the minimum order matches the first quantity tier')
   // The source's 件重尺 (heaviest SKU, sides longest first) is used, not the shop template.
   assert.deepEqual(published.formValues.officialLogistics.offerInfo, { weight: 80, length: 4.5, width: 3, height: 3, volume: 40.5 })
@@ -221,6 +223,7 @@ try {
   assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
   assert.equal(addCalls, 1, 'found by name, not created again')
   const second = await saveConnection(tenant, actor, { aliId: `queue-pets-${randomUUID()}`, resource_owner: '义乌市智珀宠物', access_token: 'fixture', expires_in: 36000 })
+  await db.query("INSERT INTO brands(tenant_id,connection_id,name,is_default,rights_confirmed_at) VALUES($1,$2,'智珀',true,now())", [tenant, second.id])
   await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
   const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
@@ -232,6 +235,9 @@ try {
   const secondHero = (await db.query("SELECT options,prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [routed.report.imageBatch])).rows[0]
   assert.deepEqual([secondHero.options.heroFrame, secondHero.options.heroFrameKey, secondHero.options.heroShopId], ['custom-v1', customKey, second.id])
   assert.doesNotMatch(secondHero.prompt, /深蓝黑渐变/)
+  const secondSelling = (await db.query("SELECT prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_selling'", [routed.report.imageBatch])).rows[0]
+  assert.match(secondSelling.prompt, /品牌：智珀/)
+  assert.doesNotMatch(secondSelling.prompt, /品牌：拓洋/)
   // Resetting the report simulates requeueing a product to a different shop. The old batch cannot follow it.
   await db.query("UPDATE integration_1688_collection_queue_jobs SET connection_id=$2,report='{}' WHERE id=$1", [routed.id, connection.id])
   const rerouted = await run(secondSource)

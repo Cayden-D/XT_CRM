@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg'
 import { db } from '../db.js'
 import { callProductApi, IntegrationError, uploadPhoto } from './1688.js'
 import { publishingImages } from './1688-agent.js'
-import { albumJpeg, download, flagged, galleryOf, readImage, sourceUrl, type Finding } from './image-workshop.js'
+import { albumJpeg, assetShop, checkAssetFinding, download, flagged, galleryOf, readImage, rememberFinding, sourceUrl, type Finding } from './image-workshop.js'
 
 /**
  * Generated picture → 1688 shop photo album → main picture of a collected product. Album uploads are platform writes,
@@ -34,16 +34,21 @@ const audit = (ctx: AlbumContext, action: string, entityId: string, data: object
  * is checked by reading the picture back from its album address.
  */
 export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>, connectionId?: string, albumId?: string, options: { retry?: boolean } = {}) {
-  const frameShop = asset.options?.heroShopId
+  const frameShop = assetShop(asset.options)
   const destination = connectionId ?? asset.photo_connection_id
-  if (asset.operation === 'suite_hero' && frameShop && destination && frameShop !== destination) {
-    throw new IntegrationError('HERO_SHOP_MISMATCH', '请为首图选择模板所属的店铺相册。', 409)
+  if (frameShop && destination && frameShop !== destination) {
+    const hero = Boolean(asset.options?.heroShopId)
+    throw new IntegrationError(hero ? 'HERO_SHOP_MISMATCH' : 'BRAND_SHOP_MISMATCH', hero ? '请为首图选择模板所属的店铺相册。' : '请选择品牌所属的店铺相册。', 409)
   }
-  if (asset.photo_status === 'uploaded' && asset.photo_url && (!connectionId || connectionId === asset.photo_connection_id)) return asset.photo_url as string
+  const reusablePhoto = asset.photo_status === 'uploaded' && asset.photo_url && (!connectionId || connectionId === asset.photo_connection_id)
   if (asset.photo_status === 'unknown' && !options.retry) throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '上次上传相册的结果未确认，请先到店铺相册核对，避免重复上传。', 409)
   if (asset.photo_status === 'uploading') throw new IntegrationError('PHOTO_UPLOADING', '这张图片正在上传相册，请稍候。', 409)
   if (asset.status !== 'completed' || !asset.oss_key) throw new IntegrationError('IMAGE_NOT_READY', '图片尚未生成完成。', 409)
   if (!asset.findings || flagged(asset.findings as Finding)) throw new IntegrationError('IMAGE_RISK', '这张图片复检未通过（或复检未完成），不能上传到店铺相册。', 409)
+  const finding = asset.options?.unchecked ? asset.findings as Finding
+    : await checkAssetFinding(ctx.tenantId, { oss_key: asset.oss_key, findings: asset.findings, options: asset.options }, destination ?? null)
+  if (!finding || flagged(finding)) throw new IntegrationError('IMAGE_RISK', '这张图片未通过目标店铺的复检。', 409)
+  if (reusablePhoto) return asset.photo_url as string
   if (!connectionId || !albumId) throw new IntegrationError('ALBUM_REQUIRED', '请选择店铺并填写相册 ID。', 400)
   const shop = (await db.query("SELECT id,status FROM integration_1688_connections WHERE id=$1 AND tenant_id=$2", [connectionId, ctx.tenantId])).rows[0]
   if (!shop) throw new IntegrationError('NOT_FOUND', '店铺不存在。', 404)
@@ -79,9 +84,7 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
   await db.query(`INSERT INTO integration_1688_album_settings(connection_id,tenant_id,album_id,updated_by) VALUES($1,$2,$3,$4)
     ON CONFLICT(connection_id) DO UPDATE SET album_id=excluded.album_id,updated_by=excluded.updated_by,updated_at=now()`, [connectionId, ctx.tenantId, albumId, ctx.actorId])
   // The album copy is the same picture that passed screening.
-  const f = asset.findings as Finding
-  await db.query(`INSERT INTO image_inspections(tenant_id,url,readable,watermark,rights_risk,reason) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant_id,url) DO NOTHING`,
-    [ctx.tenantId, url, f.readable, f.watermark, f.rightsRisk, f.reason])
+  await rememberFinding(ctx.tenantId, url, finding)
   await audit(ctx, 'image.album.upload', asset.id, { connectionId, albumId, photoId: photo?.id ?? null })
   return url
 }

@@ -110,6 +110,7 @@ async function defer(job:QueueJob,message:string,report:Json,seconds=IMAGE_POLL_
 /** Generates the listing's pictures (or reuses an unfinished batch), then puts them into the album and the product. */
 async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string},state:Json):Promise<ImageStep>{
   const frame=state.imageBatch?null:await heroFrameForShop(job.tenant_id,job.connection_id)
+  const brand=state.imageBatch?null:await defaultBrand(job.tenant_id,job.connection_id)
   const storageFailure=`status='failed' AND task_id IS NOT NULL AND
     (error LIKE '图片保存到 OSS 失败%' OR error LIKE '无法读取已保存的图片%' OR error LIKE '生成图片下载失败%')`
   if(!state.imageBatch){
@@ -120,7 +121,9 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
       GROUP BY batch_id HAVING count(*)=$3 AND count(DISTINCT operation) FILTER (WHERE operation=ANY($4))=$3
         AND bool_and(status<>'failed' OR (${storageFailure}))
         AND bool_or(operation='suite_hero' AND options->>'heroFrame' IS NOT DISTINCT FROM $6 AND options->>'heroFrameKey' IS NOT DISTINCT FROM $7)
-      ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED,job.connection_id,frame?.mode??null,key])).rows[0]
+        AND bool_or(operation='suite_selling' AND options#>>'{brand,id}' IS NOT DISTINCT FROM $8 AND options#>>'{brand,name}' IS NOT DISTINCT FROM $9
+          AND options#>>'{brand,connectionId}' IS NOT DISTINCT FROM $10)
+      ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED,job.connection_id,frame?.mode??null,key,brand?.id??null,brand?.name??null,brand?.connection_id??null])).rows[0]
     if(reusable)state.imageBatch=reusable.batch_id
   }
   if(state.imageBatch&&Number(state.storageRevivals||0)<MAX_STORAGE_REVIVALS){
@@ -134,7 +137,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   if(!state.imageBatch){
     const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
     if(!refs.length)return {kind:'block',message:'没有可用作参考的商品主图，无法生成新图。'}
-    const brand=await defaultBrand(job.tenant_id),batch=randomUUID()
+    const batch=randomUUID()
     facts.heroReferenceFrame=frame
     facts.heroCopy=await heroCopy(facts,(await teamOf(job.tenant_id,actor.id)).textModel)
     for(const type of GENERATED){
@@ -218,7 +221,7 @@ async function processJob(job:QueueJob){
     // Published as generated, without screening; SKU pictures as collected.
     report={images:[],imagesUnchecked:true,generatedImages:previous.generatedImages,imageBatch:previous.imageBatch,sourceTitle:source.title,sourceCategoryId:source.source_category_id}
   }else{
-    const findings=await inspectPublishingImages(images.all,await ownBrandNames(job.tenant_id))
+    const findings=await inspectPublishingImages(images.all,await ownBrandNames(job.tenant_id,job.connection_id))
     report={images:findings,sourceTitle:source.title,sourceCategoryId:source.source_category_id}
     const bad=new Set(findings.filter(item=>!item.readable||item.watermark||item.rightsRisk||item.uncertain).map(item=>item.url))
     const unreadable=findings.filter(item=>!item.readable)

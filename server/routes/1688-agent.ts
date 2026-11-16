@@ -11,7 +11,7 @@ import { inspectPublishingImages, prepareAgentFields, publishingImages, sourceNa
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
-import { defaultBrand, ownBrandNames } from '../integrations/brands.js'
+import { defaultBrand, otherShopBrandNames, ownBrandNames } from '../integrations/brands.js'
 import { attributeFacts, attributePictures, BRAND_FIELD, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
 import { validatePublishBody } from './1688.js'
 
@@ -96,19 +96,31 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
         const original=sourceById.get(variant.source_variant_id)
         return original?{...variant,attributes:{...variant.attributes,...collectedSkuAttributes(source,original)}}:variant
       })
-      const defaults=collectedCategoryDefaults(draft.platform_schema,source),ownBrand=await defaultBrand(tenant)
-      // The collected brand is the source seller's; with a brand of its own the shop does not list under it.
-      if(ownBrand)for(const field of draft.platform_schema.data?.catProp?.fields?.dataSource||[])if(BRAND_FIELD.test(String(field.label||'')))delete defaults[field.name]
+      const defaults=collectedCategoryDefaults(draft.platform_schema,source),ownBrand=await defaultBrand(tenant,draft.connection_id)
+      const ownNames=await ownBrandNames(tenant,draft.connection_id)
+      const foreignNames=await otherShopBrandNames(tenant,draft.connection_id,ownNames)
+      const foreign=new Set(foreignNames.map(name=>name.toLowerCase()))
       const current=await fillPublishTemplate(tenant,draft.platform_schema,fillFromProductData(draft.platform_schema,draft.data_body.formValues,await loadProductData(tenant,product.id)))
       const catProp={...(current.catProp||{})}
+      for(const field of draft.platform_schema.data?.catProp?.fields?.dataSource||[]){
+        if(!BRAND_FIELD.test(String(field.label||'')))continue
+        const elsewhere=(value:unknown)=>{
+          const selection=value&&typeof value==='object'?value as {value?:unknown;text?:unknown}:null
+          const id=selection?selection.value:value
+          const label=selection?.text??field.dataSource?.find((option:{value:unknown;text?:string})=>String(option.value)===String(id))?.text??id
+          return foreign.has(String(label??'').trim().toLowerCase())
+        }
+        if(ownBrand||elsewhere(defaults[field.name]))delete defaults[field.name]
+        if(elsewhere(catProp[field.name]))delete catProp[field.name]
+      }
       for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
-      // The source listing's brand and its factory/shop name stay out of the title (the shop's own brand is fine).
-      const avoid=sourceNames(source,product,await ownBrandNames(tenant))
+      // Only the destination's own brands are exempt from source-name removal.
+      const avoid=sourceNames(source,product,ownNames)
       let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed,avoid)
       report={...report,title:formValues.title}
       const images=publishingImages(formValues)
       // Pictures generated for this listing are published unchecked when the owner chose so (AI images on).
-      const findings=queue?.skipImageCheck?[]:await inspectPublishingImages(images,await ownBrandNames(tenant));report={...report,images:findings,...(queue?.skipImageCheck?{imagesUnchecked:true}:{})}
+      const findings=queue?.skipImageCheck?[]:await inspectPublishingImages(images,ownNames);report={...report,images:findings,...(queue?.skipImageCheck?{imagesUnchecked:true}:{})}
       const risky=findings.filter(i=>!i.readable||i.watermark||i.rightsRisk||i.uncertain)
       if(risky.length)throw new IntegrationError('AGENT_IMAGE_RISK',`图片检查未通过：${risky.map(i=>i.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或替换图片；不能通过编辑原图消除明确的公司水印或品牌 Logo。`,400)
       const facts=attributeFacts(product,reviewed,source,ownBrand?.name),pictures=attributePictures(formValues)

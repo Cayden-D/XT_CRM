@@ -11,7 +11,9 @@ const message = (cause:unknown) => cause instanceof Error ? cause.message : '操
  * main-picture slot of the collected product (or appends it). The replaced picture is kept and can be restored.
  */
 export default function ApplyDialog({asset, close, done}:{asset:ImageAsset;close:()=>void;done:(asset:ImageAsset, note:string)=>void}) {
-  const frameShop = asset.operation === 'suite_hero' && typeof asset.options.heroShopId === 'string' ? asset.options.heroShopId : null
+  const brand = asset.options.brand as { connectionId?: string } | undefined
+  const scopedShop = asset.options.heroShopId ?? brand?.connectionId ?? asset.options.referenceShopId
+  const frameShop = typeof scopedShop === 'string' ? scopedShop : null
   const [shops, setShops] = useState<AlbumShop[]>([]), [shopId, setShopId] = useState(asset.photo_connection_id ?? ''), [albumId, setAlbumId] = useState(asset.photo_album_id ?? '')
   const [product, setProduct] = useState<{id:string;title:string}|null>(asset.collected_product_id ? { id:asset.collected_product_id, title:asset.product_title ?? '' } : null)
   const [gallery, setGallery] = useState<ProductImage[]|null>(null), [placement, setPlacement] = useState<'replace'|'append'>('replace'), [index, setIndex] = useState(asset.replaces_index ?? 0)

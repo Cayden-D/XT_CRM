@@ -13,7 +13,7 @@ import {
 } from '../integrations/image-workshop.js'
 import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
 import { IMAGE_MODELS } from '../llm/qwen-image.js'
-import { brandById, defaultBrand } from '../integrations/brands.js'
+import { brandById, checkBrandShop, defaultBrand, ownBrandNames } from '../integrations/brands.js'
 import { imageAlbumRoutes } from './image-album.js'
 import { brandRoutes } from './image-brands.js'
 import { imageHeroTemplateRoutes } from './image-hero-templates.js'
@@ -21,6 +21,7 @@ import { heroFrameForShop } from '../integrations/shop-hero-templates.js'
 
 const tenant = (request: FastifyRequest) => request.authUser.tenantId
 const idParams = z.object({ id: z.string().uuid() })
+const shopInput = z.string().uuid().nullable().optional()
 const source = z.object({ url: z.string().max(2000).optional(), assetId: z.string().uuid().optional() }).strict().refine(s => Boolean(s.url) !== Boolean(s.assetId), '请选择一张图片。')
 const RESIZE_PRESETS = { '800x800': [800, 800], '750x1000': [750, 1000], '1000x1000': [1000, 1000], '1080x1080': [1080, 1080], '1200x1200': [1200, 1200], '790x1000': [790, 1000] } as const
 const operationNames: Record<string, string> = { upload: '上传', white_bg: '白底图', background: '换背景', resize: '改尺寸', ...suiteNames, ...detailNames }
@@ -93,25 +94,32 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
   // Pictures of one collected product with cached screening results and the pictures made from it.
   app.get('/products/:id', { preHandler: requirePermission('collection:read') }, async request => {
     const { id } = idParams.parse(request.params)
-    const p = (await db.query('SELECT id,main_image_url,gallery_images,detail_images,images_screened_at FROM collected_products WHERE id=$1 AND tenant_id=$2', [id, tenant(request)])).rows[0]
+    const { connectionId } = z.object({ connectionId: z.union([z.string().uuid(), z.literal('shared')]).optional() }).parse(request.query)
+    const p = (await db.query(`SELECT p.main_image_url,p.gallery_images,p.detail_images,p.images_screened_at,coalesce(j.connection_id,p.target_connection_id) AS shop_id
+      FROM collected_products p LEFT JOIN integration_1688_collection_queue_jobs j ON j.collected_product_id=p.id AND j.tenant_id=p.tenant_id AND j.status<>'cancelled'
+      WHERE p.id=$1 AND p.tenant_id=$2`, [id, tenant(request)])).rows[0]
     if (!p) throw new IntegrationError('NOT_FOUND', '采集商品不存在。', 404)
     const { gallery, details } = productImages(p)
-    const findings = await cachedFindings(tenant(request), [...gallery, ...details])
+    const target = connectionId === 'shared' ? null : connectionId ?? p.shop_id
+    await checkBrandShop(tenant(request), target)
+    const findings = await cachedFindings(tenant(request), [...gallery, ...details], await ownBrandNames(tenant(request), target))
     const assets = (await db.query(`SELECT ${assetColumns} FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2 ORDER BY created_at DESC LIMIT 60`, [id, tenant(request)])).rows
     return { data: {
       gallery: gallery.map(url => ({ url, finding: findings.get(url) ?? null })),
       details: details.map(url => ({ url, finding: findings.get(url) ?? null })),
-      screenedAt: p.images_screened_at, assets: await Promise.all(assets.map(present)),
+      screenedAt: p.images_screened_at, connectionId: target ?? null, assets: await Promise.all(assets.map(present)),
     } }
   })
 
   // Screens a product's pictures (main pictures, optionally detail pictures too); results are cached per picture.
   app.post('/products/:id/screen', { preHandler: requirePermission('collection:create') }, async request => {
     const { id } = idParams.parse(request.params)
-    const { details: withDetails } = z.object({ details: z.boolean().default(false) }).strict().parse(request.body ?? {})
+    const { details: withDetails, connectionId } = z.object({ details: z.boolean().default(false), connectionId: shopInput }).strict().parse(request.body ?? {})
     const facts = await productFacts(tenant(request), id)
     const urls = [...facts.gallery, ...(withDetails ? facts.details.slice(0, 30) : [])]
-    const findings = await screen(tenant(request), urls)
+    const target = connectionId === undefined ? facts.heroShopId : connectionId
+    await checkBrandShop(tenant(request), target)
+    const findings = await screen(tenant(request), urls, true, await ownBrandNames(tenant(request), target))
     await db.query('UPDATE collected_products SET images_screened_at=now() WHERE id=$1', [id])
     return { data: urls.map(url => ({ url, finding: findings.get(url) ?? null })) }
   })
@@ -146,11 +154,14 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
       source, operation: z.enum(['white_bg', 'background', 'resize']), collectedProductId: z.string().uuid().optional(),
       scene: z.string().trim().min(2).max(300).optional(), model: z.string().optional(), // ignored: the team's image model is used
       preset: z.enum(Object.keys(RESIZE_PRESETS) as [keyof typeof RESIZE_PRESETS]).optional(), width: z.number().int().min(100).max(4000).optional(), height: z.number().int().min(100).max(4000).optional(),
-      fit: z.enum(['pad', 'crop']).default('pad'),
+      fit: z.enum(['pad', 'crop']).default('pad'), connectionId: shopInput,
     }).strict().parse(request.body)
-    if (input.collectedProductId) await ensureProduct(tenant(request), input.collectedProductId)
+    const product = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId) : null
+    const connectionId = input.connectionId === undefined ? product?.heroShopId : input.connectionId
+    await checkBrandShop(tenant(request), connectionId)
     if (input.operation === 'background') { if (!input.scene) throw new IntegrationError('SCENE_REQUIRED', '请描述新背景。', 400); checkPrompt(input.scene) }
-    const picked = await usableSource(tenant(request), input.source)
+    const picked = await usableSource(tenant(request), input.source, connectionId)
+    const scope = { listingConnectionId: picked.connectionId, referenceShopId: picked.requiredShop }
     const id = randomUUID()
     if (input.operation === 'resize') {
       const [width, height] = input.preset ? RESIZE_PRESETS[input.preset] : [input.width, input.height]
@@ -162,7 +173,7 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
       const key = await storeImage(tenant(request), id, png)
       const row = (await db.query(`INSERT INTO image_assets(id,tenant_id,collected_product_id,operation,provider,source_url,reference_urls,options,status,oss_key,width,height,bytes,findings,created_by)
         VALUES($1,$2,$3,'resize','local',$4,$5,$6,'completed',$7,$8,$9,$10,$11,$12) RETURNING ${assetColumns}`,
-      [id, tenant(request), input.collectedProductId ?? null, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ width, height, fit: input.fit }), key, width, height, png.length,
+      [id, tenant(request), input.collectedProductId ?? null, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ ...scope, width, height, fit: input.fit }), key, width, height, png.length,
         JSON.stringify({ readable: true, watermark: false, rightsRisk: false, reason: '仅调整尺寸，原图已通过检查。' }), request.authUser.sub])).rows[0]
       return { data: await present(row) }
     }
@@ -172,7 +183,7 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     const size = input.operation === 'white_bg' ? '1:1' : nearestRatio(await sourceSize(tenant(request), input.source, picked.url))
     const row = (await db.query(`INSERT INTO image_assets(id,tenant_id,collected_product_id,operation,provider,model,source_url,reference_urls,options,prompt,created_by)
       VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10) RETURNING ${assetColumns}`,
-    [id, tenant(request), input.collectedProductId ?? null, input.operation, model, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ ...(input.scene ? { scene: input.scene } : {}), size, resolution: '1k', quality: 'medium' }), editPrompt(input.operation, input.scene), request.authUser.sub])).rows[0]
+    [id, tenant(request), input.collectedProductId ?? null, input.operation, model, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ ...scope, ...(input.scene ? { scene: input.scene } : {}), size, resolution: '1k', quality: 'medium' }), editPrompt(input.operation, input.scene), request.authUser.sub])).rows[0]
     await audit(request, 'image.edit', id, { operation: input.operation, model })
     return { data: await present(row) }
   })
@@ -193,13 +204,20 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     const product = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId, input.points) : null
     const facts: SuiteFacts | null = product ?? (input.title ? { title: input.title, category: null, attributes: {}, skus: [], points: input.points, badges: settings.hero_badges } : null)
     if (!facts) throw new IntegrationError('TITLE_REQUIRED', '请选择采集商品，或填写商品名称。', 400)
-    const refs: string[] = []
-    for (const ref of input.references) refs.push((await usableSource(tenant(request), ref)).ref)
-    const brand = input.brandId === null ? null : input.brandId ? await brandById(tenant(request), input.brandId) : await defaultBrand(tenant(request))
+    const target = input.connectionId === undefined ? product?.heroShopId ?? null : input.connectionId
+    await checkBrandShop(tenant(request), target)
+    const brand = input.brandId === null ? null : input.brandId ? await brandById(tenant(request), input.brandId, target) : await defaultBrand(tenant(request), target)
     if (input.brandId && !brand) throw new IntegrationError('NOT_FOUND', '品牌不存在。', 404)
+    const refs: string[] = []
+    let referenceShopId: string | null = null
+    for (const ref of input.references) {
+      const picked = await usableSource(tenant(request), ref, target)
+      refs.push(picked.ref)
+      referenceShopId ??= picked.requiredShop
+    }
     const team = await teamOf(tenant(request), request.authUser.sub)
     if (input.types.includes('suite_hero')) {
-      facts.heroReferenceFrame = await heroFrameForShop(tenant(request), input.connectionId === undefined ? product?.heroShopId : input.connectionId)
+      facts.heroReferenceFrame = await heroFrameForShop(tenant(request), target)
       facts.heroCopy = await heroCopy(facts, team.textModel)
     }
     const batch = randomUUID(), model = team.imageModel, quality = input.quality ?? settings.suite_quality
@@ -208,7 +226,7 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
       const { prompt, options } = suiteDesign(type, facts, brand)
       rows.push((await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,created_by)
         VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9) RETURNING ${assetColumns}`,
-      [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, resolution: input.resolution, quality, title: facts.title, ...options }), prompt, request.authUser.sub])).rows[0])
+      [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, resolution: input.resolution, quality, title: facts.title, listingConnectionId: target, referenceShopId, ...options }), prompt, request.authUser.sub])).rows[0])
     }
     await audit(request, 'image.suite', batch, { types: input.types, model, quality, collectedProductId: input.collectedProductId ?? null, brandId: brand?.id ?? null, heroShopId: facts.heroReferenceFrame?.connectionId })
     return { data: { batchId: batch, assets: await Promise.all(rows.map(present)) } }

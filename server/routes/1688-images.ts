@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
 import { IntegrationError, uploadPhoto } from '../integrations/1688.js'
+import { ownBrandNames } from '../integrations/brands.js'
 import { inspectPublishingImages, publishingImages } from '../integrations/1688-agent.js'
 import { generateAndWait, resultUrl } from '../llm/apimart-image.js'
 import { teamOf } from '../integrations/teams.js'
@@ -49,26 +50,27 @@ export async function agentImageRoutes(app:FastifyInstance){
     const {id}=params.parse(request.params)
     const input=z.object({revision:z.number().int().positive(),mode:z.enum(['generate','edit']),model:z.string().optional(),prompt:z.string().trim().min(8).max(2000),sourceIndex:z.number().int().min(0).max(20).optional(),confirmed:z.literal(true)}).parse(request.body)
     if(/(?:去|除|删|擦|消).{0,6}(?:水印|商标|版权|logo)|(?:remove|erase|hide).{0,15}(?:watermark|copyright|logo|brand)/i.test(input.prompt))throw new IntegrationError('IMAGE_RIGHTS','不能通过 AI 移除水印、商标或版权标识，请先提供有使用权的原图。',400)
-    const draft=(await db.query('SELECT d.id,d.tenant_id,d.revision,d.status,d.data_body,c.status AS connection_status FROM integration_1688_publish_drafts d JOIN integration_1688_connections c ON c.id=d.connection_id WHERE d.id=$1 AND d.tenant_id=$2',[id,request.authUser.tenantId])).rows[0]
+    const draft=(await db.query('SELECT d.id,d.tenant_id,d.connection_id,d.revision,d.status,d.data_body,c.status AS connection_status FROM integration_1688_publish_drafts d JOIN integration_1688_connections c ON c.id=d.connection_id WHERE d.id=$1 AND d.tenant_id=$2',[id,request.authUser.tenantId])).rows[0]
     if(!draft)throw new IntegrationError('NOT_FOUND','草稿不存在。',404)
     if(draft.revision!==input.revision||!['draft','failed'].includes(draft.status))throw new IntegrationError('DRAFT_CONFLICT','草稿已变化，请刷新后重新生成。',409)
     if(draft.connection_status!=='connected')throw new IntegrationError('CONNECTION_INACTIVE','店铺未连接，不能生成并应用图片。',409)
     requireImageStorage()
     if(input.mode==='edit'&&input.sourceIndex===undefined)throw new IntegrationError('IMAGE_SOURCE_REQUIRED','请选择草稿中有使用权的原图。',400)
     if(input.mode==='generate'&&input.sourceIndex!==undefined)throw new IntegrationError('IMAGE_SOURCE_UNEXPECTED','纯生成不需要原图。',400)
+    const ownNames=await ownBrandNames(request.authUser.tenantId,draft.connection_id)
     let sourceUrl:string|undefined
     if(input.mode==='edit'){
       const image=draft.data_body.formValues?.primaryPicture?.imageList?.[input.sourceIndex!]
       if(typeof image?.url!=='string')throw new IntegrationError('IMAGE_SOURCE_REQUIRED','原图不存在，请刷新草稿。',400)
       sourceUrl=publishingImages({primaryPicture:{imageList:[image]}})[0]
-      const sourceFindings=await inspectPublishingImages([sourceUrl])
+      const sourceFindings=await inspectPublishingImages([sourceUrl],ownNames)
       if(blocked(sourceFindings))throw new IntegrationError('IMAGE_SOURCE_RISK','原图无法读取，或存在明确的公司水印/知名品牌 Logo；请更换有使用权的原图。',400)
     }
     // GPT-Image with the team's image model; an edit sends the source picture as the reference.
     const model=(await teamOf(request.authUser.tenantId,request.authUser.sub)).imageModel
     const generatedUrl=await generateAndWait({model,prompt:input.prompt,imageUrls:sourceUrl?[sourceUrl]:[]})
     let findings
-    try{findings=await inspectPublishingImages([generatedUrl])}catch{findings=[{url:generatedUrl,readable:false,watermark:false,rightsRisk:false,uncertain:true,reason:'生成结果未能完成图片复检，请重新生成或人工处理。'}]}
+    try{findings=await inspectPublishingImages([generatedUrl],ownNames)}catch{findings=[{url:generatedUrl,readable:false,watermark:false,rightsRisk:false,uncertain:true,reason:'生成结果未能完成图片复检，请重新生成或人工处理。'}]}
     const png=await downloadGeneratedImage(generatedUrl)
     await prepareImage(png)
     const key=await persistAgentImage(request.authUser.tenantId,id,png)

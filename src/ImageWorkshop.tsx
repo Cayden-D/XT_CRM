@@ -92,12 +92,15 @@ function AssetGrid({assets, setAssets, empty, ...actions}:{assets:ImageAsset[];s
 
 type Picked = { key:string; source:ImageSource; preview:string; label:string }
 /** Picks pictures from a collected product, an upload, or earlier results. Flagged pictures cannot be picked. */
-function SourcePicker({productId, setProduct, picked, setPicked, max}:{productId?:string;setProduct:(p:{id:string;title:string}|null)=>void;picked:Picked[];setPicked:(p:Picked[])=>void;max:number}) {
+function SourcePicker({productId, setProduct, picked, setPicked, max, connectionId}:{productId?:string;connectionId?:string|null;setProduct:(p:{id:string;title:string}|null)=>void;picked:Picked[];setPicked:(p:Picked[])=>void;max:number}) {
   const [query, setQuery] = useState(''), [results, setResults] = useState<CollectedProductCard[]>([]), [searching, setSearching] = useState(false)
   const [images, setImages] = useState<ProductImages|null>(null), [recent, setRecent] = useState<ImageAsset[]>([]), [busy, setBusy] = useState(''), [error, setError] = useState('')
   const file = useRef<HTMLInputElement>(null)
   useEffect(() => { getAssets({ pageSize:12 }).then(r => setRecent(r.data.filter(a => a.status === 'completed' && !a.risky))).catch(() => {}) }, [])
-  useEffect(() => { setImages(null); if (productId) getProductImages(productId).then(r => setImages(r.data)).catch(cause => setError(message(cause))) }, [productId])
+  useEffect(() => { setImages(null); let current = true
+    if (productId) getProductImages(productId, connectionId).then(r => { if (current) setImages(r.data) }).catch(cause => { if (current) setError(message(cause)) })
+    return () => { current = false }
+  }, [productId, connectionId])
   useEffect(() => {
     if (!query.trim()) { setResults([]); return }
     const timer = setTimeout(() => { setSearching(true); getCollectedProducts({ search:query.trim(), pageSize:8 }).then(r => setResults(r.data)).catch(() => {}).finally(() => setSearching(false)) }, 300)
@@ -118,7 +121,7 @@ function SourcePicker({productId, setProduct, picked, setPicked, max}:{productId
       }
     } catch (cause) { setError(message(cause)) } finally { setBusy(''); if (file.current) file.current.value = '' }
   }
-  async function screenAll() { if (!productId) return; setBusy('screen'); setError(''); try { await screenProductImages(productId, true); setImages((await getProductImages(productId)).data) } catch (cause) { setError(message(cause)) } finally { setBusy('') } }
+  async function screenAll() { if (!productId) return; setBusy('screen'); setError(''); try { await screenProductImages(productId, true, connectionId); setImages((await getProductImages(productId, connectionId)).data) } catch (cause) { setError(message(cause)) } finally { setBusy('') } }
   const tile = (url:string, finding:ProductImage['finding'], label:string) => {
     const bad = flagged(finding), on = picked.some(p => p.key === url)
     return <button key={url} className={`iw-tile ${on ? 'on' : ''} ${bad ? 'bad' : ''}`} disabled={bad} title={finding?.reason ?? label} onClick={() => toggle({ key:url, source:{ url }, preview:url, label })}>
@@ -218,29 +221,35 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
   const [picked, setPicked] = useState<Picked[]>([]), [title, setTitle] = useState(''), [points, setPoints] = useState('')
   const [types, setTypes] = useState<SuiteType[]>(suiteTypes.map(t => t[0])), [quality, setQuality] = useState(''), [size, setSize] = useState<'1:1'|'3:4'>('1:1'), [resolution, setResolution] = useState<'1k'|'2k'>('1k')
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [refresh, setRefresh] = useState(0)
-  const [brands, setBrands] = useState<Brand[]>([]), [brandId, setBrandId] = useState('')
+  const [brands, setBrands] = useState<Brand[]>([]), [brandId, setBrandId] = useState<string|null>()
   const [heroShopId, setHeroShopId] = useState<string|null>()
-  useEffect(() => { getBrands().then(r => { setBrands(r.data); setBrandId(r.data.find(b => b.is_default)?.id ?? '') }).catch(() => {}) }, [])
+  useEffect(() => {
+    let current = true
+    setBrands([]); setBrandId(undefined)
+    getBrands({ connectionId:heroShopId, collectedProductId:product?.id })
+      .then(r => { if (current) setBrands(r.data) }).catch(cause => { if (current) setError(message(cause)) })
+    return () => { current = false }
+  }, [heroShopId, product?.id])
   const brand = brands.find(b => b.id === brandId)
   async function submit() {
     setBusy(true); setError('')
     try {
-      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, quality:quality || undefined, size, resolution, brandId:brandId || null, connectionId:types.includes('suite_hero') ? heroShopId : undefined })
+      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, quality:quality || undefined, size, resolution, brandId, connectionId:heroShopId })
       setRefresh(n => n + 1)
     } catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
   return <div className="iw-page">
     <section className="iw-panel">
       <div className="iw-step"><span>1</span><h3>商品与参考图</h3><small>选 1–4 张清晰的实拍图，越能看清商品结构越好</small></div>
-      <SourcePicker productId={product?.id} setProduct={p => { setProduct(p); setPicked([]); setHeroShopId(undefined) }} picked={picked} setPicked={setPicked} max={4}/>
+      <SourcePicker productId={product?.id} setProduct={p => { setProduct(p); setPicked([]); setHeroShopId(undefined) }} picked={picked} setPicked={setPicked} max={4} connectionId={heroShopId}/>
       {!product && <label className="iw-field">商品名称<input value={title} maxLength={200} onChange={e => setTitle(e.target.value)} placeholder="未选择采集商品时必填，如：车载无线充气泵 便携式"/></label>}
       <label className="iw-field">卖点与参数（可选）<textarea rows={2} maxLength={400} value={points} onChange={e => setPoints(e.target.value)} placeholder="写在卖点图和规格图上的内容，如：12V 车充 / 30 秒充满 / 数显胎压 / 尺寸 15×7×5cm。只会使用这里和商品资料里的信息"/></label>
       <div className="iw-step"><span>2</span><h3>要生成的图</h3></div>
       <div className="iw-suite-types">{suiteTypes.map(([key, label, hint]) => <label key={key} className={types.includes(key) ? 'on' : ''}><input type="checkbox" checked={types.includes(key)} onChange={e => setTypes(e.target.checked ? suiteTypes.map(t => t[0]).filter(t => t === key || types.includes(t)) : types.filter(t => t !== key))}/><b>{label}</b><small>{hint}</small></label>)}</div>
-      {types.includes('suite_hero') && <HeroShopPicker shopId={heroShopId} change={setHeroShopId} followProduct={Boolean(product)} disabled={busy}/>}
+      <HeroShopPicker shopId={heroShopId} change={id => { setHeroShopId(id); setBrandId(undefined); setBrands([]) }} followProduct={Boolean(product)} disabled={busy} label="目标店铺"/>
       {brands.length > 0 && <div className="iw-brand-pick">
         {brand?.logo_url && <img src={brand.logo_url} alt={`${brand.name} Logo`}/>}
-        <label className="iw-field">品牌<select aria-label="套图品牌" value={brandId} onChange={e => setBrandId(e.target.value)}><option value="">不使用品牌</option>{brands.map(b => <option key={b.id} value={b.id}>{b.name}{b.is_default ? '（默认）' : ''}</option>)}</select></label>
+        <label className="iw-field">品牌<select aria-label="套图品牌" value={brandId === undefined ? 'default' : brandId ?? ''} onChange={e => setBrandId(e.target.value === 'default' ? undefined : e.target.value || null)}><option value="default">使用默认品牌</option><option value="">不使用品牌</option>{brands.map(b => <option key={b.id} value={b.id}>{b.name}{b.connection_id ? '' : '（企业通用）'}</option>)}</select></label>
         {brand && <small>使用店铺模板的首图保留模板自带的 Logo。</small>}
       </div>}
       <div className="iw-row">
