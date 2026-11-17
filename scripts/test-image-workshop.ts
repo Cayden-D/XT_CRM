@@ -30,6 +30,7 @@ const qwenResult = 'https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/edit
 const calls = { vision: 0, visionImages: [] as string[], qwen: [] as any[], submit: [] as any[], polls: 0 }
 const tasks = new Map<string, { polls: number; fail: boolean }>()
 let frameToScreen = ''
+let copyInputs: string[] = []
 let failNextTask = false
 let photoMode: 'ok' | 'reject' | 'network' = 'ok'
 const photos: { album: string; type: string; size: number }[] = []
@@ -38,6 +39,14 @@ globalThis.fetch = async (input, init) => {
   const url = String(input)
   if (url === 'https://dashscope.fixture.invalid/compatible-mode/v1/chat/completions') {
     const body = JSON.parse(String(init?.body))
+    if (String(body.messages[0].content).includes('首图文案')) {
+      const content = body.messages.at(-1).content as string
+      copyInputs.push(content)
+      if (content.includes('安全锤')) return reply({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        headline: '安全锤', subline: '闪恩新品', features: ['23元', 'C07', '东莞产地', '闪恩精选', '割安全带', '塑料材质'],
+      }) } }] })
+      return reply({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] })
+    }
     const images: string[] = body.messages.at(-1).content.filter((c: any) => c.type === 'image_url').map((c: any) => c.image_url.url)
     calls.vision++; calls.visionImages.push(...images)
     const item = (u: string, index: number) => ({ index, readable: true, companyWatermark: { detected: u.includes('mark'), name: u.includes('mark') ? '某某贸易有限公司' : '', confidence: u.includes('mark') ? 0.99 : 0 }, famousBrandLogo: { detected: u.includes('logo'), name: u.includes('logo') ? 'Nike' : '', confidence: u.includes('logo') ? 0.99 : 0 } })
@@ -166,7 +175,7 @@ try {
   assert.match(calls.submit.find(s => s.prompt.includes('规格尺寸图')).prompt, /15×7×5cm/)
   // The 1688 首图 is made to catch the eye: the core terms in large type, a clean corner left for the logo.
   const hero = calls.submit.find(s => s.prompt.includes('1688 批发商品首图')).prompt
-  assert.match(hero, /工厂直供、现货速发、支持定制/); assert.match(hero, /最显眼的位置/)
+  assert.match(hero, /工厂直供、现货速发、支持定制/); assert.match(hero, /只绘制这些文案/)
   await drain() // first poll: still processing
   assert.equal((await call('GET', `/assets?batchId=${suite.batchId}`)).json().data.filter((a: any) => a.status === 'processing').length, 7)
   await drain() // second poll: completed
@@ -223,7 +232,7 @@ try {
   assert.match(custom, /源头工厂、48小时发货/); assert.ok(!custom.includes('工厂直供'))
   assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroBadges: [], revision: 2 })).json().data.hero_badges.length, 0)
   const plain = await heroPrompt()
-  assert.ok(plain.includes('商品名称短语') && !plain.includes('核心优势，一字不差'), 'no terms: name and known points only')
+  assert.ok(plain.includes('只写一句简短的商品名称') && !plain.includes('已配置的店铺优势'), 'no terms: name and known points only')
   // Brand without a logo: its name, as text, in the top-left corner of the 首图; with a logo the corner is kept clear.
   const facts = { title: '车载香薰', attributes: {}, skus: [], badges: ['工厂直供'] }
   assert.match(workshop.suitePrompt('suite_hero', facts, { name: '拓洋', hasLogo: false }), /左上角用醒目的字体准确写出品牌名“拓洋”/)
@@ -353,7 +362,7 @@ try {
   assert.equal(updatedImage.statusCode, 200, updatedImage.body)
   assert.equal(updatedImage.json().data.activeTemplateId, secondTemplate.id)
   assert.notEqual(updatedImage.json().data.templates[0].previewUrl, secondTemplate.previewUrl)
-  const selectedFrame = await (await import('../server/integrations/shop-hero-templates.js')).heroFrameForShop(tenant, petShop.id)
+  const { frame: selectedFrame } = await (await import('../server/integrations/shop-hero-templates.js')).heroDesignForShop(tenant, petShop.id)
   assert.equal(selectedFrame?.mode, 'custom-v1')
   const secondBytes = objects.get(selectedFrame.key)!
   assert.deepEqual([...await sharp(secondBytes).extract({ left: 16, top: 16, width: 1, height: 1 }).removeAlpha().raw().toBuffer()], [23, 159, 71])
@@ -382,6 +391,34 @@ try {
   assert.deepEqual(await customPixel(1000), [202, 18, 36], 'the matching custom footer is used')
   const wrongAlbum = await call('POST', `/assets/${customHero.id}/photo`, { connectionId: shop.id, albumId: '1001', confirmed: true })
   assert.equal(wrongAlbum.json().error, 'HERO_SHOP_MISMATCH')
+
+  // Supplier identity and commercial metadata stay out of both model inputs, even without a selected brand.
+  const dirty = {
+    title: '闪恩 迷你安全锤 C07【现货】', sellerName: '闪恩汽车用品旗舰店',
+    category: '汽车用品>安全锤', attributes: { 品牌: '闪恩', 货号: 'C07【现货】', 产地: '东莞', 价格区间: '23~24 元',
+      是否IP授权: '否', 资质报告: '6份', 主要下游平台: 'LAZADA', 材质: '塑料', 尺寸: '81.5×19.5mm', 功能2: '割安全带' },
+    skus: ['闪恩 C07 透明款'], points: '闪恩轻巧便携；价格 23 元；适用车内',
+  }
+  const cleanCopy = await workshop.heroCopy(dirty)
+  assert.deepEqual(cleanCopy, { headline: '安全锤', subline: '', features: ['割安全带', '塑料材质'] })
+  const hidden = /闪恩|C07|东莞|23~24|23 元|6份|LAZADA/
+  assert.doesNotMatch(copyInputs.at(-1)!, hidden)
+  const specPrompt = workshop.suitePrompt('suite_spec', dirty, null)
+  assert.doesNotMatch(specPrompt, hidden)
+  assert.match(specPrompt, /81.5×19.5mm/)
+  assert.match(specPrompt, /不照搬参考图上的海报文字/)
+  const copyPath = `/hero-templates/${shop.id}/copy`
+  assert.equal((await call('PUT', copyPath, { revision: 2, origin: '浙江义乌', notes: [] }, token(tenants[1]))).statusCode, 404)
+  const savedCopy = await call('PUT', copyPath, { revision: 2, origin: ' 浙江义乌 ', notes: ['支持定制'] })
+  assert.equal(savedCopy.statusCode, 200, savedCopy.body)
+  assert.deepEqual([savedCopy.json().data.heroOrigin, savedCopy.json().data.heroNotes], ['浙江义乌', ['支持定制']])
+  assert.equal((await call('PUT', copyPath, { revision: 2, origin: null, notes: [] })).statusCode, 409)
+  const shopSuite = (await call('POST', '/suites', { title: '迷你安全锤', references: [{ url: cdn('main') }], types: ['suite_hero', 'suite_spec'], connectionId: shop.id })).json().data
+  const prompts = (await db.query('SELECT operation,prompt,options FROM image_assets WHERE batch_id=$1 ORDER BY operation', [shopSuite.batchId])).rows
+  assert.match(prompts[0].prompt, /产地：浙江义乌.*支持定制/)
+  assert.deepEqual(prompts[0].options.heroShopCopy, { origin: '浙江义乌', notes: ['支持定制'] })
+  assert.doesNotMatch(prompts[1].prompt, /浙江义乌|支持定制/)
+  assert.equal((await call('PUT', copyPath, { revision: 3, origin: null, notes: [] })).json().data.heroOrigin, null)
 
   console.log(JSON.stringify({ settings: 'ok', productImages: 'ok', screeningCache: 'ok', rightsGuard: 'ok', gptImageEdit: 'ok', multipartUpload: 'ok', heroBadges: 'ok', heroTextBrand: 'ok', heroReferenceFrame: 'ok', resize: 'ok', upload: 'ok', suite: 'ok', retry: 'ok', replacements: 'ok', agentSwitch: 'ok', albumApply: 'ok', undo: 'ok', uploadSafety: 'ok', isolation: 'ok' }))
 } finally {

@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
 import { adjustedCollectorPrices } from '../integrations/collector-pricing.js'
-import { IntegrationError } from '../integrations/1688.js'
+import { collectionQueueMessage, IntegrationError } from '../integrations/1688.js'
 import { collectorExtensionZip } from '../integrations/collector-extension.js'
 import { saveCollectedPackage } from '../integrations/product-attributes.js'
 import { collectedSkuAttributes } from '../integrations/1688-collected-skus.js'
@@ -136,10 +136,10 @@ export async function productCollectionRoutes(app:FastifyInstance){
     // Stage counts ignore the stage filter so each tab shows what it would return.
     const facets=(await db.query(`SELECT count(*)::int AS all,${['pending','queue','attention','promoted','published'].map(k=>`count(*) FILTER(WHERE stage='${k}')::int AS ${k}`).join(',')} FROM (${base}) c`,values)).rows[0]
     const total=stage?facets[stage]:facets.all
-    return{data:rows.map(({total_count:_t,...row})=>row),total,page,pageSize,facets}
+    return{data:rows.map(({total_count:_t,...row})=>({...row,queue_message:collectionQueueMessage(row.queue_message)})),total,page,pageSize,facets}
   })
 
-  app.get('/:id',{preHandler:requirePermission('collection:read')},async(request,reply)=>{const id=idSchema.safeParse(request.params);if(!id.success)return reply.code(400).send({error:'VALIDATION_ERROR'});const product=(await db.query('SELECT cp.*,q.status AS queue_status,q.message AS queue_message FROM collected_products cp LEFT JOIN LATERAL (SELECT status,message FROM integration_1688_collection_queue_jobs WHERE collected_product_id=cp.id ORDER BY created_at DESC LIMIT 1) q ON true WHERE cp.id=$1 AND cp.tenant_id=$2',[id.data.id,request.authUser.tenantId])).rows[0];if(!product)return reply.code(404).send({error:'NOT_FOUND'});const variants=await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position',[id.data.id]);return{data:{product,variants:variants.rows}}})
+  app.get('/:id',{preHandler:requirePermission('collection:read')},async(request,reply)=>{const id=idSchema.safeParse(request.params);if(!id.success)return reply.code(400).send({error:'VALIDATION_ERROR'});const product=(await db.query('SELECT cp.*,q.status AS queue_status,q.message AS queue_message FROM collected_products cp LEFT JOIN LATERAL (SELECT status,message FROM integration_1688_collection_queue_jobs WHERE collected_product_id=cp.id ORDER BY created_at DESC LIMIT 1) q ON true WHERE cp.id=$1 AND cp.tenant_id=$2',[id.data.id,request.authUser.tenantId])).rows[0];if(!product)return reply.code(404).send({error:'NOT_FOUND'});const variants=await db.query('SELECT * FROM collected_product_variants WHERE collected_product_id=$1 ORDER BY position',[id.data.id]);return{data:{product:{...product,queue_message:collectionQueueMessage(product.queue_message)},variants:variants.rows}}})
 
   app.delete('/:id',{preHandler:requirePermission('collection:delete')},async(request,reply)=>{
     const id=idSchema.safeParse(request.params)

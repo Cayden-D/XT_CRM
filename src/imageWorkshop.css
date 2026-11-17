@@ -194,6 +194,7 @@
 .iw-shop-template-name { flex:1 1 120px; min-width:0; overflow-wrap:anywhere; }
 .iw-shop-template-name small { display:block; color:var(--text-2); }
 .iw-shop-template-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.iw-shop-template-fixed { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; font-size:13px; color:var(--text-2); overflow-wrap:anywhere; }
 .iw-shop-template-edit { display:grid; gap:8px; padding:12px; border:1px solid var(--line); border-radius:6px; }
 .iw-shop-template-edit label, .iw-shop-template-edit input { min-width:0; }
 .iw-shop-template-add { justify-self:start; }

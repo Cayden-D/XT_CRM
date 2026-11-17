@@ -28,6 +28,7 @@ const resultUrl='https://dashscope-result-sz.oss-cn-shenzhen.aliyuncs.com/agent-
 assert.equal(generatedImageUrl('https://dashscope-a717.oss-accelerate.aliyuncs.com/test.png?Expires=2099999999'),'https://dashscope-a717.oss-accelerate.aliyuncs.com/test.png?Expires=2099999999')
 assert.throws(()=>generatedImageUrl('https://dashscope-a717.oss-accelerate.aliyuncs.com.evil.test/test.png'))
 let generated=0,vision=0,photos=0,blocked=false,riskySource=false,photoBody:FormData|null=null
+let photoError: string|null=null
 let concurrent:((value:void)=>void)|null=null
 const response=(data:any)=>new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}})
 globalThis.fetch=async(input,init)=>{
@@ -50,7 +51,7 @@ globalThis.fetch=async(input,init)=>{
     assert.equal(photoBody.get('albumID'),'123')
     assert.equal((photoBody.get('imageBytes') as Blob).type,'image/jpeg')
     if(concurrent){const release=concurrent;concurrent=null;await new Promise<void>(resolve=>{release();setTimeout(resolve,80)})}
-    return response({image:{id:'photo-fixture',url:'https://cbu01.alicdn.com/img/generated.jpg'}})
+    return response(photoError?{errCode:photoError,errMsg:'fixture photo error'}:{result:{image:{id:'photo-fixture',url:'https://cbu01.alicdn.com/img/generated.jpg'}}})
   }
   throw new Error('unexpected gateway endpoint')
 }
@@ -79,13 +80,18 @@ try{
   assert.equal((await request('GET',path,undefined,token(tenants[1]))).statusCode,404)
   const applyPath=`${path}/${first.id}/apply`,apply=(revision:number,placement:'replace'|'append'='replace')=>request('POST',applyPath,{revision,albumId:'123',placement,sourceIndex:placement==='replace'?0:undefined,confirmed:true})
   assert.equal((await apply(2)).statusCode,409);assert.equal(photos,0)
-  assert.equal((await apply(1,'replace')).statusCode,200);assert.equal(photos,1);assert.equal(reads,1)
-  assert.equal((await apply(1)).statusCode,409);assert.equal(photos,1)
+  photoError='31'
+  const albumFull=await apply(1,'replace')
+  assert.equal(albumFull.statusCode,400);assert.equal(albumFull.json().error,'31');assert.match(albumFull.json().message,/相册总空间已满/)
+  assert.equal((await request('GET',path)).json().data[0].status,'preview')
+  photoError=null
+  assert.equal((await apply(1,'replace')).statusCode,200);assert.equal(photos,2);assert.equal(reads,2)
+  assert.equal((await apply(1)).statusCode,409);assert.equal(photos,2)
   const stored=(await db.query('SELECT revision,data_body FROM integration_1688_publish_drafts WHERE id=$1',[draft.id])).rows[0]
   assert.equal(stored.revision,2);assert.equal(stored.data_body.formValues.primaryPicture.imageList[0].url,'https://cbu01.alicdn.com/img/generated.jpg')
   assert.equal((await db.query('SELECT status,photo_url FROM integration_1688_agent_images WHERE id=$1',[first.id])).rows[0].status,'applied')
   blocked=true;const unsafe=await create('generate',undefined,2);assert.equal(unsafe.statusCode,200);assert.equal(unsafe.json().data.risky,true)
-  assert.equal((await request('POST',`${path}/${unsafe.json().data.id}/apply`,{revision:2,albumId:'123',placement:'append',confirmed:true})).statusCode,409);assert.equal(photos,1)
+  assert.equal((await request('POST',`${path}/${unsafe.json().data.id}/apply`,{revision:2,albumId:'123',placement:'append',confirmed:true})).statusCode,409);assert.equal(photos,2)
   blocked=false;riskySource=true;assert.equal((await create('edit',0,2)).statusCode,400);assert.equal(generated,2);riskySource=false
   const edited=await create('edit',0,2);assert.equal(edited.statusCode,200);assert.equal(generated,3)
   const testPreview=edited.json().data.id
@@ -94,12 +100,12 @@ try{
   await uploadReached
   assert.equal((await request('POST',`${path}/${testPreview}/apply`,{revision:2,albumId:'123',placement:'append',confirmed:true})).statusCode,409)
   assert.equal((await applying).statusCode,200)
-  assert.equal(photos,2)
+  assert.equal(photos,3)
   const after=(await db.query('SELECT revision,data_body FROM integration_1688_publish_drafts WHERE id=$1',[draft.id])).rows[0]
   assert.equal(after.revision,3);assert.equal(after.data_body.formValues.primaryPicture.imageList.length,2)
   const countBefore=Number((await db.query('SELECT count(*) AS count FROM integration_1688_agent_images WHERE draft_id=$1',[draft.id])).rows[0].count)
   failPut=true;assert.equal((await create('generate',undefined,3)).statusCode,502);failPut=false
   assert.equal(Number((await db.query('SELECT count(*) AS count FROM integration_1688_agent_images WHERE draft_id=$1',[draft.id])).rows[0].count),countBefore)
-  assert.equal(puts,3);assert.equal(reads,2)
+  assert.equal(puts,3);assert.equal(reads,3)
   console.log(JSON.stringify({textToImage:'ok',imageToImage:'ok',ossPrivatePut:'ok',ossCustomDomainV4:'ok',ossNativeFallback:'ok',expiredSourceLink:'ok',ossFailureNoPreview:'ok',sourceRisk:'ok',riskGate:'ok',albumUpload:'ok',draftVersion:'ok',duplicateApply:'ok',tenantIsolation:'ok',gatewayPhotos:photos,platformProductsPublished:0}))
 }finally{globalThis.fetch=originalFetch;OSS.prototype.put=originalPut;OSS.prototype.get=originalGet;OSS.prototype.delete=originalDelete;for(const tenant of tenants){await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[tenant]);await db.query('DELETE FROM tenants WHERE id=$1',[tenant])}await app.close();await db.end()}

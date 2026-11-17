@@ -14,6 +14,7 @@ export const getAgentQueue=(params:{page?:number;pageSize?:number;status?:string
 export const setAgentQueueSetting=(id:string,enabled:boolean,revision:number)=>request(`${base}/connections/${id}/agent-queue-settings`,{method:'PUT',body:JSON.stringify({enabled,revision,confirmed:true})})
 export const enqueueCollectedProduct=(id:string)=>request<{data:{id:string;status:string}}>(`${base}/agent/queue/${id}`,{method:'POST',body:'{}'})
 export const retryAgentQueueJob=(id:string)=>request<{data:{id:string;status:string}}>(`${base}/agent/queue-jobs/${id}/retry`,{method:'POST',body:'{}'})
+export const retryCollectedProducts=(collectedProductIds:string[])=>request<{data:{queued:string[];skipped:string[]}}>(`${base}/agent/queue-jobs/retry`,{method:'POST',body:JSON.stringify({collectedProductIds})})
 export const getAgentJob=(id:string)=>request<{data:AgentJob|null}>(`${base}/drafts/${id}/agent-job`)
 export const runPublishingAgent=(id:string,revision:number)=>request<{data:AgentJob}>(`${base}/drafts/${id}/agent`,{method:'POST',body:JSON.stringify({revision})})
 export const cancelAgentJob=(id:string)=>request(`${base}/agent-jobs/${id}/cancel`,{method:'POST'})

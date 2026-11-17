@@ -2,10 +2,40 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
-import { IntegrationError } from '../integrations/1688.js'
+import { collectionQueueMessage, IntegrationError } from '../integrations/1688.js'
 import { enqueueCollectedProduct } from '../integrations/1688-collection-queue.js'
 
 const idSchema=z.object({id:z.string().uuid()})
+
+async function retryJobs(tenantId:string,actorId:string,ids:string[],byProduct:boolean){
+  const target=byProduct?'j.collected_product_id':'j.id'
+  const {rows}=await db.query<{id:string;collected_product_id:string}>(`WITH sources AS MATERIALIZED (
+    SELECT p.id,p.product_id,p.updated_at FROM collected_products p
+    JOIN integration_1688_collection_queue_jobs j ON j.collected_product_id=p.id AND j.tenant_id=p.tenant_id
+    WHERE p.tenant_id=$2 AND ${target}=ANY($1::uuid[]) ORDER BY p.id FOR UPDATE OF p
+  ), retried AS (
+    UPDATE integration_1688_collection_queue_jobs j SET status='queued',phase='screening',attempts=0,
+      available_at=now(),source_updated_at=p.updated_at,actor_id=$3,message=NULL,
+      report=(j.report-'uploadRounds'-'imageWaitSince'-'storageRevivals'-'albumErrorCode'-'autoResumes') ||
+        CASE WHEN j.message LIKE 'AI 新图上传店铺相册%' OR j.message LIKE 'AI 新图已生成，但没能确定店铺相册%'
+          THEN '{"resumeAlbumUpload":true}'::jsonb ELSE '{}'::jsonb END,
+      worker_id=NULL,lease_until=NULL,updated_at=now()
+    FROM sources p, integration_1688_collection_queue_settings q, integration_1688_agent_settings a, integration_1688_connections c
+    WHERE j.tenant_id=$2 AND j.collected_product_id=p.id AND ${target}=ANY($1::uuid[])
+      AND q.connection_id=j.connection_id AND q.tenant_id=j.tenant_id AND q.enabled
+      AND a.connection_id=j.connection_id AND a.tenant_id=j.tenant_id AND a.enabled
+      AND c.id=j.connection_id AND c.tenant_id=j.tenant_id AND c.status='connected'
+      AND j.status IN ('blocked','failed') AND ((j.product_id IS NULL AND j.draft_id IS NULL AND p.product_id IS NULL)
+        OR EXISTS(SELECT 1 FROM integration_1688_publish_drafts d WHERE d.id=j.draft_id AND d.tenant_id=j.tenant_id
+          AND d.status IN ('draft','failed') AND d.offer_id IS NULL))
+    RETURNING j.id,j.collected_product_id
+  ), updated_sources AS (
+    UPDATE collected_products p SET processing_status='ai_processing' FROM retried r
+    WHERE p.id=r.collected_product_id AND p.tenant_id=$2
+  ) SELECT * FROM retried`,[ids,tenantId,actorId])
+  return rows
+}
+
 export async function collectionQueueRoutes(app:FastifyInstance){
   app.get('/agent/queue',{preHandler:requirePermission('integration:read')},async request=>{
     const tenant=request.authUser.tenantId
@@ -17,7 +47,7 @@ export async function collectionQueueRoutes(app:FastifyInstance){
     const total=Number((await db.query(`SELECT count(*) AS total ${from}`,params)).rows[0].total)
     const page=Math.min(input.page,Math.max(1,Math.ceil(total/input.pageSize)))
     const jobs=(await db.query(`SELECT j.id,j.collected_product_id,j.connection_id,j.status,j.phase,j.attempts,j.message,j.product_id,j.draft_id,j.created_at,j.updated_at,j.report#>'{agentReport,ai}' AS ai_fill,p.title,c.display_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $5 OFFSET $6`,[...params,input.pageSize,(page-1)*input.pageSize])).rows
-    return {data:{settings,jobs,total,page,pageSize:input.pageSize}}
+    return {data:{settings,jobs:jobs.map(job=>({...job,message:collectionQueueMessage(job.message)})),total,page,pageSize:input.pageSize}}
 
   })
   app.put('/connections/:id/agent-queue-settings',{preHandler:[requirePermission('integration:manage'),requirePermission('integration:publish')]},async request=>{
@@ -51,9 +81,15 @@ export async function collectionQueueRoutes(app:FastifyInstance){
   })
   app.post('/agent/queue-jobs/:id/retry',{preHandler:[requirePermission('integration:publish'),requirePermission('collection:read')]},async request=>{
     const {id}=idSchema.parse(request.params)
-    const row=(await db.query(`UPDATE integration_1688_collection_queue_jobs j SET status='queued',phase='screening',attempts=0,available_at=now(),source_updated_at=p.updated_at,actor_id=$3,message=NULL,report='{}'::jsonb,worker_id=NULL,lease_until=NULL,updated_at=now() FROM collected_products p JOIN integration_1688_collection_queue_settings q ON q.tenant_id=p.tenant_id AND q.enabled WHERE j.id=$1 AND j.tenant_id=$2 AND j.collected_product_id=p.id AND j.connection_id=q.connection_id AND j.status IN ('blocked','failed') AND ((j.product_id IS NULL AND j.draft_id IS NULL AND p.product_id IS NULL) OR EXISTS(SELECT 1 FROM integration_1688_publish_drafts d WHERE d.id=j.draft_id AND d.tenant_id=j.tenant_id AND d.status IN ('draft','failed') AND d.offer_id IS NULL)) RETURNING j.id`,[id,request.authUser.tenantId,request.authUser.sub])).rows[0]
+    const [row]=await retryJobs(request.authUser.tenantId,request.authUser.sub,[id],false)
     if(!row)throw new IntegrationError('QUEUE_CANNOT_RETRY','任务的发布草稿已提交、结果待核对或队列未启用，不能自动重试。',409)
-    await db.query("UPDATE collected_products SET processing_status='ai_processing' WHERE id=(SELECT collected_product_id FROM integration_1688_collection_queue_jobs WHERE id=$1)",[id])
     return {data:{id:row.id,status:'queued'}}
+  })
+  app.post('/agent/queue-jobs/retry',{preHandler:[requirePermission('integration:publish'),requirePermission('collection:read')]},async request=>{
+    const {collectedProductIds}=z.object({collectedProductIds:z.array(z.string().uuid()).min(1).max(100)}).strict().parse(request.body)
+    const ids=[...new Set(collectedProductIds.map(id=>id.toLowerCase()))]
+    const rows=await retryJobs(request.authUser.tenantId,request.authUser.sub,ids,true)
+    const queued=new Set(rows.map(row=>row.collected_product_id))
+    return {data:{queued:ids.filter(id=>queued.has(id)),skipped:ids.filter(id=>!queued.has(id))}}
   })
 }

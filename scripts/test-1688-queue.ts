@@ -5,7 +5,7 @@ process.env.DASHSCOPE_API_KEY='queue-fixture-key'
 process.env.DASHSCOPE_BASE_URL='https://queue-fixture.invalid/compatible-mode/v1'
 const [{buildApp},{db},{saveConnection},{runClaimedCollectionQueueJob,recoverCollectionQueue},{collectedCategoryDefaults}]=await Promise.all([import('../server/app.js'),import('../server/db.js'),import('../server/integrations/1688.js'),import('../server/integrations/1688-collection-queue.js'),import('../server/integrations/1688-collected-attributes.js')])
 const app=await buildApp(),originalFetch=globalThis.fetch,tenant=(await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id',['queue fixture',`queue-${randomUUID()}`])).rows[0].id
-let imageRisk=false,vision=0,text=0,published=0,stopOnAgent=false,stopVision=0,uncertainPublish=false
+let imageRisk=false,vision=0,text=0,published=0,stopOnAgent=false,stopVision=0,uncertainPublish=false,manySkuSchema=false
 let disableQueue:()=>Promise<void>=async()=>{}
 const schema={global:{systemParam:{catId:'101'}},data:{title:{fields:{label:'标题',required:true,maxLength:100}},primaryPicture:{fields:{label:'主图',required:true,maxItems:5}},description:{fields:{label:'详情',required:true}},catProp:{fields:{label:'属性',dataSource:[{name:'p-1',propertyId:1,label:'材质',required:true,dataSource:[{value:1,text:'棉'},{value:2,text:'涤纶'}]},{name:'p-2',propertyId:2,label:'功率',required:false,uiType:'input'},{name:'p-3',propertyId:3,label:'风量',required:false,uiType:'input'}]}},priceRange:{fields:{label:'报价',required:true,column:[{name:'pricerange_beginAmount',required:true,uiType:'cbunumber'},{name:'pricerange_price',required:true,uiType:'cbunumber'}]}}}}
 const response=(body:any)=>new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}})
@@ -20,7 +20,9 @@ globalThis.fetch=async(input,init)=>{
     text++;return response({model:'qwen3.8-flash',choices:[{finish_reason:'stop',message:{content:JSON.stringify({title:'AI 棉质测试商品',catProp:{},unknown:['风量']})}}]})
   }
   assert.ok(url.startsWith('https://gw.open.1688.com/openapi/'),'unexpected external request')
-  if(url.includes('alibaba.new.product.getSchema'))return response({result:{success:true,bizData:schema}})
+  if(url.includes('alibaba.new.product.getSchema'))return response({result:{success:true,bizData:manySkuSchema?{
+    ...schema,data:{...schema.data,saleProp:{fields:{dataSource:[{name:'p-21',label:'颜色',required:true,customizable:true,supportImg:true}]}}},
+  }:schema}})
   if(url.includes('alibaba.new.product.add')){published++;if(uncertainPublish)throw new Error('fixture platform timeout');return response({result:{success:true,bizData:{dataJson:JSON.stringify({itemId:String(990000+published),offerStatus:'auditing'})}}})}
   throw new Error('unexpected gateway endpoint')
 }
@@ -155,5 +157,19 @@ try{
   assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:other.id})).json().error,'COLLECTOR_SHOP_UNAVAILABLE')
   await db.query('DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2',[actor.id,role])
   assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:connection.id})).statusCode,403)
+  manySkuSchema=true
+  const many=await fixture(7)
+  for(let position=1;position<=45;position++){
+    const label=`颜色${position}`,url=`https://cbu01.alicdn.com/img/variant-${position}.jpg`
+    await db.query('INSERT INTO collected_product_variants(tenant_id,collected_product_id,position,label,attributes,image_url,price,stock) VALUES($1,$2,$3,$4,$5,$6,12,7)',[tenant,many.source.id,position,label,JSON.stringify({颜色:label}),url])
+  }
+  await runClaimedCollectionQueueJob(many.job.id,many.workerId)
+  const sampled=(await db.query('SELECT status,message,report,draft_id FROM integration_1688_collection_queue_jobs WHERE id=$1',[many.job.id])).rows[0]
+  assert.equal(sampled.status,'published',sampled.message)
+  assert.deepEqual(sampled.report.skuImageSample,{checked:37,total:46})
+  assert.equal(sampled.report.images.length,40)
+  assert.match(sampled.message,/来源 SKU 图片抽查 37\/46 张/)
+  const fullSkuDraft=(await db.query('SELECT data_body FROM integration_1688_publish_drafts WHERE id=$1',[sampled.draft_id])).rows[0]
+  assert.equal(fullSkuDraft.data_body.formValues.skuTable.length,46)
   console.log(JSON.stringify({queueDefaultOff:'ok',multipleTargets:'ok',selectedShop:'ok',adjustedQuotes:'ok',saveOnly:'ok',transactionalEnqueue:'ok',categoryDefaults:'ok',categoryRecollect:'ok',imageScreening:'ok',safePublish:'ok',watermarkBlocked:'ok',missingStockBlocked:'ok',expiredLeaseNoRetry:'ok',safeScreeningRetry:'ok',disableCancelsQueued:'ok',stopBeforePublish:'ok',platformUnknownNoRetry:'ok',mockGatewayPublishCalls:published,livePlatformWrites:0,textCalls:text,visionCalls:vision}))
 }finally{globalThis.fetch=originalFetch;await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[tenant]);await db.query('DELETE FROM tenants WHERE id=$1',[tenant]);await app.close();await db.end()}

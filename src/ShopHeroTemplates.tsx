@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ImageUp, Pencil, Trash2 } from 'lucide-react'
 import {
-  addHeroTemplate, deleteHeroTemplate, editHeroTemplate, fileToBase64, getHeroTemplateShops, saveHeroTemplate,
+  addHeroTemplate, deleteHeroTemplate, editHeroTemplate, fileToBase64, getHeroTemplateShops, saveHeroTemplate, saveShopHeroCopy,
   type CustomHeroTemplate, type HeroTemplateMode, type HeroTemplateShop,
 } from './imageApi'
 
@@ -37,10 +37,10 @@ export function HeroShopPicker({ shopId, change, followProduct, disabled, label 
   </label>
 }
 
-type Editor = { kind:'add' } | { kind:'edit'; template:CustomHeroTemplate }
+type Editor = { kind:'add' } | { kind:'edit'; template:CustomHeroTemplate } | { kind:'copy' }
 
 function TemplateEditor({ editor, busy, submit, cancel }:{
-  editor:Editor; busy:boolean; submit:(name:string,file?:File)=>void; cancel:()=>void
+  editor:Exclude<Editor,{kind:'copy'}>; busy:boolean; submit:(name:string,file?:File)=>void; cancel:()=>void
 }) {
   const nameInput = useRef<HTMLInputElement>(null)
   const [name, setName] = useState(editor.kind === 'edit' ? editor.template.name : '')
@@ -60,12 +60,37 @@ function TemplateEditor({ editor, busy, submit, cancel }:{
   </form>
 }
 
+function ShopCopyEditor({ shop, busy, save, cancel }:{
+  shop:HeroTemplateShop; busy:boolean; save:(origin:string|null,notes:string[])=>void; cancel:()=>void
+}) {
+  const originField = useRef<HTMLInputElement>(null)
+  const [origin, setOrigin] = useState(shop.heroOrigin ?? '')
+  const [notes, setNotes] = useState([shop.heroNotes?.[0] ?? '', shop.heroNotes?.[1] ?? ''])
+  useEffect(() => { originField.current?.focus() }, [])
+  return <form className="iw-shop-template-edit" onSubmit={event => {
+    event.preventDefault()
+    save(origin.trim() || null, [...new Set(notes.map(note => note.trim()).filter(Boolean))])
+  }}>
+    <label className="iw-field">产地（选填）
+      <input ref={originField} value={origin} maxLength={24} disabled={busy} onChange={e => setOrigin(e.target.value)} placeholder="例如 浙江义乌"/>
+    </label>
+    {notes.map((note,index) => <label key={index} className="iw-field">固定短语 {index + 1}（选填）
+      <input value={note} maxLength={16} disabled={busy} onChange={e => setNotes(current => current.map((value,i) => i === index ? e.target.value : value))}/>
+    </label>)}
+    <div className="iw-shop-template-actions">
+      <button className="shop-button primary" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存文案'}</button>
+      <button className="shop-button" type="button" disabled={busy} onClick={cancel}>取消</button>
+    </div>
+  </form>
+}
+
 function ShopTemplateRow({ shop, editable, changed }:{shop:HeroTemplateShop;editable:boolean;changed:(next:HeroTemplateShop)=>void}) {
   const addButton = useRef<HTMLButtonElement>(null)
   const editorTrigger = useRef<HTMLButtonElement | null>(null)
   const [editor, setEditor] = useState<Editor | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
   const revision = shop.revision
+  const fixedCopy = [...(shop.heroOrigin ? [`产地 ${shop.heroOrigin}`] : []), ...(shop.heroNotes ?? [])]
 
   async function run(action:()=>Promise<{data:HeroTemplateShop}>, message:string, done?:()=>void) {
     setBusy(true); setError(''); setNotice('')
@@ -123,6 +148,11 @@ function ShopTemplateRow({ shop, editable, changed }:{shop:HeroTemplateShop;edit
         </select>
       </label>
     </div>
+    <div className="iw-shop-template-fixed">
+      <span>{fixedCopy.length ? fixedCopy.join(' · ') : '未设置首图固定文案'}</span>
+      {editable && <button className="shop-button" type="button" disabled={busy || Boolean(editor)} aria-label={`${shop.display_name} 编辑固定文案`}
+        onClick={e => startEditing({ kind:'copy' }, e.currentTarget)}>编辑固定文案</button>}
+    </div>
     {shop.templates.length > 0 && <ul className="iw-shop-template-list" aria-label={`${shop.display_name} 自定义模板`}>
       {shop.templates.map(template => <li key={template.id}>
         {template.previewUrl && <img src={template.previewUrl} loading="lazy" alt="" referrerPolicy="no-referrer"/>}
@@ -135,7 +165,9 @@ function ShopTemplateRow({ shop, editable, changed }:{shop:HeroTemplateShop;edit
         </div>}
       </li>)}
     </ul>}
-    {editor && <TemplateEditor editor={editor} busy={busy} submit={save} cancel={closeEditor}/>}
+    {editor?.kind === 'copy' ? <ShopCopyEditor shop={shop} busy={busy} cancel={closeEditor}
+      save={(origin,notes) => void run(() => saveShopHeroCopy(shop.id, { origin, notes, revision }), '已保存首图固定文案', closeEditor)}/> :
+      editor && <TemplateEditor editor={editor} busy={busy} submit={save} cancel={closeEditor}/>}
     {editable && <button ref={addButton} className="shop-button iw-shop-template-add" type="button" disabled={busy || Boolean(editor)}
       onClick={e => startEditing({ kind:'add' }, e.currentTarget)} aria-label={`${shop.display_name} 添加模板`}>
       <ImageUp size={15} aria-hidden="true"/>添加模板

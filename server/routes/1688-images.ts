@@ -3,7 +3,7 @@ import sharp from 'sharp'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
-import { IntegrationError, uploadPhoto } from '../integrations/1688.js'
+import { IntegrationError, isPhotoUploadRejection, uploadPhoto } from '../integrations/1688.js'
 import { ownBrandNames } from '../integrations/brands.js'
 import { inspectPublishingImages, publishingImages } from '../integrations/1688-agent.js'
 import { generateAndWait, resultUrl } from '../llm/apimart-image.js'
@@ -96,7 +96,14 @@ export async function agentImageRoutes(app:FastifyInstance){
     const claimed=await db.query("UPDATE integration_1688_agent_images SET status='applying' WHERE id=$1 AND tenant_id=$2 AND draft_id=$3 AND status='preview' RETURNING id",[imageId,request.authUser.tenantId,id])
     if(!claimed.rows.length)throw new IntegrationError('IMAGE_ALREADY_APPLYING','图片正在处理或已使用，请勿重复上传。',409)
     let photo:{url?:string;id?:string}|undefined
-    try{photo=await uploadPhoto(data.connection_id,request.authUser.tenantId,request.authUser.sub,input.albumId,`agent-${imageId.slice(0,8)}.jpg`,bytes,'image/jpeg',request.id) as {url?:string;id?:string}}catch{throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN','相册上传结果未确认，请到相册核对后再处理，勿重复提交。',409)}
+    try{photo=await uploadPhoto(data.connection_id,request.authUser.tenantId,request.authUser.sub,input.albumId,`agent-${imageId.slice(0,8)}.jpg`,bytes,'image/jpeg',request.id) as {url?:string;id?:string}}
+    catch(error){
+      if(isPhotoUploadRejection(error)){
+        await db.query("UPDATE integration_1688_agent_images SET status='preview' WHERE id=$1 AND status='applying'",[imageId])
+        throw error
+      }
+      throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN','相册上传结果未确认，请到相册核对后再处理，勿重复提交。',409)
+    }
     if(!photo||typeof photo.url!=='string')throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN','相册上传未返回图片地址，请先检查相册，避免重复上传。',409)
     try{publishingImages({primaryPicture:{imageList:[{url:photo.url}]}})}catch{throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN','相册上传返回的图片地址不符合平台发布要求，请先检查相册，避免重复上传。',409)}
     const values={...data.data_body.formValues,primaryPicture:{...data.data_body.formValues.primaryPicture,imageList:input.placement==='replace'?list.map((item:unknown,index:number)=>index===input.sourceIndex?{url:photo.url}:item):[...list,{url:photo.url}]}}

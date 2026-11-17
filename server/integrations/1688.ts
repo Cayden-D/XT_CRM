@@ -81,6 +81,31 @@ export function parseRefreshExpiry(value?: string): Date | null {
   return date
 }
 
+const photoUploadErrors:Record<string,string>={
+  '1':'上传参数无效，请核对相册 ID、图片名称和文件。',
+  '2':'平台禁止上传，请核对该账号和相册的操作权限。',
+  '4':'该店铺未开通诚信通，请开通后再上传。',
+  '10':'店铺相册数量已达上限，请整理相册或选择已有相册。',
+  '11':'目标相册不存在，请选择有效的店铺相册。',
+  '13':'目标相册的图片数量已满，请清理该相册或换一个相册后重试。',
+  '14':'店铺相册扩展空间已满，请释放空间或扩容后重试。',
+  '15':'加密相册密码不正确，请检查相册设置或更换相册。',
+  '31':'店铺相册总空间已满，请释放空间或扩容后重试。',
+  '32':'图片格式或大小不符合要求，单张不超过 2 MB，支持 JPG、JPEG、GIF、BMP、无透明背景的 PNG。',
+  '35':'店铺今日图片上传已达 5,000 张上限，请在额度恢复后重试。',
+  '36':'图片上传调用过于频繁，每个用户每秒最多 5 次，请稍后重试。',
+}
+export const isPhotoUploadRejection=(error:unknown):error is IntegrationError=>error instanceof IntegrationError&&Object.hasOwn(photoUploadErrors,error.code)
+export function photoUploadErrorMessage(code:string){
+  return Object.hasOwn(photoUploadErrors,code)?`${photoUploadErrors[code].replace(/。$/,'')}（1688 错误码 ${code}）`:null
+}
+
+/** Older queue rows stored a generic gateway error. Explain known photo errors when those rows are read. */
+export function collectionQueueMessage(message:string|null){
+  if(!message?.startsWith('AI 新图上传店铺相册'))return message
+  return message.replace(/1688 接口调用失败（(\d+)），请检查接口权限或重新授权。?/, (original,code)=>photoUploadErrorMessage(code)??original)
+}
+
 // Accept only the known gateway. Credentials never enter a query string or redirect.
 export async function gateway(path: string, params: Record<string, string>, image?: { bytes: Uint8Array; name: string; type: string }) {
   let response: Response
@@ -103,9 +128,16 @@ export async function gateway(path: string, params: Record<string, string>, imag
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new IntegrationError('INVALID_RESPONSE', '1688 网关响应格式不正确。')
   const nested = data.result && typeof data.result === 'object' ? data.result as Record<string, unknown> : data
   // OAuth endpoints answer {error:'invalid_request', error_description:'wrong refreshToken …'}; only the code is kept (the description can echo the token).
-  const code = data.error_code ?? data.errorCode ?? nested.errorCode ?? nested.error_code ?? (typeof data.error === 'string' ? data.error : undefined)
+  const photoUpload=path.includes('/alibaba.photobank.photo.add/')
+  const photoCodes=photoUpload?[data.error_code,data.errorCode,nested.errorCode,nested.error_code,data.errCode,nested.errCode,data.error]
+    .flatMap(value=>typeof value==='string'||typeof value==='number'?[String(value).trim()]:[]) : []
+  const code = photoUpload
+    ? photoCodes.find(value=>Object.hasOwn(photoUploadErrors,value)) ?? photoCodes.find(value=>!/^(?:0|success)?$/i.test(value))
+    : data.error_code ?? data.errorCode ?? nested.errorCode ?? nested.error_code ?? (typeof data.error === 'string' ? data.error : undefined)
   if (!response.ok || (code && code !== '0' && code !== 0) || data.success === false || data.success === 'false' || nested.success === false || nested.success === 'false') {
     const safeCode = String(code || nested.bizCode || response.status).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 100)
+    const photoMessage=photoUpload?photoUploadErrorMessage(safeCode):null
+    if(photoMessage)throw new IntegrationError(safeCode,photoMessage,safeCode==='35'||safeCode==='36'?429:400)
     if(safeCode==='CHK_LOGISTICS_ITEM_NUM_ERROR')throw new IntegrationError(safeCode,'1688 件重尺校验未通过（CHK_LOGISTICS_ITEM_NUM_ERROR）：请核对物流件数及销售包装数据是否完整、符合平台规则。',400)
     if(safeCode.startsWith('gw.Qos'))throw new IntegrationError(safeCode,`1688 平台限流或当日调用额度已用完（${safeCode}），已保存进度，额度恢复后自动继续。`,429)
     // Publishing only: the reason is needed to correct the listing. Other endpoints keep the code alone (see OAuth above).
@@ -137,7 +169,8 @@ export async function uploadPhoto(id: string, tenantId: string, actorId: string,
     const params = { albumID: albumId, name, webSite: '1688', access_token: grant.access_token, _aop_timestamp: String(Date.now()) }
     const response = await gateway(path, { ...params, _aop_signature: signApi(path, params, credentials.secret) }, { bytes, name, type })
     await recordOperation(tenantId, id, actorId, 'alibaba.photobank.photo.add', started, undefined, requestId)
-    return response.image
+    const nested=response.result && typeof response.result==='object' ? response.result as Record<string,unknown> : null
+    return response.image ?? nested?.image
   } catch (error) { await recordOperation(tenantId, id, actorId, 'alibaba.photobank.photo.add', started, error, requestId); throw error }
 }
 

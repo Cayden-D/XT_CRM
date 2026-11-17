@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 
 process.env.DASHSCOPE_API_KEY='agent-fixture-key'
 process.env.DASHSCOPE_BASE_URL='https://agent-fixture.invalid/compatible-mode/v1'
-const [{buildApp},{db},{saveConnection},{publishingImages,applyAgentFields}]=await Promise.all([import('../server/app.js'),import('../server/db.js'),import('../server/integrations/1688.js'),import('../server/integrations/1688-agent.js')])
+const [{buildApp},{db},{saveConnection},{publishingImages,publishingImageSample,applyAgentFields}]=await Promise.all([import('../server/app.js'),import('../server/db.js'),import('../server/integrations/1688.js'),import('../server/integrations/1688-agent.js')])
 const app=await buildApp(),originalFetch=globalThis.fetch,tenants:string[]=[]
 let publishCalls=0,visionCalls=0,textCalls=0,risk=false,speculative=false,invalidProposal=false,invalidRequired=false,unreadable=false,incomplete=false,uncertainPublish=false
 let onVision:(()=>Promise<void>)|null=null,lastPublished:any=null
@@ -132,5 +132,26 @@ await db.query("INSERT INTO product_variants(tenant_id,product_id,position,label
   const retried=await run(emptySkuDraft)
   assert.equal(retried.json().data.status,'published',retried.body)
   assert.deepEqual(lastPublished.formValues.skuTable.map((row:any)=>[...row.sku_props.map((prop:any)=>prop.text),row.sku_price,row.sku_amountOnSale]),feederSkus.map(sku=>[sku.color,sku.bowl,sku.price,sku.stock]))
+  const many=await draft()
+  const skuUrls=Array.from({length:45},(_,i)=>`https://cbu01.alicdn.com/img/ibank/sku-${i}.png`)
+  const main='https://cbu01.alicdn.com/img/fixture.png', detail='https://cbu01.alicdn.com/img/detail-last.png'
+  assert.throws(()=>publishingImageSample({primaryPicture:[main],skuTable:[...skuUrls,'https://example.org/not-a-platform-image.png']}),/被拦截/)
+  assert.deepEqual(publishingImageSample({skuTable:[main,...skuUrls],description:skuUrls,primaryPicture:[main]}),{
+    images:[main,...skuUrls],skuImageSample:null,
+  },'all main and detail pictures are checked, without duplicate SKU requests')
+  const manySchema={...schema,data:{...schema.data,saleProp:{fields:{dataSource:[{name:'p-2',label:'颜色',required:true,customizable:true,supportImg:true}]}}}}
+  const manyValues={...many.data_body.formValues,saleProp:{},skuTable:[],description:{content:`<img src="${detail}">`}}
+  await db.query('UPDATE integration_1688_publish_drafts SET platform_schema=$2,data_body=$3 WHERE id=$1',[many.id,JSON.stringify(manySchema),JSON.stringify({...many.data_body,formValues:manyValues})])
+  await db.query('DELETE FROM product_variants WHERE product_id=$1',[many.product_id])
+  for(const [position,url] of skuUrls.entries()){
+    const label=`色号${position}`
+    await db.query('INSERT INTO product_variants(tenant_id,product_id,position,label,attributes,image_url,unit_price,stock)VALUES($1,$2,$3,$4,$5,$6,12,7)',[tenant,many.product_id,position,label,JSON.stringify({颜色:label}),url])
+  }
+  const sampled=(await run(many)).json().data
+  assert.equal(sampled.status,'published',sampled.message)
+  assert.deepEqual(sampled.report.images.map((finding:any)=>finding.url),[main,detail,...skuUrls.slice(0,38)])
+  assert.deepEqual(sampled.report.skuImageSample,{checked:38,total:45})
+  assert.equal(lastPublished.formValues.skuTable.length,45)
+  assert.equal(lastPublished.formValues.saleProp['p-2'][44].imgUrl,'img/ibank/sku-44.png')
   console.log(JSON.stringify({modeDefaultOff:'ok',agentSettingsCors:'ok',permissions:'ok',tenantIsolation:'ok',settingsRevision:'ok',model:'qwen3.8-flash',automaticPublish:'ok',reviewedSkuPrices:'ok',allImagesInspected:'ok',riskBlocking:'ok',speculativeLogoAllowed:'ok',invalidProposalIgnored:'ok',invalidRequiredBlocked:'ok',unreadableBlocking:'ok',incompleteBlocking:'ok',disableBeforePublish:'ok',draftRace:'ok',duplicateJob:'ok',cancel:'ok',unknownNoRetry:'ok',imageHostGuard:'ok',enumGuard:'ok',economicFieldGuard:'ok',textCalls,visionCalls,mockPublishCalls:publishCalls,livePlatformWrites:0}))
 }finally{globalThis.fetch=originalFetch;for(const tenant of tenants){await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[tenant]);await db.query('DELETE FROM tenants WHERE id=$1',[tenant])}await app.close();await db.end()}

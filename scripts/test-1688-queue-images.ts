@@ -25,9 +25,11 @@ let ossFailures = 0
 ;(OSS.prototype as any).delete = async (key: string) => { objects.delete(key); return {} }
 
 const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob, resumeImageBlockedJobs }, workshop] = await Promise.all([import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/image-workshop.js')])
+const app = await (await import('../server/app.js')).buildApp()
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
 const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [{ name: 'p-brand', label: '品牌', uiType: 'input' }] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true, uploadFailures = 0, uploadAttempts = 0, unreachable = 0
+let capacityLimit: number | null = null
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
 const reply = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -68,6 +70,7 @@ globalThis.fetch = async (input, init) => {
   }
   // `uploadFailures` makes the next uploads time out (outcome unknown).
   if (url.includes('alibaba.photobank.photo.add') && (uploadAttempts++, uploadFailures > 0)) { uploadFailures--; throw new TypeError('fetch failed') }
+  if (url.includes('alibaba.photobank.photo.add') && capacityLimit !== null && albumUploads === capacityLimit) return reply({ error_code: '0', result: { errorCode: 13, errorMsg: 'fixture album full' } })
   if (url.includes('alibaba.photobank.photo.add')) { uploadedTo.push(String((init?.body as FormData).get('albumID'))); albumUploads++; return reply({ image: { id: `photo-${albumUploads}`, url: `https://cbu01.alicdn.com/img/ibank/album-${albumUploads}.jpg` } }) }
   if (url.includes('alibaba.new.product.getSchema')) return reply({ result: { success: true, bizData: schema } })
   if (url.includes('alibaba.new.product.add')) { published = JSON.parse((init?.body as URLSearchParams).get('dataBody')!); return reply({ result: { success: true, bizData: { dataJson: JSON.stringify({ itemId: '990001', offerStatus: 'auditing' }) } } }) }
@@ -80,6 +83,9 @@ try {
   const tenant = (await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id', ['队列图片测试', `queue-img-${randomUUID().slice(0, 8)}`])).rows[0].id
   tenants.push(tenant)
   const actor = (await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'采集员','active')RETURNING id", [tenant, `${randomUUID()}@fixture.local`])).rows[0].id
+  const token = (permissions = ['*']) => app.jwt.sign({ sub: actor, tenantId: tenant, email: 'fixture', displayName: '采集员', roles: [], permissions })
+  const api = (method: 'GET' | 'POST', url: string, payload?: object, bearer = token()) => app.inject({ method, url, headers: { authorization: `Bearer ${bearer}` }, ...(payload ? { payload } : {}) })
+  const retry = (ids: string[], bearer?: string) => api('POST', '/api/integrations/1688/agent/queue-jobs/retry', { collectedProductIds: ids }, bearer)
   // Listing collected products costs team credits; this team has enough for the whole test.
   await db.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,credits) VALUES($1,$2,1000)', [actor, tenant])
   const connection = await saveConnection(tenant, actor, { aliId: `queue-img-${randomUUID()}`, access_token: 'fixture', expires_in: 36000 })
@@ -168,21 +174,40 @@ try {
   assert.equal(state.status, 'blocked'); assert.match(state.message, /没能确定店铺相册.*相册服务暂不可用/)
   assert.equal(albumUploads, 0)
 
-  // As 重新入队 does (report cleared): the finished batch is reused; the album is created once, then upload and publish.
+  // Recover a legacy album error even if the report and old prompt version cannot identify the batch directly.
   listFails = false
-  await db.query("UPDATE integration_1688_collection_queue_jobs j SET status='queued',report='{}',source_updated_at=p.updated_at FROM collected_products p WHERE p.id=j.collected_product_id AND j.collected_product_id=$1", [sourceId])
+  await db.query("UPDATE integration_1688_collection_queue_jobs SET report='{}',message='AI 新图上传店铺相册失败：1688 接口调用失败（13），请检查接口权限或重新授权。' WHERE collected_product_id=$1", [sourceId])
+  await db.query("UPDATE image_assets SET options=options-'suiteCopyVersion' WHERE collected_product_id=$1", [sourceId])
+  const legacy = await api('GET', `/api/product-collections/${sourceId}`)
+  assert.match(legacy.json().data.product.queue_message, /目标相册的图片数量已满.*13/)
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'an album capacity error waits for an explicit retry')
+  assert.equal((await retry([sourceId], token(['collection:read']))).statusCode, 403)
+  const missing = randomUUID()
+  const queued = await retry([sourceId, off.collected_product_id, missing, sourceId])
+  assert.deepEqual(queued.json().data, { queued: [sourceId, off.collected_product_id], skipped: [missing] })
   // An upload that times out three times in a row: the job waits for another round instead of stopping.
   uploadFailures = 3
   state = await run(sourceId)
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /上传店铺相册未确认（已上传 0\/8 张）.*已自动重试 3 次.*第 2 轮/)
   assert.deepEqual([uploadAttempts, albumUploads, state.attempts], [3, 0, 0])
   assert.equal((await db.query("SELECT count(*)::int AS n FROM image_assets WHERE collected_product_id=$1 AND photo_status='unknown'", [sourceId])).rows[0].n, 1)
-  // Next round: one more timeout is retried, and a copy not yet readable is read again; everything ends up uploaded.
+  // Next round: one more timeout is retried. Two pictures reach the album before it fills up.
   uploadFailures = 1; unreachable = 1
+  capacityLimit = 2
+  state = await run(sourceId)
+  assert.equal(state.status, 'blocked', state.message)
+  assert.match(state.message, /目标相册的图片数量已满.*13/)
+  assert.deepEqual([state.report.albumErrorCode, state.report.imageBatch, albumUploads, submits], ['13', resumed.report.imageBatch, 2, 8])
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'capacity errors do not repeatedly hit the gateway')
+  capacityLimit = null
+  // Bulk retry resumes the same batch and reuses the two uploaded pictures.
+  assert.deepEqual((await retry([sourceId])).json().data, { queued: [sourceId], skipped: [] })
+  assert.deepEqual((await retry([sourceId])).json().data, { queued: [], skipped: [sourceId] })
+  assert.equal((await job(sourceId)).report.imageBatch, resumed.report.imageBatch)
   state = await run(sourceId)
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /已生成并上传 8 张/)
   assert.equal(submits, 8, 'a retry does not generate again'); assert.equal(albumUploads, 8, 'the eight generated pictures')
-  assert.equal(uploadAttempts, 3 + 1 + 8, 'the timed-out picture was tried again')
+  assert.equal(uploadAttempts, 3 + 1 + 8 + 1, 'only the timed-out and rejected uploads were tried again')
   assert.equal(addCalls, 1); assert.ok(uploadedTo.every(id => id === '777'), 'uploaded into the new album')
   assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '777')
   const source = (await db.query('SELECT main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1', [sourceId])).rows[0]
@@ -229,16 +254,17 @@ try {
   const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
   const customKey = await workshop.storeImage(tenant, randomUUID(), await prepareCustomHeroFrame(png, 800, 800))
   const active = (await db.query("INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key) VALUES($1,'宠物首图',$2) RETURNING id", [second.id, customKey])).rows[0].id
-  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id) VALUES($1,'custom-v1',$2)", [second.id, active])
+  await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id,hero_origin) VALUES($1,'custom-v1',$2,'浙江义乌')", [second.id, active])
   const secondSource = await collect(second.id)
   const routed = await run(secondSource)
   assert.equal(routed.connection_id, second.id)
   const secondHero = (await db.query("SELECT options,prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [routed.report.imageBatch])).rows[0]
   assert.deepEqual([secondHero.options.heroFrame, secondHero.options.heroFrameKey, secondHero.options.heroShopId], ['custom-v1', customKey, second.id])
   assert.doesNotMatch(secondHero.prompt, /深蓝黑渐变/)
+  assert.match(secondHero.prompt, /产地：浙江义乌/)
   const secondSelling = (await db.query("SELECT prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_selling'", [routed.report.imageBatch])).rows[0]
-  assert.match(secondSelling.prompt, /品牌：智珀/)
-  assert.doesNotMatch(secondSelling.prompt, /品牌：拓洋/)
+  assert.match(secondSelling.prompt, /品牌名“智珀”/)
+  assert.doesNotMatch(secondSelling.prompt, /拓洋|浙江义乌/)
   // Resetting the report simulates requeueing a product to a different shop. The old batch cannot follow it.
   await db.query("UPDATE integration_1688_collection_queue_jobs SET connection_id=$2,report='{}' WHERE id=$1", [routed.id, connection.id])
   const rerouted = await run(secondSource)
@@ -250,5 +276,6 @@ try {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)
   for (const id of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }
+  await app.close()
   await db.end()
 }

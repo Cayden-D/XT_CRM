@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg'
 import { db } from '../db.js'
-import { callProductApi, IntegrationError, uploadPhoto } from './1688.js'
+import { callProductApi, IntegrationError, isPhotoUploadRejection, uploadPhoto } from './1688.js'
 import { publishingImages } from './1688-agent.js'
 import { albumJpeg, assetShop, checkAssetFinding, download, flagged, galleryOf, readImage, rememberFinding, sourceUrl, type Finding } from './image-workshop.js'
 
@@ -15,7 +15,7 @@ export const UPLOAD_ATTEMPTS = 3
 const UPLOAD_RETRY_MS = Number(process.env.ALBUM_UPLOAD_RETRY_MS ?? 3000)
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 /** Failures where the picture may still arrive on a later try (unconfirmed, network, rate limit). */
-export const retryableUpload = (error: unknown) => error instanceof IntegrationError && (['PHOTO_UPLOAD_UNKNOWN', 'PHOTO_UPLOADING', 'PHOTO_UNREACHABLE', 'NETWORK_ERROR', 'INVALID_RESPONSE', 'PARTIAL_FAILURE'].includes(error.code) || error.code.startsWith('gw.Qos'))
+export const retryableUpload = (error: unknown) => error instanceof IntegrationError && (['36', 'PHOTO_UPLOAD_UNKNOWN', 'PHOTO_UPLOADING', 'PHOTO_UNREACHABLE', 'NETWORK_ERROR', 'INVALID_RESPONSE', 'PARTIAL_FAILURE'].includes(error.code) || error.code.startsWith('gw.Qos'))
 
 /** Checks that the album address really serves the picture (CDN copies can lag a moment behind the upload). */
 async function reachable(url: string) {
@@ -58,6 +58,7 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
   if (!claimed.rows.length) throw new IntegrationError('PHOTO_UPLOADING', '这张图片正在上传相册，请稍候。', 409)
   const attempts = options.retry ? UPLOAD_ATTEMPTS : 1
   let photo: { url?: string; id?: string } | undefined, url = '', lastError: IntegrationError | null = null
+  let uncertainUpload = asset.photo_status === 'unknown'
   for (let attempt = 1; attempt <= attempts && !url; attempt++) {
     if (attempt > 1) await sleep(UPLOAD_RETRY_MS * (attempt - 1))
     try { photo = await uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, albumId, `ai-${String(asset.operation).replace('suite_', '')}-${asset.id.slice(0, 8)}.jpg`, bytes, 'image/jpeg', ctx.requestId) as { url?: string; id?: string } }
@@ -65,18 +66,19 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
       // A rejection reported by the platform (or a token problem before the call) stored nothing. A network failure or
       // unreadable answer may have stored it: unknown, tried again only with `retry`.
       const uncertain = !(error instanceof IntegrationError) || ['NETWORK_ERROR', 'INVALID_RESPONSE', 'PARTIAL_FAILURE'].includes(error.code)
-      if (!uncertain && !(options.retry && retryableUpload(error))) { await db.query('UPDATE image_assets SET photo_status=NULL,updated_at=now() WHERE id=$1', [asset.id]); throw error }
+      uncertainUpload ||= uncertain
+      if (!uncertain && !(options.retry && retryableUpload(error))) { await db.query('UPDATE image_assets SET photo_status=$2,updated_at=now() WHERE id=$1', [asset.id, uncertainUpload ? 'unknown' : null]); throw error }
       lastError = uncertain ? new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传结果未确认，请到店铺相册核对后再处理，勿重复上传。', 409) : error as IntegrationError
       continue
     }
     let candidate = ''
     try { if (typeof photo?.url !== 'string') throw new Error('no url'); candidate = publishingImages({ image: photo.url })[0] }
-    catch { lastError = new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传未返回可用的图片地址，请到店铺相册核对，勿重复上传。', 409); continue }
-    if (options.retry && !(await reachable(candidate))) { lastError = new IntegrationError('PHOTO_UNREACHABLE', '相册返回的图片地址暂时打不开。', 409); continue }
+    catch { uncertainUpload = true; lastError = new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传未返回可用的图片地址，请到店铺相册核对，勿重复上传。', 409); continue }
+    if (options.retry && !(await reachable(candidate))) { uncertainUpload = true; lastError = new IntegrationError('PHOTO_UNREACHABLE', '相册返回的图片地址暂时打不开。', 409); continue }
     url = candidate
   }
   if (!url) {
-    await db.query("UPDATE image_assets SET photo_status='unknown',updated_at=now() WHERE id=$1", [asset.id])
+    await db.query('UPDATE image_assets SET photo_status=$2,updated_at=now() WHERE id=$1', [asset.id, uncertainUpload || !isPhotoUploadRejection(lastError) ? 'unknown' : null])
     if (options.retry && lastError) throw new IntegrationError(lastError.code, `${lastError.message.replace(/，?请到店铺相册核对[^。]*。?$/, '')}（已自动重试 ${attempts} 次）`, lastError.statusCode, lastError.detail)
     throw lastError ?? new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传结果未确认，请到店铺相册核对后再处理，勿重复上传。', 409)
   }

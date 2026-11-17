@@ -3,14 +3,14 @@ import type { PoolClient } from 'pg'
 import { db } from '../db.js'
 import { config } from '../config.js'
 import { IntegrationError } from './1688.js'
-import { inspectPublishingImages, publishingImages } from './1688-agent.js'
+import { inspectPublishingImages, publishingImageSample, publishingImages } from './1688-agent.js'
 import { createDraftFromProduct } from './1688-drafts.js'
 import { saveCollectedPackage } from './product-attributes.js'
 import { requireListingCredits, teamOf } from './teams.js'
 import { ownBrandNames } from './brands.js'
-import { DETAIL_TYPES, LISTING_MAIN_TYPES, heroCopy, productFacts, suiteDesign, type GeneratedType } from './image-workshop.js'
+import { DETAIL_TYPES, LISTING_MAIN_TYPES, SUITE_COPY_VERSION, heroCopy, productFacts, suiteDesign, type GeneratedType } from './image-workshop.js'
 import { defaultBrand } from './brands.js'
-import { heroFrameForShop } from './shop-hero-templates.js'
+import { heroDesignForShop } from './shop-hero-templates.js'
 import { CUSTOM_HERO_FRAME } from './hero-reference-frame.js'
 import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
 import { apimartConfigured } from '../llm/apimart-image.js'
@@ -58,11 +58,11 @@ function checkedSource(source:Json,variants:Json[]){
   if(source.currency!=='CNY'||!variants.length)throw new IntegrationError('QUEUE_PRICE','自动上品需要人民币报价和明确的 SKU 价格、库存；请人工核对。',400)
   if(variants.some(v=>v.price==null||v.stock==null||!Number.isFinite(Number(v.price))||Number(v.price)<=0||!Number.isInteger(Number(v.stock))||Number(v.stock)<0))throw new IntegrationError('QUEUE_SKU','来源 SKU 价格或库存缺失、非整数或不合法，请人工核对。',400)
   if(!source.main_image_url||!Array.isArray(source.gallery_images)||!Array.isArray(source.detail_images)||!source.detail_images.length)throw new IntegrationError('QUEUE_IMAGES','来源主图或详情图缺失，不能自动上品。',400)
-  const all=publishingImages({main:source.main_image_url,gallery:source.gallery_images,details:source.detail_images,variants:variants.map(v=>v.image_url).filter(Boolean)})
+  const sample=publishingImageSample({primaryPicture:[source.main_image_url,...source.gallery_images],description:source.detail_images,skuTable:variants.map(v=>v.image_url)})
   const main=publishingImages({main:source.main_image_url})[0]
   const gallery=(source.gallery_images||[]).map((url:string)=>publishingImages({image:url})[0])
   const details=source.detail_images.map((url:string)=>publishingImages({image:url})[0])
-  return {all,main,gallery,details}
+  return {sample,main,gallery,details}
 }
 
 async function claim(workerId:string){
@@ -90,7 +90,9 @@ async function publishThroughAgent(job:QueueJob,draft:Json,actor:Json,report:Jso
   await db.query("UPDATE integration_1688_collection_queue_jobs SET phase='publishing',draft_id=$2,updated_at=now() WHERE id=$1 AND worker_id=$3 AND status='processing'",[job.id,draft.id,job.worker_id])
   const result=await runAgentDraft({params:{id:draft.id},body:{revision:draft.revision},authUser:{sub:actor.id,tenantId:job.tenant_id,email:actor.email,displayName:actor.display_name,roles:[],permissions:[]},id:job.id},publishDraft,{id:job.id,workerId:job.worker_id,skipImageCheck})
   const agent=result.data as Json
-  await finish(job,agent.status==='published'?'published':agent.status==='unknown'?'unknown':agent.status==='blocked'?'blocked':'failed',agent.message||'Agent 任务未完成。',{...report,agentJobId:agent.id,agentReport:agent.report})
+  const sample=report.skuImageSample
+  const message=(agent.message||'Agent 任务未完成。')+(sample&&!agent.report?.skuImageSample?`来源 SKU 图片抽查 ${sample.checked}/${sample.total} 张。`:'')
+  await finish(job,agent.status==='published'?'published':agent.status==='unknown'?'unknown':agent.status==='blocked'?'blocked':'failed',message,{...report,agentJobId:agent.id,agentReport:agent.report})
 }
 
 /** A job that already has a draft goes straight back to the agent; the source and product were dealt with the first time. */
@@ -108,37 +110,44 @@ async function defer(job:QueueJob,message:string,report:Json,seconds=IMAGE_POLL_
 }
 
 /** Generates the listing's pictures (or reuses an unfinished batch), then puts them into the album and the product. */
-async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string},state:Json):Promise<ImageStep>{
-  const frame=state.imageBatch?null:await heroFrameForShop(job.tenant_id,job.connection_id)
-  const brand=state.imageBatch?null:await defaultBrand(job.tenant_id,job.connection_id)
+async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string}|null,state:Json):Promise<ImageStep>{
+  const resumeUpload=state.resumeAlbumUpload===true
+  const design=state.imageBatch||resumeUpload?null:await heroDesignForShop(job.tenant_id,job.connection_id)
+  const frame=design?.frame
+  const brand=state.imageBatch||resumeUpload?null:await defaultBrand(job.tenant_id,job.connection_id)
   const storageFailure=`status='failed' AND task_id IS NOT NULL AND
     (error LIKE '图片保存到 OSS 失败%' OR error LIKE '无法读取已保存的图片%' OR error LIKE '生成图片下载失败%')`
   if(!state.imageBatch){
     // A new queue attempt may reuse its images only for the same shop and template revision.
     const key=frame?.mode===CUSTOM_HERO_FRAME?frame.key:null
     const reusable=(await db.query(`SELECT batch_id FROM image_assets WHERE collected_product_id=$1 AND tenant_id=$2
-      AND options->>'unchecked'='true' AND options->>'listingConnectionId'=$5 AND applied_to IS NULL
+      AND options->>'unchecked'='true' AND options->>'listingConnectionId'=$5 AND ($13::boolean OR options->>'suiteCopyVersion'=$11) AND applied_to IS NULL
       GROUP BY batch_id HAVING count(*)=$3 AND count(DISTINCT operation) FILTER (WHERE operation=ANY($4))=$3
         AND bool_and(status<>'failed' OR (${storageFailure}))
-        AND bool_or(operation='suite_hero' AND options->>'heroFrame' IS NOT DISTINCT FROM $6 AND options->>'heroFrameKey' IS NOT DISTINCT FROM $7)
+        AND ($13::boolean OR (bool_or(operation='suite_hero' AND options->>'heroFrame' IS NOT DISTINCT FROM $6 AND options->>'heroFrameKey' IS NOT DISTINCT FROM $7
+          AND options->'heroShopCopy' IS NOT DISTINCT FROM $12::jsonb)
         AND bool_or(operation='suite_selling' AND options#>>'{brand,id}' IS NOT DISTINCT FROM $8 AND options#>>'{brand,name}' IS NOT DISTINCT FROM $9
-          AND options#>>'{brand,connectionId}' IS NOT DISTINCT FROM $10)
-      ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED,job.connection_id,frame?.mode??null,key,brand?.id??null,brand?.name??null,brand?.connection_id??null])).rows[0]
+          AND options#>>'{brand,connectionId}' IS NOT DISTINCT FROM $10)))
+      ORDER BY max(created_at) DESC LIMIT 1`,[source.id,job.tenant_id,GENERATED.length,GENERATED,job.connection_id,frame?.mode??null,key,brand?.id??null,brand?.name??null,brand?.connection_id??null,SUITE_COPY_VERSION,design?.copy?JSON.stringify(design.copy):null,resumeUpload])).rows[0]
     if(reusable)state.imageBatch=reusable.batch_id
   }
+  const batchScope=`batch_id=$1 AND tenant_id=$2 AND collected_product_id=$3 AND options->>'listingConnectionId'=$4 AND options->>'unchecked'='true'`
+  const batchParams=[state.imageBatch,job.tenant_id,source.id,job.connection_id]
   if(state.imageBatch&&Number(state.storageRevivals||0)<MAX_STORAGE_REVIVALS){
     const revived=(await db.query(`UPDATE image_assets SET status='processing',next_poll_at=now(),lease_until=NULL,error=NULL,updated_at=now()
-      WHERE batch_id=$1 AND tenant_id=$2 AND applied_to IS NULL AND ${storageFailure} RETURNING id`,[state.imageBatch,job.tenant_id])).rows
+      WHERE ${batchScope} AND applied_to IS NULL AND ${storageFailure} RETURNING id`,batchParams)).rows
     if(revived.length){
       state.storageRevivals=Number(state.storageRevivals||0)+1
       return {kind:'wait',message:`有 ${revived.length} 张 AI 图已生成但未保存成功，正在重新保存（不会重新生图），完成后继续上架。`}
     }
   }
   if(!state.imageBatch){
+    if(resumeUpload||!settings)return {kind:'block',message:'找不到该店铺已生成的图片批次，请在采集商品的「商品图片」中核对。'}
     const facts=await productFacts(job.tenant_id,source.id),refs=facts.gallery.slice(0,4)
     if(!refs.length)return {kind:'block',message:'没有可用作参考的商品主图，无法生成新图。'}
     const batch=randomUUID()
     facts.heroReferenceFrame=frame
+    facts.shopCopy=design?.copy
     facts.heroCopy=await heroCopy(facts,(await teamOf(job.tenant_id,actor.id)).textModel)
     for(const type of GENERATED){
       const { prompt, options } = suiteDesign(type,facts,brand)
@@ -149,7 +158,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
     state.imageBatch=batch
     return {kind:'wait',message:`正在用 AI 生成 ${LISTING_MAIN_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}
   }
-  const rows=(await db.query('SELECT * FROM image_assets WHERE batch_id=$1 AND tenant_id=$2',[state.imageBatch,job.tenant_id])).rows
+  const rows=(await db.query(`SELECT * FROM image_assets WHERE ${batchScope}`,batchParams)).rows
   const ordered=GENERATED.map(type=>rows.find(r=>r.operation===type)).filter(Boolean) as Json[]
   const failed=ordered.find(r=>r.status==='failed')
   if(failed||ordered.length<GENERATED.length)return {kind:'block',message:`AI 生图失败：${String(failed?.error||'部分图片缺失').replace(/[。.]+$/,'')}。请在采集商品的「商品图片」里重试后重新入队。`}
@@ -170,7 +179,10 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
   try{for(const asset of ordered)urls.push(await ensurePhoto(ctx,asset,job.connection_id,album,{retry:true}))}
   catch(error){
     const reason=(error instanceof Error?error.message:'相册上传失败').replace(/[。.]+$/,'')
-    if(!retryableUpload(error))return {kind:'block',message:`AI 新图上传店铺相册失败：${reason}。`}
+    if(!retryableUpload(error)){
+      if(error instanceof IntegrationError)state.albumErrorCode=error.code
+      return {kind:'block',message:`AI 新图上传店铺相册失败：${reason}。`}
+    }
     const rounds=Number(state.uploadRounds||0)+1
     state.uploadRounds=rounds
     if(rounds>=MAX_UPLOAD_ROUNDS)return {kind:'block',message:`AI 新图上传店铺相册 ${rounds} 轮仍未成功（已上传 ${urls.length}/${ordered.length} 张）：${reason}。请稍后重新入队。`}
@@ -208,8 +220,8 @@ async function processJob(job:QueueJob){
   const auto=settings&&{...settings,suite_model:team.imageModel}
   let report:Json
   let variantImage=(url:string|null)=>url
-  if(auto&&!previous.generatedImages){
-    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,uploadRounds:previous.uploadRounds,storageRevivals:previous.storageRevivals,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
+  if((auto||previous.imageBatch||previous.resumeAlbumUpload)&&!previous.generatedImages){
+    const state:Json={sourceTitle:source.title,sourceCategoryId:source.source_category_id,imageBatch:previous.imageBatch,resumeAlbumUpload:previous.resumeAlbumUpload,uploadRounds:previous.uploadRounds,storageRevivals:previous.storageRevivals,imageWaitSince:previous.imageWaitSince||new Date().toISOString()}
     if(Date.now()-Date.parse(state.imageWaitSince)>IMAGE_WAIT_MS){await finish(job,'blocked',`AI 生图等待超时（${IMAGE_WAIT_MS/60_000} 分钟），请在采集商品的「商品图片」里查看后重新入队。`,state);return}
     const step=await generateListingImages(job,source,actor,auto,state)
     if(step.kind==='block'){await finish(job,'blocked',step.message,state);return}
@@ -221,8 +233,9 @@ async function processJob(job:QueueJob){
     // Published as generated, without screening; SKU pictures as collected.
     report={images:[],imagesUnchecked:true,generatedImages:previous.generatedImages,imageBatch:previous.imageBatch,sourceTitle:source.title,sourceCategoryId:source.source_category_id}
   }else{
-    const findings=await inspectPublishingImages(images.all,await ownBrandNames(job.tenant_id,job.connection_id))
-    report={images:findings,sourceTitle:source.title,sourceCategoryId:source.source_category_id}
+    const findings=await inspectPublishingImages(images.sample.images,await ownBrandNames(job.tenant_id,job.connection_id))
+    const {skuImageSample}=images.sample
+    report={images:findings,sourceTitle:source.title,sourceCategoryId:source.source_category_id,...(skuImageSample?{skuImageSample}:{})}
     const bad=new Set(findings.filter(item=>!item.readable||item.watermark||item.rightsRisk||item.uncertain).map(item=>item.url))
     const unreadable=findings.filter(item=>!item.readable)
     if(unreadable.length){await finish(job,'blocked',`图片检查未通过：${unreadable.length} 张图片无法读取，请核对原图。`,report);return}
@@ -236,7 +249,14 @@ async function processJob(job:QueueJob){
     const droppedDetails=images.details.length-keptDetails.length
     if(droppedDetails&&!keptDetails.length){await finish(job,'blocked','图片检查未通过：全部详情图都带有他人标识，请更换详情图后重新入队。',report);return}
     images.details=keptDetails
-    variantImage=(url:string|null)=>{if(!url)return null;try{const clean=publishingImages({image:url})[0];return bad.has(clean)?null:url}catch{return url}}
+    const screened=new Set(images.sample.images)
+    variantImage=(url:string|null)=>{
+      if(!url)return null
+      try{
+        const clean=publishingImages({image:url})[0]
+        return screened.has(clean)&&!bad.has(clean)?url:null
+      }catch{return null}
+    }
     const droppedSku=variants.filter(v=>v.image_url&&!variantImage(v.image_url)).length
     if(droppedDetails||droppedSku)report.droppedImages={details:droppedDetails,sku:droppedSku}
   }
@@ -285,11 +305,11 @@ export async function runClaimedCollectionQueueJob(id:string,workerId:string){
   if(!job)return false
   const heartbeat=setInterval(()=>void db.query("UPDATE integration_1688_collection_queue_jobs SET lease_until=now()+interval '2 minutes' WHERE id=$1 AND worker_id=$2 AND status='processing'",[job.id,workerId]).catch(()=>{}),30_000)
   try{await processJob(job)}catch(error){
-    const state=(await db.query('SELECT phase FROM integration_1688_collection_queue_jobs WHERE id=$1',[job.id])).rows[0]
+    const state=(await db.query('SELECT phase,report FROM integration_1688_collection_queue_jobs WHERE id=$1',[job.id])).rows[0]
     const known=error instanceof IntegrationError
     const message=known?error.message:'Agent 队列处理异常；未确认发布结果，请人工核对。'
     if(state?.phase==='screening'&&!known&&job.attempts<3){await db.query("UPDATE integration_1688_collection_queue_jobs SET status='queued',available_at=now()+($3::int * interval '15 seconds'),message=$4,worker_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker_id=$2",[job.id,workerId,2**(job.attempts-1),message])}
-    else await finish(job,state?.phase==='publishing'?'unknown':known?'blocked':'failed',message)
+    else await finish(job,state?.phase==='publishing'?'unknown':known?'blocked':'failed',message,state?.report??{})
   }finally{clearInterval(heartbeat)}
   return true
 }
@@ -317,6 +337,7 @@ export async function resumeImageBlockedJobs(tenantId?:string){
     WHERE p.id=j.collected_product_id AND p.product_id IS NULL AND j.status='blocked' AND j.phase='screening' AND j.draft_id IS NULL
       AND ($1::uuid IS NULL OR j.tenant_id=$1) AND j.updated_at>now()-interval '2 days'
       AND (j.message LIKE 'AI 生图%' OR j.message LIKE 'AI 新图上传店铺相册%')
+      AND j.report->>'albumErrorCode' IS NULL AND j.message !~ '1688 接口调用失败（[0-9]+）'
       AND coalesce((j.report->>'autoResumes')::int,0)<$2
       AND j.report->>'imageBatch' ~ '^[0-9a-f-]{36}$'
       AND NOT EXISTS(SELECT 1 FROM image_assets a WHERE a.batch_id=(j.report->>'imageBatch')::uuid AND a.status IN ('pending','processing'))

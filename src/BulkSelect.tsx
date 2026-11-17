@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { LoaderCircle, Trash2, X } from 'lucide-react'
 
 /** Selection of items on the current page; anything no longer listed drops out of it. */
@@ -12,6 +13,7 @@ export function useSelection(ids: string[]) {
     toggle: (id: string) => setSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next }),
     setAll: (on: boolean) => setSelected(on ? new Set(ids) : new Set()),
     clear: () => setSelected(new Set()),
+    deselect: (ids: string[]) => setSelected(current => { const next = new Set(current); ids.forEach(id => next.delete(id)); return next }),
     all: ids.length > 0 && ids.every(id => selected.has(id)),
   }), [selected, key]) // eslint-disable-line react-hooks/exhaustive-deps
 }
@@ -26,12 +28,13 @@ export function PickBox({ selection, id, label }: { selection: Selection; id: st
  * Select-all for the page and one delete for the selection. Items are deleted one after another with the same rules as a
  * single delete; whatever the server refuses stays, with its reason.
  */
-export function BulkBar<T extends { id: string }>({ selection, items, name, remove, done, noun }: {
-  selection: Selection; items: T[]; name: (item: T) => string; remove: (item: T) => Promise<unknown>; done: (message: string) => void | Promise<void>; noun: string
+export function BulkBar<T extends { id: string }>({ selection, items, name, remove, done, noun, children, disabled }: {
+  selection: Selection; items: T[]; name: (item: T) => string; remove?: (item: T) => Promise<unknown>; done: (message: string) => void | Promise<void>; noun: string; children?: ReactNode; disabled?: boolean
 }) {
   const [confirming, setConfirming] = useState(false), [busy, setBusy] = useState(false), [progress, setProgress] = useState(0)
   const chosen = items.filter(item => selection.has(item.id))
   async function run() {
+    if (!remove) return
     setBusy(true); setProgress(0)
     const failed: string[] = []
     let deleted = 0
@@ -47,7 +50,8 @@ export function BulkBar<T extends { id: string }>({ selection, items, name, remo
     <label><input type="checkbox" aria-label="全选本页" checked={selection.all} onChange={e => selection.setAll(e.target.checked)}/>全选本页</label>
     {chosen.length > 0 && <>
       <span>已选 {chosen.length} 个</span>
-      <button className="bulk-danger" onClick={() => setConfirming(true)}><Trash2 size={14}/>批量删除</button>
+      {children}
+      {remove && <button className="bulk-danger" disabled={disabled} onClick={() => setConfirming(true)}><Trash2 size={14}/>批量删除</button>}
       <button className="bulk-clear" onClick={selection.clear} aria-label="取消选择"><X size={14}/>取消选择</button>
     </>}
     {confirming && <div className="dialog-layer"><button className="drawer-scrim" aria-label="取消" disabled={busy} onClick={() => setConfirming(false)}/><section className="confirm-dialog" role="alertdialog" aria-label={`批量删除${noun}`}>

@@ -7,7 +7,7 @@ import { currentTextModel, generateQwenText, LlmRequestError, withTextModel } fr
 import { teamOf } from '../integrations/teams.js'
 import { requirePermission } from '../auth.js'
 import { IntegrationError } from '../integrations/1688.js'
-import { inspectPublishingImages, prepareAgentFields, publishingImages, sourceNames } from '../integrations/1688-agent.js'
+import { inspectPublishingImages, prepareAgentFields, publishingImageSample, sourceNames } from '../integrations/1688-agent.js'
 import { collectedCategoryDefaults } from '../integrations/1688-collected-attributes.js'
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { loadReviewedVariants } from '../integrations/1688-collected-skus.js'
@@ -112,9 +112,10 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
       const avoid=sourceNames(source,product,ownNames)
       let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed,avoid)
       report={...report,title:formValues.title}
-      const images=publishingImages(formValues)
+      const {images,skuImageSample}=publishingImageSample(formValues)
       // Pictures generated for this listing are published unchecked when the owner chose so (AI images on).
-      const findings=queue?.skipImageCheck?[]:await inspectPublishingImages(images,ownNames);report={...report,images:findings,...(queue?.skipImageCheck?{imagesUnchecked:true}:{})}
+      const findings=queue?.skipImageCheck?[]:await inspectPublishingImages(images,ownNames)
+      report={...report,images:findings,...(queue?.skipImageCheck?{imagesUnchecked:true}:skuImageSample?{skuImageSample}:{})}
       const risky=findings.filter(i=>!i.readable||i.watermark||i.rightsRisk||i.uncertain)
       if(risky.length)throw new IntegrationError('AGENT_IMAGE_RISK',`图片检查未通过：${risky.map(i=>i.reason||'图片无法读取或存在明确标识').join('；')}。请核对原图或替换图片；不能通过编辑原图消除明确的公司水印或品牌 Logo。`,400)
       const facts=attributeFacts(product,reviewed,source,ownBrand?.name),pictures=attributePictures(formValues)
@@ -159,7 +160,7 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
           requireComplete()
         }
       }
-      const summary=[ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:''].filter(Boolean).join('，')
+      const summary=[ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:'',skuImageSample&&!queue?.skipImageCheck?`SKU 图片抽查 ${skuImageSample.checked}/${skuImageSample.total} 张`:''].filter(Boolean).join('，')
       await db.query("UPDATE integration_1688_agent_jobs SET status='published',report=$2,message=$3,updated_at=now() WHERE id=$1",[job.id,JSON.stringify(report),`已提交平台；审核状态以平台为准。${summary?`${summary}，可在任务详情核对。`:''}${report.skuWarning?`注意：${report.skuWarning}`:report.skuCheck&&report.skuCheck!=='unread'?`${report.skuCheck}。`:''}`])
     }catch(error){
       const state=(await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]?.status

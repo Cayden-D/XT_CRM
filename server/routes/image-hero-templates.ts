@@ -7,7 +7,7 @@ import { requirePermission } from '../auth.js'
 import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
 import { CUSTOM_HERO_FRAME, prepareCustomHeroFrame } from '../integrations/hero-reference-frame.js'
-import { heroShop, listHeroShops, SHOP_HERO_MODES, type ShopHeroMode } from '../integrations/shop-hero-templates.js'
+import { heroShop, listHeroShops, SHOP_HERO_MODES, type ShopHeroCopy, type ShopHeroMode } from '../integrations/shop-hero-templates.js'
 import { imageUrl, removeImage, storeImage, toPng } from '../integrations/image-workshop.js'
 
 const shopPath = z.object({ id: z.string().uuid() })
@@ -18,11 +18,12 @@ const imageInput = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(11_500_000)
 const stale = () => new IntegrationError('HERO_TEMPLATE_CONFLICT', '此店铺的模板已变更，请刷新后重试。', 409)
 const missingTemplate = () => new IntegrationError('HERO_TEMPLATE_NOT_FOUND', '该店铺没有这个自定义模板。', 404)
 type Shop = Awaited<ReturnType<typeof heroShop>>
-type Selection = { mode: ShopHeroMode; templateId: string | null }
+type Selection = { mode: ShopHeroMode; templateId: string | null; copy?: ShopHeroCopy }
 
 async function present(shop: Shop, tenantId: string) {
   return {
     id: shop.id, display_name: shop.display_name, mode: shop.mode, revision: shop.revision, activeTemplateId: shop.active_template_id,
+    heroOrigin: shop.hero_origin, heroNotes: shop.hero_notes,
     templates: await Promise.all(shop.templates.map(async template => ({
       id: template.id, name: template.name, previewUrl: await imageUrl(template.storage_key, tenantId).catch(() => null),
     }))),
@@ -53,11 +54,13 @@ async function mutateShop(
     if (!locked.rowCount) throw new IntegrationError('HERO_SHOP_NOT_FOUND', '店铺不存在。', 404)
     const shop = await heroShop(tenantId, id, client)
     if (shop.revision !== revision) throw stale()
-    const selected = await change(client, shop) ?? { mode: shop.mode, templateId: shop.active_template_id }
-    await client.query(`INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id)
-      VALUES($1,$2,$3)
+    const selected: Selection = await change(client, shop) ?? { mode: shop.mode, templateId: shop.active_template_id }
+    const copy = selected.copy ?? { origin: shop.hero_origin, notes: shop.hero_notes }
+    await client.query(`INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id,hero_origin,hero_notes)
+      VALUES($1,$2,$3,$4,$5)
       ON CONFLICT(connection_id) DO UPDATE SET mode=excluded.mode,active_template_id=excluded.active_template_id,
-        revision=image_shop_hero_templates.revision+1,updated_at=now()`, [id, selected.mode, selected.templateId])
+        hero_origin=excluded.hero_origin,hero_notes=excluded.hero_notes,
+        revision=image_shop_hero_templates.revision+1,updated_at=now()`, [id, selected.mode, selected.templateId, copy.origin, JSON.stringify(copy.notes)])
     await client.query(`INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)
       VALUES($1,$2,'image.hero_template.update','1688_connection',$3,$4,$5)`,
     [tenantId, sub, id, JSON.stringify({ operation, ...selected, revision: revision + 1 }), request.id])
@@ -96,6 +99,17 @@ export async function imageHeroTemplateRoutes(app: FastifyInstance) {
       if (templateId && !shop.templates.some(template => template.id === templateId)) throw missingTemplate()
       return { mode, templateId: templateId ?? null }
     })
+  })
+
+  app.put('/hero-templates/:id/copy', { preHandler: manage }, async request => {
+    const { id } = shopPath.parse(request.params)
+    const text = (max: number) => z.string().trim().min(1).max(max).regex(/^[^<>\r\n]+$/)
+    const { revision, origin, notes } = revisionBody.extend({
+      origin: text(24).nullable(), notes: z.array(text(16)).max(2).refine(items => new Set(items).size === items.length),
+    }).strict().parse(request.body)
+    return mutateShop(request, id, revision, 'copy', async (_client, shop) => ({
+      mode: shop.mode, templateId: shop.active_template_id, copy: { origin, notes },
+    }))
   })
 
   app.post('/hero-templates/:id/custom', { preHandler: manage, bodyLimit: 12_000_000 }, async (request, reply) => {

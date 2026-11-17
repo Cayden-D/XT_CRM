@@ -17,7 +17,7 @@ import { brandById, checkBrandShop, defaultBrand, ownBrandNames } from '../integ
 import { imageAlbumRoutes } from './image-album.js'
 import { brandRoutes } from './image-brands.js'
 import { imageHeroTemplateRoutes } from './image-hero-templates.js'
-import { heroFrameForShop } from '../integrations/shop-hero-templates.js'
+import { heroDesignForShop } from '../integrations/shop-hero-templates.js'
 
 const tenant = (request: FastifyRequest) => request.authUser.tenantId
 const idParams = z.object({ id: z.string().uuid() })
@@ -217,7 +217,9 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     }
     const team = await teamOf(tenant(request), request.authUser.sub)
     if (input.types.includes('suite_hero')) {
-      facts.heroReferenceFrame = await heroFrameForShop(tenant(request), target)
+      const design = await heroDesignForShop(tenant(request), target)
+      facts.heroReferenceFrame = design.frame
+      facts.shopCopy = design.copy
       facts.heroCopy = await heroCopy(facts, team.textModel)
     }
     const batch = randomUUID(), model = team.imageModel, quality = input.quality ?? settings.suite_quality

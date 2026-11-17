@@ -4,13 +4,14 @@ import Pagination,{ useDebounced } from './Pagination'
 import { AlertCircle,Bot,Box,Database,Download,ExternalLink,Inbox,KeyRound,RefreshCw,Search,SearchX,Trash2,TriangleAlert,X } from 'lucide-react'
 import { ApiError,COLLECTOR_EXTENSION_URL,COLLECTOR_SCRIPT_URL,deleteCollectedProduct,getCollectedProduct,getCollectedProducts,type CollectedProductCard,type CollectedProductDetail,type CollectionFacets,type CollectionStage,type SessionUser } from './api'
 import CollectionPromotion from './CollectionPromotion'
-import { enqueueCollectedProduct } from './1688Api'
+import { enqueueCollectedProduct, retryCollectedProducts } from './1688Api'
 import { ProductImagesPanel } from './ImageWorkshop'
 
 const money=(value:string|number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:2}).format(Number(value))
 const queueNames:Record<NonNullable<CollectedProductCard['queue_status']>,string>={queued:'排队中',processing:'Agent 处理中',blocked:'需核对',failed:'处理失败',published:'已提交平台',unknown:'结果待核对',cancelled:'已取消'}
 const stageNames:Record<CollectionStage,string>={pending:'待处理',queue:'队列中',attention:'需核对',promoted:'已转正式产品',published:'已提交平台'}
 const collectionStatus=(item:CollectedProductCard)=>item.queue_status&&item.queue_status!=='cancelled'?queueNames[item.queue_status]:stageNames[item.stage]
+const canRetryCollection=(item:CollectedProductCard)=>item.queue_status==='blocked'||item.queue_status==='failed'
 const priceText=(item:CollectedProductCard)=>item.min_price==null?'价格待确认':Number(item.min_price)===Number(item.max_price)?money(item.min_price):`${money(item.min_price)} 起`
 /** "3 分钟前" up to a week, then the date. */
 export function ago(value:string){const minutes=Math.round((Date.now()-Date.parse(value))/60000);if(minutes<1)return '刚刚';if(minutes<60)return `${minutes} 分钟前`;if(minutes<1440)return `${Math.floor(minutes/60)} 小时前`;if(minutes<10080)return `${Math.floor(minutes/1440)} 天前`;return new Date(value).toLocaleDateString('zh-CN')}
@@ -20,6 +21,8 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
  const [promoting,setPromoting]=useState<CollectedProductDetail|null>(null)
  const canCreate=(user.permissions||[]).some(p=>p==='*'||p==='product:*'||p==='product:create')
  const canDelete=(user.permissions||[]).some(p=>p==='*'||p==='collection:*'||p==='collection:delete')
+ const canRetry=(user.permissions||[]).some(p=>p==='*'||p==='integration:*'||p==='integration:publish')
+ const [retrying,setRetrying]=useState(false)
  const [collections,setCollections]=useState<CollectedProductCard[]>([]),[facets,setFacets]=useState<CollectionFacets>(emptyFacets),[total,setTotal]=useState(0),[loaded,setLoaded]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[search,setSearch]=useState(''),[collectionDetail,setCollectionDetail]=useState<CollectedProductDetail|null>(null),[collectorSetup,setCollectorSetup]=useState(false),[deletingCollection,setDeletingCollection]=useState<CollectedProductCard|null>(null)
  const [stage,setStage]=useState<CollectionStage|''>(''),[source,setSource]=useState<''|'1688'|'alibaba'>(''),[page,setPage]=useState(1),[pageSize,setPageSize]=useState(24)
  const query=useDebounced(search.trim())
@@ -29,13 +32,26 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
    if(!r.data.length&&page>1)setPage(Math.max(1,Math.ceil(r.total/pageSize)))}catch(cause){setError(cause instanceof ApiError?cause.message:'采集商品数据加载失败。')}finally{setLoading(false)}},[query,stage,source,page,pageSize])
  useEffect(()=>{void load()},[load])
  const filtered=Boolean(query||stage||source)
- const selection=useSelection(collections.map(c=>c.id))
+ const selectable=collections.filter(item=>canDelete||(canRetry&&canRetryCollection(item)))
+ const selection=useSelection(selectable.map(c=>c.id))
+ const retryIds=canRetry?selectable.filter(item=>selection.has(item.id)&&canRetryCollection(item)).map(item=>item.id):[]
  const changePage=(next:number)=>{setPage(next);document.querySelector('.catalog-head')?.scrollIntoView({behavior:'smooth',block:'start'})}
  async function removeCollection(item:CollectedProductCard){try{await deleteCollectedProduct(item.id);setNotice('采集记录已删除');await load()}catch(cause){setError(cause instanceof Error?cause.message:'删除采集记录失败。')}finally{setDeletingCollection(null)}}
  async function openCollection(item:CollectedProductCard){try{setCollectionDetail((await getCollectedProduct(item.id)).data)}catch(cause){setError(cause instanceof Error?cause.message:'采集详情加载失败。')}}
  async function enqueue(item:CollectedProductDetail){try{await enqueueCollectedProduct(item.product.id);setCollectionDetail(null);setNotice('已加入 Agent 队列');await load()}catch(cause){setError(cause instanceof Error?cause.message:'加入队列失败。')}}
+ async function retrySelected(){
+  if(!retryIds.length||retrying)return
+  setRetrying(true);setNotice('')
+  try{
+   const {data}=await retryCollectedProducts(retryIds)
+   selection.deselect(data.queued)
+   setNotice(`已重新入队 ${data.queued.length} 件商品${data.skipped.length?`，另有 ${data.skipped.length} 件当前无法重试，可在上架队列查看状态`:''}。`)
+   await load()
+  }catch(cause){setNotice(cause instanceof Error?cause.message:'批量重试失败，请稍后再试。')}
+  finally{setRetrying(false)}
+ }
  return <div className="commerce-page collection-page">
-  {notice&&<div className="inline-notice">{notice}<button onClick={()=>setNotice('')}><X size={14}/></button></div>}
+  {notice&&<div className="inline-notice" role="status">{notice}<button onClick={()=>setNotice('')} aria-label="关闭提示"><X size={14}/></button></div>}
   <section className="catalog-head">
    <div className="catalog-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索商品名称或 1688 商品 ID" aria-label="搜索采集商品"/>{search&&<button onClick={()=>setSearch('')} aria-label="清除搜索"><X size={14}/></button>}</div>
    <select className="catalog-select" value={source} onChange={e=>setSource(e.target.value as typeof source)} aria-label="来源"><option value="">全部来源</option><option value="1688">1688</option><option value="alibaba">Alibaba</option></select>
@@ -48,8 +64,12 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
   {!error&&loaded&&!collections.length&&(filtered
    ?<section className="state-card compact"><SearchX size={26}/><h2>没有符合条件的采集商品</h2><p>换个关键词，或清除筛选条件。</p><button onClick={()=>{setSearch('');setStage('');setSource('')}}>清除筛选</button></section>
    :<section className="state-card"><Inbox size={28}/><h2>采集第一件 1688 商品</h2><button onClick={()=>setCollectorSetup(true)}><KeyRound size={15}/>安装采集器</button></section>)}
-  {!error&&loaded&&canDelete&&<BulkBar selection={selection} items={collections} name={item=>item.title} noun="采集记录" remove={item=>deleteCollectedProduct(item.id)} done={async message=>{setNotice(message);await load()}}/>}
-  {!error&&loaded&&collections.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{collections.map(item=><article key={item.id} className={`goods-card ${canDelete?'selectable':''} ${selection.has(item.id)?'picked':''}`}>{canDelete&&<PickBox selection={selection} id={item.id} label={item.title}/>}
+  {!error&&loaded&&<BulkBar selection={selection} items={selectable} name={item=>item.title} noun="采集记录" disabled={retrying} remove={canDelete?item=>deleteCollectedProduct(item.id):undefined} done={async message=>{setNotice(message);await load()}}>
+   {(retryIds.length>0||retrying)&&<button className="bulk-retry" disabled={retrying} onClick={()=>void retrySelected()}><RefreshCw size={14} className={retrying?'spin':''} aria-hidden="true"/>{retrying?'正在重新入队…':`批量重试（${retryIds.length}）`}</button>}
+  </BulkBar>}
+  {!error&&loaded&&collections.length>0&&<section className={`card-grid ${loading?'is-loading':''}`}>{collections.map(item=>{
+   const pickable=canDelete||(canRetry&&canRetryCollection(item))
+   return <article key={item.id} className={`goods-card ${pickable?'selectable':''} ${selection.has(item.id)?'picked':''}`}>{pickable&&<PickBox selection={selection} id={item.id} label={item.title}/>}
    <button className="goods-media" onClick={()=>void openCollection(item)} aria-label={`查看 ${item.title}`}><Database size={28}/>{item.main_image_url&&<img src={item.main_image_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={e=>{e.currentTarget.style.display='none'}}/>}
     <span className="goods-source">{item.source==='1688'?'1688':'Alibaba'}</span><span className={`goods-stage stage-${item.stage}`}>{collectionStatus(item)}</span></button>
    <div className="goods-body">
@@ -60,7 +80,7 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
    </div>
    <footer className="goods-foot"><span title={new Date(item.collected_at).toLocaleString('zh-CN')}>{item.collector_name?`${item.collector_name} · `:''}{ago(item.collected_at)}</span>
     {canDelete&&<button className="goods-icon" onClick={()=>setDeletingCollection(item)} aria-label={`删除 ${item.title}`} title="删除"><Trash2 size={15}/></button>}</footer>
-  </article>)}</section>}
+  </article>})}</section>}
   {!error&&loaded&&<Pagination page={page} pageSize={pageSize} total={total} onPage={changePage} onPageSize={setPageSize} unit="件"/>}
   {collectionDetail&&<><CollectionPreview detail={collectionDetail} user={user} onClose={()=>setCollectionDetail(null)}/><div className="collection-promote-actions">{canCreate&&!collectionDetail.product.product_id&&!['queued','processing','unknown'].includes(collectionDetail.product.queue_status||'')&&<button className="shop-button" onClick={()=>{setPromoting(collectionDetail);setCollectionDetail(null)}}>审核并创建正式产品</button>}{collectionDetail.product.source==='1688'&&!collectionDetail.product.product_id&&!collectionDetail.product.queue_status&&<button className="shop-button primary" onClick={()=>void enqueue(collectionDetail)}><Bot size={16}/>加入 Agent 队列</button>}</div></>}
   {promoting&&<CollectionPromotion detail={promoting} close={()=>setPromoting(null)} saved={()=>{setPromoting(null);setNotice('正式产品已创建，可在「发布草稿」中上架');void load()}}/>}
