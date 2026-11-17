@@ -31,10 +31,12 @@
 
 ```powershell
 npm install
-Copy-Item .env.example .env
-./database/init-db.ps1
+Copy-Item .env.example .env.local
+./database/init-db.ps1 -HostName 127.0.0.1 -Port 5432 -AdminUser postgres -DatabaseName ai_crm
 npm run create-admin
 ```
+
+复制后先填写 `.env.local`，移除未使用的 1688 回调占位值，确保脚本参数与数据库配置一致。运行初始化脚本前设置 `CRM_DB_PASSWORD`，运行管理员脚本前设置至少 12 位的 `CRM_ADMIN_PASSWORD`。
 
 分别启动前端和 API：
 
@@ -44,6 +46,252 @@ npm run dev:api
 ```
 
 前端默认地址为 `http://127.0.0.1:5173`，后端默认地址为 `http://127.0.0.1:3001`。
+
+## 部署到服务器
+
+以下以 Ubuntu 或 Debian 上的 **Nginx + systemd + PostgreSQL** 为例。Nginx 提供前端并转发同域的 `/api/`，API 仅监听本机 `127.0.0.1:3001`。示例目录是 `/opt/xiaotu-crm`，服务名是 `xiaotu-crm`。已有线上站点请沿用现有域名、数据库、令牌密钥和服务配置，将下文的路径与服务名替换为实际值。
+
+### 1. 准备服务器与数据库
+
+使用有 `sudo` 权限的普通部署账号，在同一个 Bash 会话执行以下命令。先安装 Node.js 22.12+（22.x）或 24.x（含 npm），并把实际域名解析到服务器。PostgreSQL 至少需要 15，客户端 `pg_dump` 的主版本应等于或高于服务器版本。以下软件包命令适用于默认仓库提供 PostgreSQL 15 或以上的系统。[Node.js 官方下载](https://nodejs.org/en/download) · [PostgreSQL 备份文档](https://www.postgresql.org/docs/current/app-pgdump.html)
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git nginx postgresql postgresql-client curl openssl ca-certificates
+sudo systemctl enable --now postgresql
+node --version
+npm --version
+psql --version
+nginx -v
+
+CRM_ROOT=/opt/xiaotu-crm
+CRM_REPO='https://github.com/Cayden-D/XT_CRM.git'
+sudo install -d -m 755 -o "$(id -un)" -g "$(id -gn)" "$CRM_ROOT"
+install -d -m 755 "$CRM_ROOT/releases"
+install -d -m 700 "$CRM_ROOT/shared" "$CRM_ROOT/shared/backups"
+git clone "$CRM_REPO" "$CRM_ROOT/source"
+```
+
+仓库需要身份验证时，先为部署账号配置读取权限。使用 SSH 时，将 `CRM_REPO` 改为 `git@github.com:Cayden-D/XT_CRM.git`。
+
+首次部署且本机还没有应用数据库时，创建独立数据库用户和数据库。`createuser` 会提示设置密码。新库使用 `ai_crm`，因为迁移 `001` 和 `008` 直接引用这个库名。已有数据库核对账号能连接维护库 `postgres`、能应用目标库迁移，以及实际库名对应的历史迁移均已应用。
+
+```bash
+sudo -u postgres psql -Atc 'SHOW server_version;'
+sudo -u postgres createuser --pwprompt crm_app
+sudo -u postgres createdb --owner=crm_app --encoding=UTF8 --template=template0 ai_crm
+```
+
+### 2. 保存生产配置
+
+后端从工作目录读取 `.env.local`。把生产配置保存在共享目录，各发布目录通过链接读取。首次部署可用 `openssl rand -hex 32` 分别生成 JWT 签名密钥和 1688 令牌加密密钥。已有店铺授权应继续使用原令牌加密密钥，否则数据库中已保存的令牌无法解密。若从曾自动生成 `.1688-key.local` 的开发环境迁移，将该文件中的密钥填入生产配置的 `ALI1688_TOKEN_ENCRYPTION_KEY`。
+
+```bash
+if [ ! -f "$CRM_ROOT/shared/.env.local" ]; then
+    install -m 600 /dev/null "$CRM_ROOT/shared/.env.local"
+fi
+"${EDITOR:-nano}" "$CRM_ROOT/shared/.env.local"
+```
+
+```dotenv
+NODE_ENV=production
+API_HOST=127.0.0.1
+API_PORT=3001
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=ai_crm
+DB_USER=crm_app
+DB_PASSWORD='替换为数据库用户的密码'
+JWT_SECRET='替换为独立的随机密钥'
+CORS_ORIGIN=https://crm.example.com
+ALI1688_TOKEN_ENCRYPTION_KEY=替换为64位十六进制密钥
+```
+
+`CORS_ORIGIN` 填真实前端来源，末尾无 `/`。按启用的功能补齐下列配置，启用前填写真实值，未启用的可选项留在文件之外。
+
+| 功能 | 配置 |
+| --- | --- |
+| 1688 商品应用 | `ALI1688_APP_KEY`、`ALI1688_APP_SECRET`、`ALI1688_REDIRECT_URI` |
+| 1688 绩效应用 | `ALI1688_PERFORMANCE_APP_KEY`、`ALI1688_PERFORMANCE_APP_SECRET`、`ALI1688_PERFORMANCE_REDIRECT_URI`，三项一起配置，使用独立应用 |
+| 千问 | `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`，可选 `QWEN_DEFAULT_MODEL` |
+| 图片生成和私有存储 | `APIMART_API_KEY`、`OSS_REGION`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`，详见下文图片配置 |
+
+1688 回调地址应指向本 CRM 的前端页面，例如 `https://crm.example.com/oauth/1688` 和 `https://crm.example.com/oauth/1688-performance`。配置的来源和路径要与开放平台登记值完全一致。示例中的 Nginx 会把这些路径交给前端处理，前端再调用对应的授权完成 API。
+
+### 3. 构建目标版本
+
+首次部署和每次更新都构建到新的发布目录。`origin/main` 可换成已确认的发布标签或提交。`VITE_API_URL=''` 在**构建时**让前端使用同域 `/api/`，部署时仅修改后端环境变量不会更新前端地址。
+
+```bash
+set -euo pipefail
+CRM_ROOT=/opt/xiaotu-crm
+CRM_DOMAIN=crm.example.com  # 改成实际域名
+git -C "$CRM_ROOT/source" fetch origin --tags
+CRM_REV=$(git -C "$CRM_ROOT/source" rev-parse --verify 'origin/main^{commit}')
+CRM_RELEASE="$CRM_ROOT/releases/$(date +%Y%m%d-%H%M%S)-${CRM_REV:0:12}"
+mkdir "$CRM_RELEASE"
+git -C "$CRM_ROOT/source" archive "$CRM_REV" | tar -x -C "$CRM_RELEASE"
+cd "$CRM_RELEASE"
+ln -s "$CRM_ROOT/shared/.env.local" .env.local
+rm -rf -- dist dist-server  # 只清理刚解包的新发布目录中的旧构建产物
+npm ci --include=dev
+VITE_API_URL='' npm run build
+npm run build:api
+test -f dist/index.html
+test -f dist-server/server/index.js
+```
+
+Nginx 的站点根目录指向 `current/dist`。API 以整个发布目录为工作目录，从这里读取 `.env.local`、采集脚本和插件文件。`npm run build:api` 同时复制后端用到的首图模板素材。
+
+### 4. 应用数据库迁移
+
+以下命令用在新发布目录。数据库参数必须与生产 `.env.local` 一致。脚本按编号运行 `database/migrations` 下未登记的文件，已应用的迁移以 `schema_migrations` 为准。已有正式流量时按后文「更新线上版本」先停 API 并备份，再执行本步。
+
+```bash
+cd "$CRM_RELEASE"
+read -r -s -p '数据库密码: ' CRM_MIGRATION_PASSWORD
+printf '\n'
+CRM_DB_PASSWORD="$CRM_MIGRATION_PASSWORD" bash database/mac.sh 127.0.0.1 5432 crm_app ai_crm
+unset CRM_MIGRATION_PASSWORD
+psql -h 127.0.0.1 -U crm_app -d ai_crm \
+  -c 'SELECT filename, applied_at FROM schema_migrations ORDER BY filename DESC LIMIT 5;'
+```
+
+首次部署需要建立管理员。该命令会重置同邮箱账号的密码并授予超级管理员权限，常规更新跳过。
+
+```bash
+read -r -p '管理员邮箱: ' CRM_ADMIN_EMAIL_INPUT
+read -r -s -p '管理员密码（至少 12 位）: ' CRM_ADMIN_PASSWORD_INPUT
+printf '\n'
+CRM_ADMIN_EMAIL="$CRM_ADMIN_EMAIL_INPUT" CRM_ADMIN_PASSWORD="$CRM_ADMIN_PASSWORD_INPUT" npm run create-admin
+unset CRM_ADMIN_EMAIL_INPUT CRM_ADMIN_PASSWORD_INPUT
+```
+
+### 5. 首次启动 API 与 Nginx
+
+把首次发布指向 `current` 并配置 systemd 服务。`command -v node` 应返回部署账号和 systemd 可执行的绝对路径。采集队列、图片处理、绩效同步和复盘 worker 随 API 启动。
+
+```bash
+ln -s "$CRM_RELEASE" "$CRM_ROOT/current"
+CRM_NODE=$(command -v node)
+sudo tee /etc/systemd/system/xiaotu-crm.service >/dev/null <<EOF
+[Unit]
+Description=Xiaotu CRM API
+After=network.target
+
+[Service]
+User=$(id -un)
+WorkingDirectory=$CRM_ROOT/current
+ExecStart=$CRM_NODE $CRM_ROOT/current/dist-server/server/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now xiaotu-crm
+curl --fail-with-body --retry 5 --retry-connrefused http://127.0.0.1:3001/api/health
+```
+
+使用 Ubuntu 或 Debian 的 Nginx 站点目录配置反向代理。`proxy_pass` 这里结尾无 `/`，以保留 `/api/` 路径。上传请求的大小上限留足 Base64 编码空间，API 响应关闭缓冲以支持流式输出。[Nginx 反向代理文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass)
+
+```bash
+sudo tee /etc/nginx/sites-available/xiaotu-crm >/dev/null <<EOF
+server {
+    listen 80;
+    server_name $CRM_DOMAIN;
+    root $CRM_ROOT/current/dist;
+    index index.html;
+    client_max_body_size 16m;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 180s;
+        proxy_buffering off;
+    }
+
+    location /assets/ {
+        try_files \$uri =404;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
+sudo ln -s /etc/nginx/sites-available/xiaotu-crm /etc/nginx/sites-enabled/xiaotu-crm
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+# 首次配置证书时安装 Certbot 的 Nginx 插件
+sudo apt-get install -y certbot python3-certbot-nginx
+# DNS 已解析且 80/443 可访问时申请证书
+sudo certbot --nginx -d "$CRM_DOMAIN" --redirect
+curl --fail-with-body "https://$CRM_DOMAIN/api/health"
+```
+
+已有 HTTPS 站点可在现有 `server` 块里更新静态目录和代理。部署后确认健康接口返回 `status: "ok"`，再在浏览器验证登录、采集箱和店铺授权页。
+
+### 6. 更新线上版本与回退
+
+先完成第 3 步，在新目录把前后端构建好。再在维护窗口暂停接收上架任务，等正在向 1688 提交的任务结束，停服务并备份。以下示例数据库参数同样须按生产配置替换。
+
+```bash
+CRM_PREVIOUS=$(readlink -f "$CRM_ROOT/current")
+CRM_BACKUP="$CRM_ROOT/shared/backups/ai_crm-$(date +%Y%m%d-%H%M%S).dump"
+sudo systemctl stop xiaotu-crm
+pg_dump -h 127.0.0.1 -U crm_app -d ai_crm -Fc -f "$CRM_BACKUP"
+pg_restore --list "$CRM_BACKUP" >/dev/null
+printf '上个发布目录 %s\n数据库备份 %s\n' "$CRM_PREVIOUS" "$CRM_BACKUP"
+```
+
+完成第 4 步迁移并核对最新记录后，切换发布目录并启动。迁移有报错时保留日志和备份，核对实际库结构后再处理。健康检查验证 API 和数据库连接，迁移记录验证数据库版本，两者都要检查。
+
+```bash
+ln -sfn "$CRM_RELEASE" "$CRM_ROOT/current.next"
+mv -Tf -- "$CRM_ROOT/current.next" "$CRM_ROOT/current"
+sudo systemctl start xiaotu-crm
+curl --fail-with-body --retry 5 --retry-connrefused http://127.0.0.1:3001/api/health
+curl --fail-with-body "https://$CRM_DOMAIN/api/health"
+sudo journalctl -u xiaotu-crm -n 100 --no-pager
+```
+
+确认数据库与上一版兼容时，可用刚记录的发布目录回退代码。
+
+```bash
+test -f "$CRM_PREVIOUS/dist-server/server/index.js"
+sudo systemctl stop xiaotu-crm
+ln -sfn "$CRM_PREVIOUS" "$CRM_ROOT/current.next"
+mv -Tf -- "$CRM_ROOT/current.next" "$CRM_ROOT/current"
+sudo systemctl start xiaotu-crm
+curl --fail-with-body --retry 5 --retry-connrefused http://127.0.0.1:3001/api/health
+```
+
+如果迁移与旧代码不兼容，先把部署前备份恢复到独立数据库并验证，再切换旧版本和数据库连接。备份时间点之后的写入需单独核对。数据库备份和生产 `.env.local` 分开安全保管，恢复旧店铺授权时需要对应的令牌加密密钥。
+
+```bash
+sudo -u postgres createdb --owner=crm_app --encoding=UTF8 --template=template0 ai_crm_recovery
+pg_restore -h 127.0.0.1 -U crm_app -d ai_crm_recovery --exit-on-error --no-owner --no-privileges "$CRM_BACKUP"
+psql -h 127.0.0.1 -U crm_app -d ai_crm_recovery \
+  -c 'SELECT filename, applied_at FROM schema_migrations ORDER BY filename DESC LIMIT 5;'
+```
+
+常用排查命令：
+
+```bash
+sudo systemctl status xiaotu-crm --no-pager
+sudo journalctl -u xiaotu-crm -f
+sudo nginx -t
+sudo tail -n 100 /var/log/nginx/error.log
+# 修改生产 .env.local 后使配置生效
+sudo systemctl restart xiaotu-crm
+```
 
 ## 验证
 
