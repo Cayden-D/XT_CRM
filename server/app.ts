@@ -28,7 +28,15 @@ import { orderListRoutes } from './routes/1688-order-list.js'
 
 export async function buildApp() {
   const app = Fastify({
-    logger: { level: config.NODE_ENV === 'production' ? 'info' : 'warn' },
+    logger: {
+      level: config.NODE_ENV === 'production' ? 'info' : 'warn',
+      serializers: {
+        req(request) {
+          const url = request.url?.startsWith('/api/auth/1688/marketplace?') ? '/api/auth/1688/marketplace' : request.url
+          return { method: request.method, url, hostname: request.host, remoteAddress: request.ip, remotePort: request.socket?.remotePort }
+        },
+      },
+    },
     requestIdHeader: 'x-request-id',
     genReqId: () => randomUUID(),
   })

@@ -158,9 +158,9 @@ psql -h 127.0.0.1 -U crm_app -d ai_crm \
 
 **1688 登录与历史工作区迁移**
 
-1. 配置销途绩效应用的 `ALI1688_PERFORMANCE_APP_KEY`、`ALI1688_PERFORMANCE_APP_SECRET` 和 `ALI1688_PERFORMANCE_REDIRECT_URI`。回调地址应与 1688 开放平台中登记的值完全一致，使用与工作台同源的 HTTPS 前端地址（例如 `https://crm.example.com/`；也可以使用由前端接管的回调路径）。服务市场的应用使用入口应指向工作台地址。
+1. 配置销途绩效应用的 `ALI1688_PERFORMANCE_APP_KEY`、`ALI1688_PERFORMANCE_APP_SECRET` 和 `ALI1688_PERFORMANCE_REDIRECT_URI`。回调地址应与 1688 开放平台中登记的值完全一致，使用与工作台同源的 HTTPS 前端地址（例如 `https://crm.example.com/`；也可以使用由前端接管的回调路径）。服务市场的应用使用入口也应登记为这个地址。
 2. 更新已有实例时，应用迁移 `067_1688_sign_in.sql` 和 `069_1688_workspace_ownership.sql` 后、切换版本前，为仍需访问历史工作区的成员绑定已核实的 1688 `aliId`。已有绩效连接可从同一应用的 `integration_1688_perf_connections.ali_id` 核实店铺账号。仅在确认该 1688 账号有权使用指定历史成员的权限后操作；不要根据昵称或邮箱自动匹配，也不要把普通店铺成员绑定到超级管理员。
-3. 部署后从服务市场入口用真实 1688 店铺主账号验证一次：点击「使用 1688 账号授权登录」→ 平台同意授权 → 自动打开工作台。首次授权的新商家会自动创建独立工作区和绩效店铺连接。已有店铺在绑定历史成员且核对归属后，可回到原工作区。
+3. 部署后从服务市场「我的服务」用真实 1688 店铺主账号打开销途。平台托管授权完成后，应直接进入工作台。直接访问销途网址时，仍可使用页面上的 1688 授权按钮。首次授权的新商家会自动创建独立工作区和绩效店铺连接。已有店铺在绑定历史成员且核对归属后，可回到原工作区。
 
 ```bash
 npm run 1688:link-identity -- <历史用户UUID> <已核实的1688-aliId>
@@ -224,6 +224,20 @@ server {
     index index.html;
     client_max_body_size 16m;
 
+    # 1688 服务市场托管授权以 code 回跳。带 state 的站内授权继续由前端处理。
+    location = / {
+        set \$xiaotu_callback "\$arg_state:\$arg_code";
+        if (\$xiaotu_callback ~ "^:.+") { rewrite ^ /api/auth/1688/marketplace last; }
+        try_files /index.html =404;
+    }
+
+    location = /api/auth/1688/marketplace {
+        internal;
+        access_log off;
+        proxy_set_header Host \$host;
+        proxy_pass http://127.0.0.1:3001;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
@@ -255,6 +269,8 @@ curl --fail-with-body "https://$CRM_DOMAIN/api/health"
 ```
 
 已有 HTTPS 站点可在现有 `server` 块里更新静态目录和代理。部署后确认健康接口返回 `status: "ok"`，再在浏览器验证登录、采集箱和店铺授权页。
+
+线上实例启用服务市场自动登录时，把上面两个精确匹配的 `location` 块同步到 HTTPS 站点并执行 `nginx -t`，再重载 Nginx。示例对应登记在 1688 的入口 `https://域名/`，其他入口路径应使用相应的精确匹配。保留平台导航的 `Referer` 和 `Sec-Fetch-*` 请求头，让后端区分真实的 1688 回跳与普通网址访问。不要把授权码写入代理访问日志。
 
 ### 6. 更新线上版本与回退
 

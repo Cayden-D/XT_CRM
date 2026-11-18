@@ -129,6 +129,33 @@ try {
   assert.equal((await get('/api/auth/me')).statusCode, 401, 'an unlinked browser session immediately loses access')
   await db.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [key, shopB, liveLink.user_id])
 
+  // The market sends a code-only navigation. Match its browser context before contacting 1688.
+  const managed = (url: string, extra: Record<string, string> = {}) =>
+    app.inject({ method: 'GET', url, headers: {
+      host: new URL(redirect).host, referer: 'https://fuwu.1688.com/', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe', ...extra,
+    } })
+  const marketPath = '/api/auth/1688/marketplace?code=same'
+  const beforeMarket = exchanges
+  assert.equal((await managed(marketPath, { referer: 'https://fuwu.1688.com.example.test/' })).statusCode, 403)
+  assert.equal((await managed(marketPath, { referer: '' })).statusCode, 403)
+  assert.equal((await managed(marketPath, { 'sec-fetch-mode': 'cors' })).statusCode, 403)
+  assert.equal((await managed(marketPath, { host: 'other.example.test' })).statusCode, 400)
+  assert.equal((await managed(`${marketPath}&state=login_wrong`)).statusCode, 400)
+  assert.equal((await managed(`${marketPath}&code=second`)).statusCode, 400)
+  assert.equal(exchanges, beforeMarket)
+  const launch = await managed(marketPath)
+  assert.equal(launch.statusCode, 200, launch.body)
+  assert.equal(exchanges, beforeMarket + 1)
+  assert.equal(launch.headers['cache-control'], 'no-store')
+  assert.equal(launch.headers['referrer-policy'], 'no-referrer')
+  assert.ok(launch.headers['content-security-policy'])
+  assert.match(launch.body, /location.replace\('\/#\/home\/overview'\)/)
+  assert.doesNotMatch(launch.body, /platform-access|platform-refresh|signin-test-secret|code=same/)
+  const marketToken = launch.body.match(/sessionStorage.setItem\("ai_crm_access_token", "([\w.-]+)"\)/)?.[1]
+  assert.ok(marketToken)
+  const marketUser = (await get('/api/auth/me', marketToken)).json().user
+  assert.deepEqual([marketUser.sub, marketUser.tenantId], [first.user.sub, first.user.tenantId])
+
   const legacyTenant = (await db.query("INSERT INTO tenants(name,slug) VALUES('历史店铺',$1) RETURNING id", [`legacy-${key}`])).rows[0].id
   tenantIds.add(legacyTenant)
   const legacy = (await db.query("INSERT INTO users(tenant_id,email,display_name,password_hash)VALUES($1,'legacy@integration.local','原管理员','unused')RETURNING id", [legacyTenant])).rows[0].id
