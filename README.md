@@ -270,7 +270,7 @@ curl --fail-with-body "https://$CRM_DOMAIN/api/health"
 
 已有 HTTPS 站点可在现有 `server` 块里更新静态目录和代理。部署后确认健康接口返回 `status: "ok"`，再在浏览器验证登录、采集箱和店铺授权页。
 
-线上实例启用服务市场自动登录时，把上面两个精确匹配的 `location` 块同步到 HTTPS 站点并执行 `nginx -t`，再重载 Nginx。示例对应登记在 1688 的入口 `https://域名/`，其他入口路径应使用相应的精确匹配。保留平台导航的 `Referer` 和 `Sec-Fetch-*` 请求头，让后端区分真实的 1688 回跳与普通网址访问。不要把授权码写入代理访问日志。
+线上实例启用服务市场自动登录时，把上面两个精确匹配的 `location` 块同步到 HTTPS 站点并执行 `nginx -t`，再重载 Nginx。示例对应登记在 1688 的入口 `https://域名/`，其他入口路径应使用相应的精确匹配。已有上述配置的站点只需更新 API。服务市场内嵌回跳可省略 `Referer`。浏览器会按登录页的 `Content-Security-Policy` 检查嵌入来源，随后向同源的 `/api/auth/1688/marketplace/complete` 提交一次性凭据。请保留后端的内容安全策略响应头和浏览器的 `Origin` 请求头，且避免记录回跳授权码。
 
 ### 6. 更新线上版本与回退
 

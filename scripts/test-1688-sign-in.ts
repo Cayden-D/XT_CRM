@@ -129,31 +129,43 @@ try {
   assert.equal((await get('/api/auth/me')).statusCode, 401, 'an unlinked browser session immediately loses access')
   await db.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [key, shopB, liveLink.user_id])
 
-  // The market sends a code-only navigation. Match its browser context before contacting 1688.
+  // A code-only launch may omit Referer inside the marketplace frame. GET issues a handoff only.
   const managed = (url: string, extra: Record<string, string> = {}) =>
     app.inject({ method: 'GET', url, headers: {
-      host: new URL(redirect).host, referer: 'https://fuwu.1688.com/', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe', ...extra,
+      host: new URL(redirect).host, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe', ...extra,
     } })
   const marketPath = '/api/auth/1688/marketplace?code=same'
   const beforeMarket = exchanges
-  assert.equal((await managed(marketPath, { referer: 'https://fuwu.1688.com.example.test/' })).statusCode, 403)
-  assert.equal((await managed(marketPath, { referer: '' })).statusCode, 403)
+  assert.equal((await managed(marketPath, { 'sec-fetch-dest': 'document' })).statusCode, 403)
+  assert.equal((await managed(marketPath, {
+    referer: 'https://fuwu.1688.com.example.test/', 'sec-fetch-dest': 'document',
+  })).statusCode, 403)
   assert.equal((await managed(marketPath, { 'sec-fetch-mode': 'cors' })).statusCode, 403)
   assert.equal((await managed(marketPath, { host: 'other.example.test' })).statusCode, 400)
   assert.equal((await managed(`${marketPath}&state=login_wrong`)).statusCode, 400)
   assert.equal((await managed(`${marketPath}&code=second`)).statusCode, 400)
-  assert.equal(exchanges, beforeMarket)
   const launch = await managed(marketPath)
   assert.equal(launch.statusCode, 200, launch.body)
-  assert.equal(exchanges, beforeMarket + 1)
+  assert.equal(exchanges, beforeMarket, 'navigation alone cannot exchange a code')
   assert.equal(launch.headers['cache-control'], 'no-store')
   assert.equal(launch.headers['referrer-policy'], 'no-referrer')
-  assert.ok(launch.headers['content-security-policy'])
-  assert.match(launch.body, /location.replace\('\/#\/home\/overview'\)/)
-  assert.doesNotMatch(launch.body, /platform-access|platform-refresh|signin-test-secret|code=same/)
-  const marketToken = launch.body.match(/sessionStorage.setItem\("ai_crm_access_token", "([\w.-]+)"\)/)?.[1]
-  assert.ok(marketToken)
-  const marketUser = (await get('/api/auth/me', marketToken)).json().user
+  assert.match(String(launch.headers['content-security-policy']), /frame-ancestors https:\/\/\*\.1688\.com/)
+  assert.match(launch.body, /window.top === window && !handoff.allowTopLevel/)
+  assert.doesNotMatch(launch.body, /platform-access|platform-refresh|signin-test-secret/)
+  const handoffLiteral = launch.body.match(/const handoff = (\{[^\n]+\});/)?.[1]
+  assert.ok(handoffLiteral)
+  const { code: marketCode, ticket, allowTopLevel } = JSON.parse(handoffLiteral)
+  assert.equal(allowTopLevel, false)
+  const redeemMarket = (payload: object, origin = new URL(redirect).origin) =>
+    app.inject({ method: 'POST', url: '/api/auth/1688/marketplace/complete', headers: { origin }, payload })
+  assert.equal((await redeemMarket({ code: marketCode, ticket }, 'https://other.example.test')).statusCode, 403)
+  assert.equal((await redeemMarket({ code: 'second', ticket })).statusCode, 409)
+  assert.equal(exchanges, beforeMarket)
+  const marketResults = await Promise.all([redeemMarket({ code: marketCode, ticket }), redeemMarket({ code: marketCode, ticket })])
+  assert.deepEqual(marketResults.map(r => r.statusCode).sort(), [200, 409])
+  const marketLogin = signedIn(marketResults.find(r => r.statusCode === 200)!)
+  assert.equal(exchanges, beforeMarket + 1)
+  const marketUser = (await get('/api/auth/me', marketLogin.token)).json().user
   assert.deepEqual([marketUser.sub, marketUser.tenantId], [first.user.sub, first.user.tenantId])
 
   const legacyTenant = (await db.query("INSERT INTO tenants(name,slug) VALUES('历史店铺',$1) RETURNING id", [`legacy-${key}`])).rows[0].id
