@@ -18,7 +18,7 @@ export const retryCollectedProducts=(collectedProductIds:string[])=>request<{dat
 export const getAgentJob=(id:string)=>request<{data:AgentJob|null}>(`${base}/drafts/${id}/agent-job`)
 export const runPublishingAgent=(id:string,revision:number)=>request<{data:AgentJob}>(`${base}/drafts/${id}/agent`,{method:'POST',body:JSON.stringify({revision})})
 export const cancelAgentJob=(id:string)=>request(`${base}/agent-jobs/${id}/cancel`,{method:'POST'})
-export type AgentImagePreview={id:string;mode:'generate'|'edit';model:string;prompt:string;url:string;storage?:'oss'|'temporary';findings:Array<{url:string;readable:boolean;watermark:boolean;rightsRisk:boolean;uncertain:boolean;reason:string}>;status:'preview'|'applying'|'applied';photo_url:string|null;created_at:string;expires_at:string;risky?:boolean}
+export type AgentImagePreview={id:string;mode:'generate'|'edit';prompt:string;url:string;storage?:'oss'|'temporary';findings:Array<{url:string;readable:boolean;watermark:boolean;rightsRisk:boolean;uncertain:boolean;reason:string}>;status:'preview'|'applying'|'applied';photo_url:string|null;created_at:string;expires_at:string;risky?:boolean}
 export const getAgentImages=(draftId:string)=>request<{data:AgentImagePreview[]}>(`${base}/drafts/${draftId}/agent-images`)
 export const generateAgentImage=(draftId:string,input:{revision:number;mode:'generate'|'edit';prompt:string;sourceIndex?:number;confirmed:true})=>post<{data:AgentImagePreview}>(`/drafts/${draftId}/agent-images`,input)
 export const applyAgentImage=(draftId:string,imageId:string,input:{revision:number;albumId:string;placement:'replace'|'append';sourceIndex?:number;confirmed:true})=>post<{data:{draft:PublishDraft;photoUrl:string}}>(`/drafts/${draftId}/agent-images/${imageId}/apply`,input)

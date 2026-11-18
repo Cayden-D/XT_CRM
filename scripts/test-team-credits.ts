@@ -35,7 +35,7 @@ try {
     return id
   }
   const owner = await user('超管', 'super_admin'), manager = await user('主管甲', 'sales_manager'), rep = await user('业务员甲', 'sales_rep', manager)
-  const token = (sub: string, permissions: string[]) => app.jwt.sign({ sub, tenantId: tenant, email: 't', displayName: 't', roles: [], permissions })
+  const token = (sub: string, permissions: string[]) => app.jwt.sign({ sub, tenantId: tenant, email: 't', displayName: 't', roles: sub === owner ? ['super_admin'] : [], permissions })
   const call = (method: 'GET' | 'PATCH', url: string, sub: string, permissions: string[], payload?: object) => app.inject({ method, url, headers: { authorization: `Bearer ${token(sub, permissions)}` }, payload })
 
   // A sub-account belongs to the team of the account that opened it; a new team has no credits and the default models.
@@ -48,14 +48,28 @@ try {
   const listed = await call('GET', '/api/users/teams', owner, ['*'])
   assert.equal(listed.statusCode, 200, listed.body)
   assert.deepEqual(listed.json().data.map((t: { name: string }) => t.name).sort(), ['主管甲', '超管'].sort(), 'sub-accounts are members, not teams')
-  assert.deepEqual(listed.json().imageModels.map((m: { id: string }) => m.id), ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2'])
+  assert.ok(listed.json().textModels.includes('qwen3.7-plus'))
+  assert.deepEqual(listed.json().imagePlans.map((p: { id: string }) => p.id), ['image-a', 'image-b', 'image-c'])
+  assert.doesNotMatch(listed.body, /gpt-image|apimart/i)
+  const delegated = (await call('GET', '/api/users/teams', manager, ['user:manage'])).json()
+  assert.equal(delegated.imagePlans, undefined)
+  assert.equal(delegated.data[0].imagePlan, undefined)
   assert.equal(listed.json().data.find((t: { name: string }) => t.name === '主管甲').members, 1)
-  const changed = await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { textModel: 'qwen3.7-plus', imageModel: 'gpt-image-2', delta: 25, note: '首充' })
+  const modelsPath = `/api/users/teams/${manager}/models`
+  assert.equal((await call('PATCH', modelsPath, manager, ['user:manage'], { imagePlan: 'image-c' })).statusCode, 403)
+  assert.equal((await call('PATCH', modelsPath, owner, ['*'], { imagePlan: 'gpt-image-2' })).statusCode, 400)
+  const models = await call('PATCH', modelsPath, owner, ['*'], { textModel: 'qwen3.7-plus', imagePlan: 'image-c' })
+  assert.equal(models.statusCode, 200, models.body)
+  assert.equal((await teams.teamOf(tenant, rep)).imageModel, 'gpt-image-2')
+
+  // Verify a credit adjustment preserves the stored service assignments.
+  assert.equal((await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { imageModel: 'gpt-image-2.5-flare', delta: 99 })).statusCode, 400)
+  const changed = await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { delta: 25, note: '首充' })
   assert.equal(changed.statusCode, 200, changed.body)
-  assert.deepEqual([changed.json().data.credits, changed.json().data.textModel, changed.json().data.imageModel], [25, 'qwen3.7-plus', 'gpt-image-2'])
+  assert.deepEqual(changed.json().data, { ownerId: manager, credits: 25 })
   assert.equal((await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { delta: -30 })).statusCode, 400, 'never below zero')
   assert.equal((await call('PATCH', `/api/users/teams/${rep}`, owner, ['*'], { delta: 5 })).statusCode, 404, 'a sub-account is not a team')
-  assert.equal((await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { textModel: 'gpt-4' })).statusCode, 400)
+  assert.equal((await call('PATCH', `/api/users/teams/${manager}`, owner, ['*'], { textModel: 'qwen3.7-flash', delta: 99 })).statusCode, 400)
   const own = await call('GET', '/api/users/team', rep, [])
   assert.deepEqual(own.json().data, { name: '主管甲', unlimited: false, credits: 25, perListing: 10 }, 'members see their team credits')
 
@@ -118,7 +132,7 @@ try {
   assert.equal(last.page, 2)
   assert.deepEqual(last.ledger.map((row: any) => [row.reason, row.product_title, row.note]), [['publish', '上架商品标题', null], ['adjust', null, '首充']])
   const otherAdmin = await user('管理员乙', 'admin')
-  await teams.updateTeam(tenant, otherAdmin, owner, { delta: 100, note: '管理员乙的额度' })
+  await teams.adjustTeamCredits(tenant, otherAdmin, owner, { delta: 100, note: '管理员乙的额度' })
   const other = (await call('GET', creditPath, otherAdmin, ['integration:*'])).json().data
   assert.deepEqual([other.name, other.credits, other.total, other.ledger[0].note], ['管理员乙', 100, 1, '管理员乙的额度'])
   const root = (await call('GET', creditPath, owner, ['*'])).json().data

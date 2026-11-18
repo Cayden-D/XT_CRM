@@ -111,7 +111,7 @@ try {
   await db.query("INSERT INTO brands(tenant_id,connection_id,name,is_default,rights_confirmed_at) VALUES($1,$2,'拓洋',true,now())", [tenant, connection.id])
   await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [connection.id, tenant])
-  const imageSettings = (on: boolean) => db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,enabled_at,revision) VALUES($1,$2,'gpt-image-2.5-flare','medium',now(),1)
+  const imageSettings = (on: boolean) => db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,suite_resolution,enabled_at,revision) VALUES($1,$2,'gpt-image-2.5-flare','high','2k',now(),1)
     ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace`, [tenant, on])
   const collect = async (shopId?: string) => {
     const source = (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,currency,price_min,price_max,attributes,source_category_id,collected_by,raw_data,target_connection_id,use_default_listing_shop)
@@ -158,6 +158,8 @@ try {
   const generated = (await db.query("SELECT operation,options FROM image_assets WHERE collected_product_id=$1 ORDER BY operation", [sourceId])).rows
   assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
+  assert.ok(generated.every(r => r.options.quality === 'high' && r.options.resolution === '2k'),
+    'new queue images use the workspace generation settings')
   assert.deepEqual(generated.filter(r => r.options.heroFrame === 'tuoyang-v1').map(r => r.operation), ['suite_hero'])
   assert.equal(generated.find(r => r.operation === 'suite_hero').options.heroShopId, connection.id)
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])

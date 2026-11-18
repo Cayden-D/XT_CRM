@@ -11,7 +11,7 @@ import { applyCustomHeroFrame, applyHeroReferenceFrame, CUSTOM_HERO_FRAME, HERO_
 import { heroDesignForShop, type HeroFrame, type ShopHeroCopy } from './shop-hero-templates.js'
 import { imageSuiteFacts } from './image-suite-facts.js'
 import { generateQwenText, type QwenModel } from '../llm/qwen.js'
-import { apimartConfigured, getImageTask, resultUrl, submitImageTask, type SuiteModel, type SuiteQuality } from '../llm/apimart-image.js'
+import { apimartConfigured, getImageTask, IMAGE_OUTPUT_DEFAULTS, resultUrl, submitImageTask, type ImageModelId, type ImageOutputSettings } from '../llm/apimart-image.js'
 
 /**
  * Image workshop. Two rules hold everywhere:
@@ -407,13 +407,13 @@ async function step(asset: Asset) {
     if (asset.status === 'pending') {
       if (asset.options.brand?.logo) await brandLogoOf(asset) // before anything is paid for
       const refs = await Promise.all(asset.reference_urls.map(r => referenceUrl(asset.tenant_id, r)))
-      const taskId = await submitImageTask({ model: asset.model as SuiteModel, prompt: asset.prompt!, imageUrls: refs, size: asset.options.size ?? '1:1', resolution: asset.options.resolution ?? '1k', quality: asset.options.quality ?? 'medium' })
+      const taskId = await submitImageTask({ model: asset.model as ImageModelId, prompt: asset.prompt!, imageUrls: refs, size: asset.options.size ?? '1:1', resolution: asset.options.resolution ?? IMAGE_OUTPUT_DEFAULTS.resolution, quality: asset.options.quality ?? IMAGE_OUTPUT_DEFAULTS.quality })
       await db.query("UPDATE image_assets SET status='processing',task_id=$2,next_poll_at=now()+interval '8 seconds',lease_until=NULL,error=NULL,updated_at=now() WHERE id=$1", [asset.id, taskId])
       return
     }
     const task = await getImageTask(asset.task_id!)
     if (task.status === 'completed') { await complete(asset, await download(resultUrl(task.url!), 25_000_000, resultUrl), task.cost); return }
-    if (task.status === 'failed') { await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, `生成失败：${task.error}`]); return }
+    if (task.status === 'failed') { await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, task.error ?? '图片生成失败，请重试。']); return }
     if (Date.now() - new Date(asset.created_at).getTime() > 20 * 60_000) { await db.query("UPDATE image_assets SET status='failed',error='生成超时（超过 20 分钟），请重试。',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id]); return }
     await db.query("UPDATE image_assets SET next_poll_at=now()+interval '4 seconds',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id])
   } catch (error) { await fail(asset, error) }
@@ -431,18 +431,18 @@ async function claim(limit: number) {
  */
 export async function screenNextProduct() {
   if (!apimartConfigured()) return false
-  const p = (await db.query(`SELECT cp.id,cp.tenant_id,s.suite_model,s.suite_quality FROM collected_products cp JOIN image_workshop_settings s ON s.tenant_id=cp.tenant_id AND s.auto_replace
+  const p = (await db.query(`SELECT cp.id,cp.tenant_id,s.suite_model AS model,s.suite_quality AS quality,s.suite_resolution AS resolution FROM collected_products cp JOIN image_workshop_settings s ON s.tenant_id=cp.tenant_id AND s.auto_replace
     WHERE cp.images_screened_at IS NULL AND cp.collected_at>=s.enabled_at
       AND NOT EXISTS(SELECT 1 FROM integration_1688_collection_queue_jobs j WHERE j.collected_product_id=cp.id)
     ORDER BY cp.collected_at LIMIT 1 FOR UPDATE OF cp SKIP LOCKED`)).rows[0]
   if (!p) return false
   await db.query('UPDATE collected_products SET images_screened_at=now() WHERE id=$1', [p.id])
-  await queueReplacements(p.tenant_id, p.id, null, 'agent', p.suite_model, p.suite_quality)
+  await queueReplacements(p.tenant_id, p.id, null, 'agent', p)
   return true
 }
 
 /** Returns how many flagged main pictures there are and how many replacements were queued. */
-export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', model: SuiteModel, quality: SuiteQuality, connectionId?: string | null) {
+export async function queueReplacements(tenantId: string, productId: string, actorId: string | null, trigger: 'manual' | 'agent', { model, quality, resolution }: { model: ImageModelId } & ImageOutputSettings, connectionId?: string | null) {
   const facts = await productFacts(tenantId, productId)
   const target = connectionId === undefined ? facts.heroShopId : connectionId
   await checkBrandShop(tenantId, target)
@@ -471,7 +471,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
     const type = LISTING_MAIN_TYPES[Math.min(index, LISTING_MAIN_TYPES.length - 1)] // by 1688 position: 首图 first, white fifth
     const { prompt, options } = suiteDesign(type, facts, brand)
     await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,replaces_index,options,prompt,trigger,created_by)
-      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', resolution: '1k', quality, listingConnectionId: target, ...options }), prompt, trigger, actorId])
+      VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10,$11)`, [tenantId, productId, batch, type, model, JSON.stringify(clean.slice(0, 4)), index, JSON.stringify({ size: '1:1', quality, resolution, listingConnectionId: target, ...options }), prompt, trigger, actorId])
     queued++
   }
   return { flagged: bad.length, queued, clean: clean.length }

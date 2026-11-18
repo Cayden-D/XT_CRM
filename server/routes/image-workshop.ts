@@ -3,7 +3,7 @@ import { teamOf } from '../integrations/teams.js'
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
-import { requirePermission } from '../auth.js'
+import { requirePermission, requireSuperAdmin } from '../auth.js'
 import { config } from '../config.js'
 import { db } from '../db.js'
 import { IntegrationError } from '../integrations/1688.js'
@@ -11,8 +11,9 @@ import {
   cachedFindings, checkPrompt, download, editPrompt, flagged, imageUrl, productFacts, productImages, queueReplacements, readImage, removeImage,
   resizeImage, screen, storeImage, detailNames, HERO_BADGES, heroCopy, MAX_HERO_BADGES, type SuiteFacts, suiteDesign, suiteNames, SUITE_TYPES, toPng, usableSource,
 } from '../integrations/image-workshop.js'
-import { apimartConfigured, SUITE_MODELS, SUITE_QUALITIES } from '../llm/apimart-image.js'
-import { IMAGE_MODELS } from '../llm/qwen-image.js'
+import { apimartConfigured } from '../llm/apimart-image.js'
+import { imageGenerationSettings, imagePlanOf, imagePlanOptions, imagePlans } from '../integrations/image-generation-settings.js'
+import { imageServiceMessage } from '../integrations/image-service-message.js'
 import { brandById, checkBrandShop, defaultBrand, ownBrandNames } from '../integrations/brands.js'
 import { imageAlbumRoutes } from './image-album.js'
 import { brandRoutes } from './image-brands.js'
@@ -30,14 +31,14 @@ const audit = (request: FastifyRequest, action: string, entityId: string, data: 
   [tenant(request), request.authUser.sub, action, entityId, JSON.stringify(data), request.id])
 
 export async function present(row: Record<string, any>) {
-  const { oss_key, tenant_id, task_id, lease_until, next_poll_at, reference_urls, ...rest } = row
-  const { heroFrameKey: _heroFrameKey, ...options } = rest.options ?? {}
-  return { ...rest, options, label: operationNames[row.operation] ?? row.operation, url: oss_key && row.status === 'completed' ? await imageUrl(oss_key, tenant_id) : null, risky: row.status === 'completed' && (!row.findings || flagged(row.findings)) }
+  const { oss_key, tenant_id, task_id, lease_until, next_poll_at, reference_urls, model, provider, error, ...rest } = row
+  const { heroFrameKey: _heroFrameKey, quality, resolution, ...options } = rest.options ?? {}
+  return { ...rest, options, error: imageServiceMessage(error ?? null), canRetry: row.status === 'failed' && provider !== 'local', label: operationNames[row.operation] ?? row.operation, url: oss_key && row.status === 'completed' ? await imageUrl(oss_key, tenant_id) : null, risky: row.status === 'completed' && (!row.findings || flagged(row.findings)) }
 }
 export const assetColumns = 'id,tenant_id,collected_product_id,batch_id,operation,provider,model,source_url,reference_urls,replaces_index,options,status,task_id,lease_until,next_poll_at,oss_key,width,height,bytes,findings,error,cost,trigger,photo_status,photo_url,photo_connection_id,photo_album_id,photo_uploaded_at,applied_to,applied_at,created_at,updated_at'
 async function settingsOf(tenantId: string) {
-  return (await db.query('SELECT auto_replace,suite_model,suite_quality,hero_badges,enabled_at,revision,updated_at FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
-    ?? { auto_replace: false, suite_model: 'gpt-image-2.5-flare', suite_quality: 'medium', hero_badges: HERO_BADGES, enabled_at: null, revision: 0, updated_at: null }
+  return (await db.query('SELECT auto_replace,hero_badges,enabled_at,revision,updated_at FROM image_workshop_settings WHERE tenant_id=$1', [tenantId])).rows[0]
+    ?? { auto_replace: false, hero_badges: HERO_BADGES, enabled_at: null, revision: 0, updated_at: null }
 }
 const RATIOS = [[1, 1], [4, 3], [3, 4], [3, 2], [2, 3]] as const
 const nearestRatio = (size: { width: number; height: number } | null) => {
@@ -67,27 +68,61 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
   })
   app.get('/settings', { preHandler: requirePermission('collection:read') }, async request => ({
     data: await settingsOf(tenant(request)),
-    services: { qwen: Boolean(config.DASHSCOPE_API_KEY), apimart: apimartConfigured(), oss: Boolean(config.OSS_BUCKET && config.OSS_ACCESS_KEY_ID) },
+    services: { screening: Boolean(config.DASHSCOPE_API_KEY), generation: apimartConfigured(), oss: Boolean(config.OSS_BUCKET && config.OSS_ACCESS_KEY_ID) },
   }))
 
+  app.get('/generation-settings', { preHandler: requireSuperAdmin }, async request => {
+    const { model, ...settings } = await imageGenerationSettings(tenant(request))
+    return { data: { ...settings, replacementPlan: imagePlanOf(model) }, plans: imagePlanOptions.filter(plan => plan.id !== 'image-c') }
+  })
+
+  app.put('/generation-settings', { preHandler: requireSuperAdmin }, async request => {
+    const input = z.object({
+      replacementPlan: z.enum(['image-a', 'image-b']),
+      quality: z.enum(['low', 'medium', 'high', 'xhigh']),
+      resolution: z.enum(['1k', '2k']),
+      revision: z.number().int().nonnegative(),
+    }).strict().parse(request.body)
+    const { replacementPlan, quality, resolution, revision } = input
+    const saved = (await db.query<{ revision: number }>(`
+      WITH saved AS (
+        INSERT INTO image_workshop_settings(tenant_id,suite_model,suite_quality,suite_resolution,updated_by)
+        SELECT $1::uuid,$2::text,$3::text,$4::text,$5::uuid
+        WHERE $6::int=0 OR EXISTS(SELECT 1 FROM image_workshop_settings WHERE tenant_id=$1)
+        ON CONFLICT(tenant_id) DO UPDATE SET suite_model=excluded.suite_model,suite_quality=excluded.suite_quality,
+          suite_resolution=excluded.suite_resolution,revision=image_workshop_settings.revision+1,updated_by=excluded.updated_by,updated_at=now()
+        WHERE image_workshop_settings.revision=$6 RETURNING revision
+      ), audited AS (
+        INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)
+        SELECT $1,$5,'image.generation.settings.update','image_asset',$1,$7,$8 FROM saved
+      )
+      SELECT revision FROM saved`,
+    [tenant(request), imagePlans[replacementPlan].model, quality, resolution, request.authUser.sub, revision,
+      JSON.stringify({ replacementPlan, quality, resolution }), request.id])).rows[0]
+    if (!saved) throw new IntegrationError('SETTINGS_CONFLICT', '设置已被他人修改，请刷新后重试。', 409)
+    return { data: { replacementPlan, quality, resolution, revision: saved.revision } }
+  })
+
   app.put('/settings', { preHandler: requirePermission('integration:manage') }, async request => {
-    const input = z.object({ autoReplace: z.boolean(), suiteModel: z.enum(SUITE_MODELS).optional(), suiteQuality: z.enum(SUITE_QUALITIES),
+    const input = z.object({ autoReplace: z.boolean(),
       // 1688 首图 core terms: each short and plain text, at most MAX_HERO_BADGES, no duplicates.
       heroBadges: z.array(z.string().trim().min(1, '优势不能为空。').max(12, '每条优势最多 12 个字。').regex(/^[^<>\n\r]+$/)).max(MAX_HERO_BADGES, `首图优势最多 ${MAX_HERO_BADGES} 条。`).refine(v => new Set(v).size === v.length, '首图优势有重复。').optional(),
       revision: z.number().int().min(0), confirmed: z.boolean().optional() }).strict().parse(request.body)
     // Consent is asked when switching on, not again for every later change while it stays on.
     const current = await settingsOf(tenant(request))
-    if (input.autoReplace && !current.auto_replace && !input.confirmed) throw new IntegrationError('CONFIRM_REQUIRED', '开启前请确认图片资料发送至模型服务并产生费用。', 400)
-    if (input.autoReplace && !apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY。', 503)
+    if (input.autoReplace && !current.auto_replace && !input.confirmed) throw new IntegrationError('CONFIRM_REQUIRED', '开启前请确认图片资料发送至图片生成服务并产生费用。', 400)
+    if (input.autoReplace && !apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '图片生成服务暂不可用，请联系管理员。', 503)
     for (const badge of input.heroBadges ?? []) checkPrompt(badge)
-    const saved = (await db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,suite_model,suite_quality,hero_badges,enabled_at,revision,updated_by)
-      VALUES($1,$2,$3,$4,coalesce($7::jsonb,$8::jsonb),CASE WHEN $2 THEN now() END,1,$6) ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace,suite_model=excluded.suite_model,suite_quality=excluded.suite_quality,
-      hero_badges=CASE WHEN $7::jsonb IS NULL THEN image_workshop_settings.hero_badges ELSE excluded.hero_badges END,
+    const saved = (await db.query(`INSERT INTO image_workshop_settings(tenant_id,auto_replace,hero_badges,enabled_at,revision,updated_by)
+      VALUES($1,$2,coalesce($5::jsonb,$6::jsonb),CASE WHEN $2 THEN now() END,1,$4)
+      ON CONFLICT(tenant_id) DO UPDATE SET auto_replace=excluded.auto_replace,
+      hero_badges=coalesce($5::jsonb,image_workshop_settings.hero_badges),
       enabled_at=CASE WHEN excluded.auto_replace AND NOT image_workshop_settings.auto_replace THEN now() WHEN excluded.auto_replace THEN image_workshop_settings.enabled_at END,
-      revision=image_workshop_settings.revision+1,updated_by=excluded.updated_by,updated_at=now() WHERE image_workshop_settings.revision=$5 RETURNING tenant_id`,
-    [tenant(request), input.autoReplace, input.suiteModel ?? current.suite_model, input.suiteQuality, input.revision, request.authUser.sub, input.heroBadges ? JSON.stringify(input.heroBadges) : null, JSON.stringify(HERO_BADGES)])).rows[0]
+      revision=image_workshop_settings.revision+1,updated_by=excluded.updated_by,updated_at=now()
+      WHERE image_workshop_settings.revision=$3 RETURNING tenant_id`,
+    [tenant(request), input.autoReplace, input.revision, request.authUser.sub, input.heroBadges ? JSON.stringify(input.heroBadges) : null, JSON.stringify(HERO_BADGES)])).rows[0]
     if (!saved) throw new IntegrationError('SETTINGS_CONFLICT', '设置已被他人修改，请刷新后重试。', 409)
-    await audit(request, 'image.settings.update', randomUUID(), { autoReplace: input.autoReplace, suiteModel: input.suiteModel, suiteQuality: input.suiteQuality, heroBadges: input.heroBadges })
+    await audit(request, 'image.settings.update', randomUUID(), { autoReplace: input.autoReplace, heroBadges: input.heroBadges })
     return { data: await settingsOf(tenant(request)) }
   })
 
@@ -128,11 +163,11 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
   app.post('/products/:id/replace-flagged', { preHandler: requirePermission('collection:create') }, async request => {
     const { id } = idParams.parse(request.params)
     const { connectionId } = z.object({ connectionId: z.string().uuid().nullable().optional() }).strict().parse(request.body ?? {})
-    const settings = await settingsOf(tenant(request))
-    const result = await queueReplacements(tenant(request), id, request.authUser.sub, 'manual', settings.suite_model, settings.suite_quality, connectionId)
+    const settings = await imageGenerationSettings(tenant(request))
+    const result = await queueReplacements(tenant(request), id, request.authUser.sub, 'manual', settings, connectionId)
     if (!result.flagged) return { data: { ...result, message: '主图中没有被标记的图片。' } }
     if (!result.clean) throw new IntegrationError('NO_CLEAN_REFERENCE', '全部主图都带有明确水印或品牌 Logo，没有可用作参考的干净图片；请上传有使用权的实拍图后用「电商套图」生成。', 409)
-    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY。', 503)
+    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '图片生成服务暂不可用，请联系管理员。', 503)
     if (result.queued) await audit(request, 'image.replace.queue', id, result)
     return { data: { ...result, message: result.queued ? `已为 ${result.queued} 张被标记主图排队生成替代图` : '替代图已在生成或已生成。' } }
   })
@@ -148,11 +183,11 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
     return { data: await present(row) }
   })
 
-  // 白底图 / 换背景 (GPT-Image with the source as reference and the team's image model, run by the worker) and 改尺寸 (local, immediate).
+  // 白底图 / 换背景 (queued with the source as reference) and 改尺寸 (local, immediate).
   app.post('/edits', { preHandler: requirePermission('collection:create') }, async request => {
     const input = z.object({
       source, operation: z.enum(['white_bg', 'background', 'resize']), collectedProductId: z.string().uuid().optional(),
-      scene: z.string().trim().min(2).max(300).optional(), model: z.string().optional(), // ignored: the team's image model is used
+      scene: z.string().trim().min(2).max(300).optional(),
       preset: z.enum(Object.keys(RESIZE_PRESETS) as [keyof typeof RESIZE_PRESETS]).optional(), width: z.number().int().min(100).max(4000).optional(), height: z.number().int().min(100).max(4000).optional(),
       fit: z.enum(['pad', 'crop']).default('pad'), connectionId: shopInput,
     }).strict().parse(request.body)
@@ -177,28 +212,29 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
         JSON.stringify({ readable: true, watermark: false, rightsRisk: false, reason: '仅调整尺寸，原图已通过检查。' }), request.authUser.sub])).rows[0]
       return { data: await present(row) }
     }
-    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY（图片编辑使用 GPT-Image）。', 503)
+    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '图片生成服务暂不可用，请联系管理员。', 503)
     const model = (await teamOf(tenant(request), request.authUser.sub)).imageModel
+    const { quality, resolution } = await imageGenerationSettings(tenant(request))
     // The edited picture keeps the source's shape: the nearest ratio the model offers (white backgrounds are square main pictures).
     const size = input.operation === 'white_bg' ? '1:1' : nearestRatio(await sourceSize(tenant(request), input.source, picked.url))
     const row = (await db.query(`INSERT INTO image_assets(id,tenant_id,collected_product_id,operation,provider,model,source_url,reference_urls,options,prompt,created_by)
       VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9,$10) RETURNING ${assetColumns}`,
-    [id, tenant(request), input.collectedProductId ?? null, input.operation, model, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ ...scope, ...(input.scene ? { scene: input.scene } : {}), size, resolution: '1k', quality: 'medium' }), editPrompt(input.operation, input.scene), request.authUser.sub])).rows[0]
+    [id, tenant(request), input.collectedProductId ?? null, input.operation, model, picked.ref, JSON.stringify([picked.ref]), JSON.stringify({ ...scope, ...(input.scene ? { scene: input.scene } : {}), size, quality, resolution }), editPrompt(input.operation, input.scene), request.authUser.sub])).rows[0]
     await audit(request, 'image.edit', id, { operation: input.operation, model })
     return { data: await present(row) }
   })
 
-  // 电商套图: up to six pictures (one per type) generated with the team's GPT-Image model from the chosen reference pictures.
+  // 电商套图: generate one image per selected type from the reference pictures.
   app.post('/suites', { preHandler: requirePermission('collection:create') }, async request => {
     const input = z.object({
       collectedProductId: z.string().uuid().optional(), title: z.string().trim().min(2).max(200).optional(), points: z.string().trim().max(400).optional(),
       references: z.array(source).min(1).max(4), types: z.array(z.enum(SUITE_TYPES)).min(1).max(SUITE_TYPES.length).default([...SUITE_TYPES]),
-      model: z.string().optional(), quality: z.enum(SUITE_QUALITIES).optional(), size: z.enum(['1:1', '3:4']).default('1:1'), resolution: z.enum(['1k', '2k']).default('1k'),
+      size: z.enum(['1:1', '3:4']).default('1:1'),
       // Left out: the default brand. null: no brand on this suite.
       brandId: z.string().uuid().nullable().optional(),
       connectionId: z.string().uuid().nullable().optional(),
     }).strict().parse(request.body)
-    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '请先在服务器配置 APIMART_API_KEY（电商套图使用 GPT-Image）。', 503)
+    if (!apimartConfigured()) throw new IntegrationError('APIMART_NOT_CONFIGURED', '图片生成服务暂不可用，请联系管理员。', 503)
     if (input.points) checkPrompt(input.points)
     const settings = await settingsOf(tenant(request))
     const product = input.collectedProductId ? await productFacts(tenant(request), input.collectedProductId, input.points) : null
@@ -222,15 +258,16 @@ export async function imageWorkshopRoutes(app: FastifyInstance) {
       facts.shopCopy = design.copy
       facts.heroCopy = await heroCopy(facts, team.textModel)
     }
-    const batch = randomUUID(), model = team.imageModel, quality = input.quality ?? settings.suite_quality
+    const batch = randomUUID(), model = team.imageModel
+    const { quality, resolution } = await imageGenerationSettings(tenant(request))
     const rows = []
     for (const type of new Set(input.types)) {
       const { prompt, options } = suiteDesign(type, facts, brand)
       rows.push((await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,created_by)
         VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,$9) RETURNING ${assetColumns}`,
-      [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, resolution: input.resolution, quality, title: facts.title, listingConnectionId: target, referenceShopId, ...options }), prompt, request.authUser.sub])).rows[0])
+      [tenant(request), input.collectedProductId ?? null, batch, type, model, JSON.stringify([...new Set(refs)]), JSON.stringify({ size: input.size, quality, resolution, title: facts.title, listingConnectionId: target, referenceShopId, ...options }), prompt, request.authUser.sub])).rows[0])
     }
-    await audit(request, 'image.suite', batch, { types: input.types, model, quality, collectedProductId: input.collectedProductId ?? null, brandId: brand?.id ?? null, heroShopId: facts.heroReferenceFrame?.connectionId })
+    await audit(request, 'image.suite', batch, { types: input.types, model, quality, resolution, collectedProductId: input.collectedProductId ?? null, brandId: brand?.id ?? null, heroShopId: facts.heroReferenceFrame?.connectionId })
     return { data: { batchId: batch, assets: await Promise.all(rows.map(present)) } }
   })
 

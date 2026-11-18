@@ -2,10 +2,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db.js'
 import { config } from '../config.js'
-import { forgetAccount, hasPermission, requireAuth } from '../auth.js'
+import { forgetAccount, hasPermission, requireAuth, requireSuperAdmin } from '../auth.js'
+import { QWEN_MODELS } from '../llm/qwen.js'
+import { imagePlanOptions, imagePlans } from '../integrations/image-generation-settings.js'
 import { IntegrationError } from '../integrations/1688.js'
-import { CREDITS_PER_LISTING, IMAGE_MODEL_CHOICES, listTeams, teamCreditActivity, teamOf, TEXT_MODEL_CHOICES, updateTeam } from '../integrations/teams.js'
-import { IMAGE_MODEL_NAMES } from '../llm/apimart-image.js'
+import { adjustTeamCredits, CREDITS_PER_LISTING, listTeams, teamCreditActivity, teamOf } from '../integrations/teams.js'
 
 // Role and access settings for existing 1688 identities. Supervisors manage only their own team.
 export const TEAM_ROLES = ['sales_rep', 'order_specialist']
@@ -66,23 +67,48 @@ export async function userRoutes(app: FastifyInstance) {
     return reply.code(500).send({ error: 'INTERNAL_SERVER_ERROR', message: '服务器处理请求时发生错误。' })
   })
 
-  // 团队额度与模型 (super administrator): each team's text/image model and credits.
+  // 团队积分 (super administrator).
   const superOnly = async (request: FastifyRequest, reply: import('fastify').FastifyReply) => {
     await requireAuth(request, reply)
     if (reply.sent) return
-    if (!fullAccess(request)) return reply.code(403).send({ error: 'FORBIDDEN', message: '只有超级管理员可以调整团队模型和额度。' })
+    if (!fullAccess(request)) return reply.code(403).send({ error: 'FORBIDDEN', message: '只有超级管理员可以调整团队积分。' })
   }
-  app.get('/teams', { preHandler: superOnly }, async request => ({
-    data: await listTeams(tenant(request)), perListing: CREDITS_PER_LISTING,
-    textModels: TEXT_MODEL_CHOICES, imageModels: IMAGE_MODEL_CHOICES.map(id => ({ id, name: IMAGE_MODEL_NAMES[id] })),
-  }))
+  app.get('/teams', { preHandler: superOnly }, async request => {
+    const includeModels = request.authUser.roles.includes('super_admin')
+    return {
+      data: await listTeams(tenant(request), includeModels), perListing: CREDITS_PER_LISTING,
+      ...(includeModels ? { textModels: QWEN_MODELS, imagePlans: imagePlanOptions } : {}),
+    }
+  })
+  app.patch('/teams/:id/models', { preHandler: requireSuperAdmin }, async request => {
+    const { id } = idParams.parse(request.params)
+    const input = z.object({
+      textModel: z.enum(QWEN_MODELS).optional(),
+      imagePlan: z.enum(['image-a', 'image-b', 'image-c']).optional(),
+    }).strict().refine(v => v.textModel || v.imagePlan, '请选择要更新的模型方案。').parse(request.body)
+    const saved = await db.query(`
+      WITH saved AS (
+        INSERT INTO team_ai_settings(owner_user_id,tenant_id,text_model,image_model,updated_by)
+        SELECT u.id,u.tenant_id,$3,$4,$5 FROM users u
+        WHERE u.id=$2 AND u.tenant_id=$1 AND u.parent_user_id IS NULL AND u.deleted_at IS NULL
+        ON CONFLICT(owner_user_id) DO UPDATE SET
+          text_model=coalesce(excluded.text_model,team_ai_settings.text_model),
+          image_model=coalesce(excluded.image_model,team_ai_settings.image_model),
+          updated_by=excluded.updated_by,updated_at=now()
+        RETURNING owner_user_id
+      ) INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)
+      SELECT $1,$5,'team.models.update','user',owner_user_id,$6,$7 FROM saved`,
+    [tenant(request), id, input.textModel ?? null, input.imagePlan ? imagePlans[input.imagePlan].model : null,
+      request.authUser.sub, JSON.stringify(input), request.id])
+    if (!saved.rowCount) throw new AccountError(404, 'TEAM_NOT_FOUND', '团队不存在。')
+    return { ok: true }
+  })
   app.patch('/teams/:id', { preHandler: superOnly }, async request => {
     const { id } = idParams.parse(request.params)
     const input = z.object({
-      textModel: z.enum(TEXT_MODEL_CHOICES).optional(), imageModel: z.enum(IMAGE_MODEL_CHOICES).optional(),
-      delta: z.number().int().min(-1_000_000).max(1_000_000).refine(v => v !== 0, '调整积分不能为 0。').optional(), note: z.string().trim().max(200).optional(),
-    }).strict().refine(v => v.textModel || v.imageModel || v.delta, '没有要保存的修改。').parse(request.body)
-    return { data: await updateTeam(tenant(request), id, request.authUser.sub, input) }
+      delta: z.number().int().min(-1_000_000).max(1_000_000).refine(v => v !== 0, '调整积分不能为 0。'), note: z.string().trim().max(200).optional(),
+    }).strict().parse(request.body)
+    return { data: await adjustTeamCredits(tenant(request), id, request.authUser.sub, input) }
   })
   // The signed-in account's own team: credits left and what a listing costs.
   app.get('/team', { preHandler: requireAuth }, async request => {

@@ -2,19 +2,16 @@ import type { PoolClient } from 'pg'
 import { config } from '../config.js'
 import { db } from '../db.js'
 import { IntegrationError } from './1688.js'
-import { isQwenModel, QWEN_MODELS, type QwenModel } from '../llm/qwen.js'
+import { isQwenModel, type QwenModel } from '../llm/qwen.js'
+import { imagePlanOf } from './image-generation-settings.js'
 import { IMAGE_MODELS, type ImageModelId } from '../llm/apimart-image.js'
 
 /**
- * Teams: a top-level account (opened by the super administrator) and the sub-accounts it opened. The super administrator
- * chooses each team's text and image model and gives it credits; listing a collected product on 1688 costs
- * CREDITS_PER_LISTING. The super administrator's own team is not limited and sets the defaults for background work that
- * belongs to no one in particular.
+ * A team consists of a top-level member and their direct team members. Service settings are read internally.
+ * The super administrator adjusts credits. Listing a collected product costs CREDITS_PER_LISTING.
  */
 export const CREDITS_PER_LISTING = 10
 export const DEFAULT_IMAGE_MODEL: ImageModelId = 'gpt-image-2.5-flare'
-export const TEXT_MODEL_CHOICES = QWEN_MODELS
-export const IMAGE_MODEL_CHOICES = IMAGE_MODELS
 type Queryable = Pick<PoolClient, 'query'>
 export type Team = { ownerId: string; ownerName: string; unlimited: boolean; textModel: QwenModel; imageModel: ImageModelId; credits: number }
 
@@ -107,8 +104,8 @@ export async function teamCreditActivity(tenantId: string, userId: string, reque
   } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
 }
 
-/** The super administrator's changes to a team: models and/or a credit adjustment (never below zero). */
-export async function updateTeam(tenantId: string, ownerId: string, actorId: string, input: { textModel?: string; imageModel?: string; delta?: number; note?: string }) {
+/** Adjust credits without changing the team's service settings. */
+export async function adjustTeamCredits(tenantId: string, ownerId: string, actorId: string, input: { delta: number; note?: string }) {
   const client = await db.connect()
   try {
     await client.query('BEGIN')
@@ -116,25 +113,28 @@ export async function updateTeam(tenantId: string, ownerId: string, actorId: str
     if (!owner) throw new IntegrationError('TEAM_NOT_FOUND', '团队不存在。', 404)
     await client.query('INSERT INTO team_ai_settings(owner_user_id,tenant_id,updated_by) VALUES($1,$2,$3) ON CONFLICT(owner_user_id) DO NOTHING', [ownerId, tenantId, actorId])
     const current = (await client.query('SELECT credits FROM team_ai_settings WHERE owner_user_id=$1 FOR UPDATE', [ownerId])).rows[0]
-    const credits = Number(current.credits) + (input.delta ?? 0)
+    const credits = Number(current.credits) + input.delta
     if (credits < 0) throw new IntegrationError('CREDITS_NEGATIVE', `扣减后积分不能小于 0（当前 ${current.credits}）。`, 400)
-    await client.query(`UPDATE team_ai_settings SET text_model=CASE WHEN $2::text IS NULL THEN text_model ELSE $2 END,image_model=CASE WHEN $3::text IS NULL THEN image_model ELSE $3 END,
-      credits=$4,updated_by=$5,updated_at=now() WHERE owner_user_id=$1`, [ownerId, input.textModel ?? null, input.imageModel ?? null, credits, actorId])
-    if (input.delta) await ledger(client, tenantId, ownerId, input.delta, credits, 'adjust', actorId, null, input.note?.trim() || null)
+    await client.query('UPDATE team_ai_settings SET credits=$2,updated_by=$3,updated_at=now() WHERE owner_user_id=$1', [ownerId, credits, actorId])
+    await ledger(client, tenantId, ownerId, input.delta, credits, 'adjust', actorId, null, input.note?.trim() || null)
     await client.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data)VALUES($1,$2,'team.ai.update','user',$3,$4)", [tenantId, actorId, ownerId, JSON.stringify(input)])
     await client.query('COMMIT')
+    return { ownerId, credits }
   } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
-  return teamByOwner(tenantId, ownerId)
 }
 
-/** Every team for the super administrator's page: owner, members, models, credits and recent movements. */
-export async function listTeams(tenantId: string) {
-  const rows = (await db.query(`SELECT u.id,u.display_name,u.email::text,u.status,
+/** Every team for the super administrator's page: owner, members, credits and recent movements. */
+export async function listTeams(tenantId: string, includeModels = false) {
+  const rows = (await db.query(`SELECT u.id,u.display_name,u.status,
       EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.code='super_admin') AS unlimited,
       (SELECT count(*)::int FROM users m WHERE m.parent_user_id=u.id AND m.deleted_at IS NULL) AS members,
-      s.text_model,s.image_model,coalesce(s.credits,0) AS credits,
+      coalesce(s.credits,0) AS credits,s.text_model,s.image_model,
       coalesce((SELECT json_agg(l ORDER BY l.created_at DESC) FROM (SELECT delta,balance_after,reason,note,created_at FROM team_credit_ledger WHERE owner_user_id=u.id ORDER BY created_at DESC LIMIT 5) l),'[]') AS ledger
     FROM users u LEFT JOIN team_ai_settings s ON s.owner_user_id=u.id
-    WHERE u.tenant_id=$1 AND u.parent_user_id IS NULL AND u.deleted_at IS NULL ORDER BY 5 DESC,u.created_at`, [tenantId])).rows
-  return rows.map(r => ({ ownerId: r.id, name: r.display_name, email: r.email, status: r.status, unlimited: r.unlimited, members: r.members, textModel: textModel(r.text_model), imageModel: imageModel(r.image_model), credits: Number(r.credits), ledger: r.ledger }))
+    WHERE u.tenant_id=$1 AND u.parent_user_id IS NULL AND u.deleted_at IS NULL ORDER BY unlimited DESC,u.created_at`, [tenantId])).rows
+  return rows.map(r => ({
+    ownerId: r.id, name: r.display_name, status: r.status, unlimited: r.unlimited,
+    members: r.members, credits: Number(r.credits), ledger: r.ledger,
+    ...(includeModels ? { textModel: textModel(r.text_model), imagePlan: imagePlanOf(imageModel(r.image_model)) } : {}),
+  }))
 }

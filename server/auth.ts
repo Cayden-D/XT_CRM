@@ -48,3 +48,11 @@ export function requirePermission(permission: string) {
     }
   }
 }
+
+export async function requireSuperAdmin(request: FastifyRequest, reply: FastifyReply) {
+  await requireAuth(request, reply)
+  if (reply.sent) return
+  if (!request.authUser.roles.includes('super_admin')) {
+    return reply.code(403).send({ error: 'FORBIDDEN', message: '只有超级管理员可以管理生成设置。' })
+  }
+}

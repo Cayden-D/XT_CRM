@@ -92,17 +92,29 @@ try {
   for (let i = 0; i < 2; i++) tenants.push((await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id', ['workshop fixture', `workshop-${randomUUID()}`])).rows[0].id)
   const tenant = tenants[0]
   const actor = (await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'图片测试','active')RETURNING id", [tenant, `${randomUUID()}@fixture.local`])).rows[0].id
-  const token = (tenantId = tenant, permissions = ['*']) => app.jwt.sign({ sub: actor, tenantId, email: 't', displayName: 't', roles: [], permissions })
+  const token = (tenantId = tenant, permissions = ['*'], roles: string[] = []) => app.jwt.sign({ sub: actor, tenantId, email: 't', displayName: 't', roles, permissions })
   const call = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, payload?: object, bearer = token()) => app.inject({ method, url: `/api/image-workshop${path}`, headers: { authorization: `Bearer ${bearer}` }, ...(payload ? { payload } : {}) })
   const product = async (gallery: string[], extra: Record<string, unknown> = {}) => (await db.query(`INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,main_image_url,gallery_images,detail_images,attributes,collected_by)
     VALUES($1,'1688',$2,'https://detail.1688.com/offer/1.html','车载充气泵 便携式',$3,$4,$5,$6,$7) RETURNING id`, [tenant, randomUUID().slice(0, 12), gallery[0], JSON.stringify(gallery), JSON.stringify([cdn('detail-1'), cdn('detail-2')]), JSON.stringify({ 电压: '12V', 尺寸: '15×7×5cm', ...extra }), actor])).rows[0].id as string
 
   // Settings: off by default; turning the agent on needs explicit consent; stale revisions are rejected.
   const initial = (await call('GET', '/settings')).json()
-  assert.deepEqual([initial.data.auto_replace, initial.data.revision, initial.services.apimart], [false, 0, true])
+  assert.deepEqual([initial.data.auto_replace, initial.data.revision, initial.services.generation], [false, 0, true])
   assert.equal(initial.data.hero_reference_frame, undefined)
-  assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 })).statusCode, 400)
-  assert.equal((await call('PUT', '/settings', { autoReplace: false, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'medium', revision: 0 }, token(tenant, ['collection:read']))).statusCode, 403)
+  assert.equal(initial.data.suite_model, undefined)
+  assert.equal(initial.data.suite_quality, undefined)
+  const admin = token(tenant, ['*'], ['super_admin'])
+  const initialOutput = { replacementPlan: 'image-a', quality: 'medium', resolution: '1k', revision: 0 }
+  assert.equal((await call('GET', '/generation-settings')).statusCode, 403)
+  assert.equal((await call('PUT', '/generation-settings', initialOutput)).statusCode, 403, 'integration managers cannot configure generation')
+  const adminView = await call('GET', '/generation-settings', undefined, admin)
+  assert.deepEqual(adminView.json().data, initialOutput)
+  assert.doesNotMatch(adminView.body, /gpt-image|apimart/i)
+  const locked = await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'high', revision: 0, confirmed: true })
+  assert.equal(locked.statusCode, 400)
+  assert.equal(locked.json().error, 'VALIDATION_ERROR')
+  assert.equal((await call('PUT', '/settings', { autoReplace: true, revision: 0 })).statusCode, 400)
+  assert.equal((await call('PUT', '/settings', { autoReplace: false, revision: 0 }, token(tenant, ['collection:read']))).statusCode, 403)
 
   // Product pictures: main image first, deduplicated, at most six; nothing screened yet.
   const gallery = [cdn('main'), cdn('main'), cdn('side'), cdn('mark-1'), cdn('back'), cdn('logo-1'), cdn('top'), cdn('extra')]
@@ -128,11 +140,14 @@ try {
 
   // 白底图: queued, then the worker sends the source picture to GPT-Image (the team's image model), stores the result
   // privately and screens it again. No Qwen image model is used any more.
-  const edit = (await call('POST', '/edits', { source: { url: cdn('side') }, operation: 'white_bg', collectedProductId: p1, model: 'qwen-image-3.0' })).json().data
-  assert.deepEqual([edit.status, edit.provider, edit.model, edit.url], ['pending', 'apimart', 'gpt-image-2.5-flare', null])
+  const editInput = { source: { url: cdn('side') }, operation: 'white_bg', collectedProductId: p1 }
+  assert.equal((await call('POST', '/edits', { ...editInput, model: 'qwen-image-3.0' })).statusCode, 400)
+  const edit = (await call('POST', '/edits', editInput)).json().data
+  assert.deepEqual([edit.status, edit.url, edit.canRetry], ['pending', null, false])
+  assert.deepEqual([edit.provider, edit.model, edit.options.quality, edit.options.resolution], [undefined, undefined, undefined, undefined])
   for (let i = 0; i < 3; i++) await drain()
   const [editCall] = calls.submit
-  assert.deepEqual([editCall.model, editCall.size, editCall.image_urls], ['gpt-image-2.5-flare', '1:1', [cdn('side')]], 'a model sent by the page is ignored')
+  assert.deepEqual([editCall.model, editCall.size, editCall.image_urls], ['gpt-image-2.5-flare', '1:1', [cdn('side')]], 'edits use the server-assigned model')
   assert.match(editCall.prompt, /纯白色/)
   assert.equal(calls.qwen.length, 0)
   calls.submit.length = 0
@@ -164,11 +179,14 @@ try {
 
   // 电商套图: flagged references are refused; seven tasks (with the 1688 首图) are submitted with the references, polled, stored and screened.
   assert.equal((await call('POST', '/suites', { collectedProductId: p1, references: [{ url: cdn('main') }, { url: cdn('logo-1') }] })).statusCode, 400)
+  for (const override of [{ model: 'gpt-image-2' }, { quality: 'high' }, { resolution: '2k' }]) {
+    assert.equal((await call('POST', '/suites', { collectedProductId: p1, references: [{ url: cdn('main') }], ...override })).statusCode, 400)
+  }
   const suite = (await call('POST', '/suites', { collectedProductId: p1, points: '30 秒充满 / 数显胎压', references: [{ url: cdn('main') }, { assetId: upload.id }] })).json().data
   assert.equal(suite.assets.length, 7)
   await drain()
   assert.equal(calls.submit.length, 7)
-  assert.deepEqual([calls.submit[0].model, calls.submit[0].quality, calls.submit[0].size, calls.submit[0].output_format, calls.submit[0].n], ['gpt-image-2.5-flare', 'medium', '1:1', 'png', 1])
+  assert.deepEqual([calls.submit[0].model, calls.submit[0].quality, calls.submit[0].resolution, calls.submit[0].size, calls.submit[0].output_format, calls.submit[0].n], ['gpt-image-2.5-flare', 'medium', '1k', '1:1', 'png', 1])
   assert.equal(calls.submit[0].image_urls[0], cdn('main'))
   assert.ok(calls.submit[0].image_urls[1].startsWith('https://images.example.com/'), 'uploaded reference is sent as a signed link')
   const selling = calls.submit.find(s => s.prompt.includes('生成卖点图'))
@@ -188,7 +206,10 @@ try {
   const one = (await call('POST', '/suites', { title: '手提收纳箱', references: [{ url: cdn('main') }], types: ['suite_white'] })).json().data.assets[0]
   await drain(); await drain()
   const failed = (await call('GET', `/assets?ids=${one.id}`)).json().data[0]
-  assert.deepEqual([failed.status, failed.error], ['failed', '生成失败：内容审核未通过'])
+  assert.deepEqual([failed.status, failed.error, failed.canRetry], ['failed', '图片生成未完成，请检查参考图及内容后重试。', true])
+  await db.query("UPDATE image_assets SET error='APIMart 返回 GPT-Image-2.5 Flare 错误' WHERE id=$1", [one.id])
+  const previous = (await call('GET', `/assets?ids=${one.id}`)).json().data[0]
+  assert.equal(previous.error, '图片生成服务未能完成任务，请重试。')
   assert.equal((await call('POST', `/assets/${one.id}/retry`)).json().data.status, 'pending')
   await drain(); await drain(); await drain()
   assert.equal((await call('GET', `/assets?ids=${one.id}`)).json().data[0].status, 'completed')
@@ -210,13 +231,13 @@ try {
   // Agent switch: products collected after it is turned on are screened once, and flagged slots get replacements.
   const old = await product([cdn('mark-old'), cdn('clean-old')])
   await db.query("UPDATE collected_products SET collected_at=now()-interval '1 hour' WHERE id=$1", [old])
-  const on = (await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-sunburst', suiteQuality: 'low', revision: 0, confirmed: true })).json().data
+  const on = (await call('PUT', '/settings', { autoReplace: true, revision: 0, confirmed: true })).json().data
   assert.deepEqual([on.auto_replace, on.revision], [true, 1])
-  assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteModel: 'gpt-image-2.5-flare', suiteQuality: 'low', revision: 0, confirmed: true })).statusCode, 409)
+  assert.equal((await call('PUT', '/settings', { autoReplace: true, revision: 0, confirmed: true })).statusCode, 409)
 
   // The 1688 首图 terms: three by default, changed by the shop (add, edit, remove), checked, and used for the next 首图.
   assert.deepEqual(on.hero_badges, ['工厂直供', '现货速发', '支持定制'])
-  const badges = (list: string[], revision: number) => call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroBadges: list, revision })
+  const badges = (list: string[], revision: number) => call('PUT', '/settings', { autoReplace: true, heroBadges: list, revision })
   assert.equal((await badges(['源头工厂', '源头工厂'], 1)).statusCode, 400, 'no duplicates')
   assert.equal((await badges(['一二三四五六七八九十一二三'], 1)).statusCode, 400, 'twelve characters at most')
   assert.equal((await badges(['a', 'b', 'c', 'd', 'e', 'f', 'g'], 1)).statusCode, 400, 'six at most')
@@ -231,17 +252,26 @@ try {
   }
   const custom = await heroPrompt()
   assert.match(custom, /源头工厂、48小时发货/); assert.ok(!custom.includes('工厂直供'))
-  assert.equal((await call('PUT', '/settings', { autoReplace: true, suiteQuality: 'low', heroBadges: [], revision: 2 })).json().data.hero_badges.length, 0)
+  assert.equal((await call('PUT', '/settings', { autoReplace: true, heroBadges: [], revision: 2 })).json().data.hero_badges.length, 0)
   const plain = await heroPrompt()
   assert.ok(plain.includes('只写一句简短的商品名称') && !plain.includes('已配置的店铺优势'), 'no terms: name and known points only')
   // Brand without a logo: its name, as text, in the top-left corner of the 首图; with a logo the corner is kept clear.
   const facts = { title: '车载香薰', attributes: {}, skus: [], badges: ['工厂直供'] }
   assert.match(workshop.suitePrompt('suite_hero', facts, { name: '拓洋', hasLogo: false }), /左上角用醒目的字体准确写出品牌名“拓洋”/)
   assert.match(workshop.suitePrompt('suite_hero', facts, { name: '拓洋', hasLogo: true }), /左上角约 16% 宽、16% 高的区域保持干净/)
+  const output = { replacementPlan: 'image-b', quality: 'low', resolution: '2k', revision: 3 }
+  const savedOutput = await call('PUT', '/generation-settings', output, admin)
+  assert.equal(savedOutput.statusCode, 200, savedOutput.body)
+  assert.deepEqual(savedOutput.json().data, { ...output, revision: 4 })
+  assert.equal((await call('PUT', '/generation-settings', output, admin)).statusCode, 409)
+  const current = (await call('GET', '/settings')).json().data
+  assert.deepEqual([current.auto_replace, current.hero_badges], [true, []], 'output settings preserve application settings')
+  await heroPrompt()
+  assert.deepEqual([calls.submit[0].quality, calls.submit[0].resolution], ['low', '2k'], 'merchant jobs use the administrator settings')
   const fresh = await product([cdn('clean-new'), cdn('mark-new')])
   while (await workshop.screenNextProduct()) { /* screen everything due */ }
   const agentRows = (await db.query('SELECT collected_product_id,trigger,model,options,replaces_index FROM image_assets WHERE collected_product_id=ANY($1::uuid[]) AND trigger=$2', [[old, fresh], 'agent'])).rows
-  assert.deepEqual(agentRows.map(r => [r.collected_product_id, r.model, r.options.quality, r.replaces_index]), [[fresh, 'gpt-image-2.5-sunburst', 'low', 1]])
+  assert.deepEqual(agentRows.map(r => [r.collected_product_id, r.model, r.options.quality, r.options.resolution, r.replaces_index]), [[fresh, 'gpt-image-2.5-sunburst', 'low', '2k', 1]])
   assert.equal((await db.query('SELECT images_screened_at FROM collected_products WHERE id=$1', [old])).rows[0].images_screened_at, null, 'products collected before the switch are left alone')
 
   // 上传相册并替换主图: upload once (JPEG), replace the slot, keep the previous picture, sync the formal product, undo.

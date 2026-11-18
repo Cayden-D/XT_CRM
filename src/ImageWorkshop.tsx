@@ -63,7 +63,7 @@ function AssetCard({asset, onChange, onRemove, onEdit, canApply, onApplied}:{ass
     <div className="iw-asset-body">
       {asset.product_title && <p className="iw-asset-title" title={asset.product_title}>{asset.product_title}</p>}
       {asset.status === 'completed' && asset.risky && <p className="iw-asset-risk"><ShieldAlert size={12}/>{asset.findings?.reason || '复检未完成'}，请核对后再使用</p>}
-      {asset.width && <small>{asset.width}×{asset.height}{asset.model ? ` · ${asset.model}` : ''}</small>}
+      {asset.width && <small>{asset.width}×{asset.height}</small>}
       {asset.applied_to ? <p className="iw-asset-applied"><Check size={12}/>{asset.applied_to.placement === 'replace' ? `已替换主图 ${asset.applied_to.index + 1}` : asset.applied_to.placement === 'detail' ? `已用作详情图 ${asset.applied_to.index + 1}` : `已追加为主图 ${asset.applied_to.index + 1}`}</p>
         : asset.photo_status === 'uploaded' ? <p className="iw-asset-applied"><Check size={12}/>已上传店铺相册</p>
         : asset.photo_status === 'unknown' ? <p className="iw-asset-risk"><AlertCircle size={12}/>相册上传结果待核对</p> : null}
@@ -74,7 +74,7 @@ function AssetCard({asset, onChange, onRemove, onEdit, canApply, onApplied}:{ass
         {asset.status === 'completed' && canApply && !asset.risky && asset.photo_status !== 'unknown' && <button title="上传相册并替换主图" aria-label="上传相册并替换主图" className="iw-apply-btn" disabled={busy} onClick={() => setApplying(true)}><ImageUp size={14}/>替换主图</button>}
         {asset.applied_to && <button title="撤销替换，恢复原主图" aria-label="撤销替换" disabled={busy} onClick={() => { if (window.confirm('撤销替换，恢复原来的主图？')) void run(async () => { onChange((await revertAsset(asset.id)).data); setNote('已恢复原主图'); onApplied?.() }) }}><Undo2 size={14}/></button>}
         {asset.status === 'completed' && onEdit && <button title="继续编辑" aria-label="继续编辑" disabled={busy} onClick={() => onEdit(asset)}><Pencil size={14}/></button>}
-        {asset.status === 'failed' && asset.provider !== 'local' && <button title="重试" aria-label="重试" disabled={busy} onClick={() => void run(async () => onChange((await retryAsset(asset.id)).data))}><RotateCcw size={14}/></button>}
+        {asset.canRetry && <button title="重试" aria-label="重试" disabled={busy} onClick={() => void run(async () => onChange((await retryAsset(asset.id)).data))}><RotateCcw size={14}/></button>}
         {!busyStatus(asset) && <button title="删除" aria-label="删除" disabled={busy} onClick={() => { if (window.confirm('删除这张图片？')) void run(async () => { await deleteAsset(asset.id); onRemove(asset.id) }) }}><Trash2 size={14}/></button>}
       </div>
     </div>
@@ -154,9 +154,9 @@ function SourcePicker({productId, setProduct, picked, setPicked, max, connection
 }
 
 function useServices() {
-  const [services, setServices] = useState<ImageServices|null>(null), [settings, setSettings] = useState<ImageSettings|null>(null)
-  useEffect(() => { getImageSettings().then(r => { setServices(r.services); setSettings(r.data) }).catch(() => {}) }, [])
-  return { services, settings }
+  const [services, setServices] = useState<ImageServices|null>(null)
+  useEffect(() => { getImageSettings().then(r => setServices(r.services)).catch(() => {}) }, [])
+  return services
 }
 
 function Results({kind, title, refreshKey, onEdit, canApply}:{kind:'edit'|'suite';title:string;refreshKey:number;onEdit?:(a:ImageAsset)=>void;canApply:boolean}) {
@@ -172,10 +172,10 @@ function Results({kind, title, refreshKey, onEdit, canApply}:{kind:'edit'|'suite
 }
 
 const scenes = ['简约木质桌面，柔和自然光', '现代简约客厅，暖色调', '户外草地，晴天阳光', '浅灰色大理石台面，高级感', '干净的工作台与工具', '纯色渐变背景，柔光']
-/** 图片编辑: 白底图 / 换背景 (Qwen) and 改尺寸 (local). */
+/** 图片编辑: 白底图 / 换背景 and 改尺寸. */
 export function ImageEditPage({user, intent}:{user:SessionUser;intent?:ImageIntent}) {
   const editable = can(user, 'collection:create')
-  const { services } = useServices()
+  const services = useServices()
   const [product, setProduct] = useState<{id:string;title:string}|null>(intent?.productId ? { id:intent.productId, title:intent.productTitle ?? '' } : null)
   const [picked, setPicked] = useState<Picked[]>(intent?.sourceAsset ? [{ key:intent.sourceAsset.id, source:{ assetId:intent.sourceAsset.id }, preview:intent.sourceAsset.url, label:intent.sourceAsset.label }]
     : intent?.sourceUrl ? [{ key:intent.sourceUrl, source:{ url:intent.sourceUrl }, preview:intent.sourceUrl, label:'所选图片' }] : [])
@@ -190,7 +190,7 @@ export function ImageEditPage({user, intent}:{user:SessionUser;intent?:ImageInte
       setRefresh(n => n + 1)
     } catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
-  const aiMissing = operation !== 'resize' && services && !services.qwen
+  const aiMissing = operation !== 'resize' && services && (!services.screening || !services.generation)
   return <div className="iw-page">
     <section className="iw-panel">
       <div className="iw-step"><span>1</span><h3>选择图片</h3></div>
@@ -203,7 +203,7 @@ export function ImageEditPage({user, intent}:{user:SessionUser;intent?:ImageInte
         {preset === 'custom' && <div className="iw-size"><input type="number" min={100} max={4000} aria-label="宽" value={custom.width} onChange={e => setCustom({ ...custom, width:Number(e.target.value) })}/>×<input type="number" min={100} max={4000} aria-label="高" value={custom.height} onChange={e => setCustom({ ...custom, height:Number(e.target.value) })}/>px</div>}
         <div className="iw-chips"><button className={fit === 'pad' ? 'on' : ''} onClick={() => setFit('pad')}>完整保留，空白处补白</button><button className={fit === 'crop' ? 'on' : ''} onClick={() => setFit('crop')}>铺满画面，智能裁切</button></div></div>}
       <Note label="图片使用规则">{RIGHTS_NOTE}</Note>
-      {aiMissing && <p className="iw-error"><AlertCircle size={14}/>服务器未配置百炼 API Key，白底图和换背景暂不可用。</p>}
+      {aiMissing && <p className="iw-error"><AlertCircle size={14}/>图片处理服务暂不可用，请稍后重试。</p>}
       {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
       <button className="catalog-primary iw-submit" disabled={!editable || busy || !picked[0] || Boolean(aiMissing) || (operation === 'background' && scene.trim().length < 2)} onClick={() => void submit()}>
         {busy ? <LoaderCircle size={16} className="spin"/> : <Sparkles size={16}/>}{operation === 'resize' ? '生成新尺寸' : '开始处理'}</button>
@@ -213,13 +213,13 @@ export function ImageEditPage({user, intent}:{user:SessionUser;intent?:ImageInte
   </div>
 }
 
-/** 电商套图: six main pictures generated with GPT-Image-2.5 from the product's pictures. */
+/** 电商套图: generate product pictures from references. */
 export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageIntent}) {
   const editable = can(user, 'collection:create')
-  const { services, settings } = useServices()
+  const services = useServices()
   const [product, setProduct] = useState<{id:string;title:string}|null>(intent?.productId ? { id:intent.productId, title:intent.productTitle ?? '' } : null)
   const [picked, setPicked] = useState<Picked[]>([]), [title, setTitle] = useState(''), [points, setPoints] = useState('')
-  const [types, setTypes] = useState<SuiteType[]>(suiteTypes.map(t => t[0])), [quality, setQuality] = useState(''), [size, setSize] = useState<'1:1'|'3:4'>('1:1'), [resolution, setResolution] = useState<'1k'|'2k'>('1k')
+  const [types, setTypes] = useState<SuiteType[]>(suiteTypes.map(t => t[0])), [size, setSize] = useState<'1:1'|'3:4'>('1:1')
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [refresh, setRefresh] = useState(0)
   const [brands, setBrands] = useState<Brand[]>([]), [brandId, setBrandId] = useState<string|null>()
   const [heroShopId, setHeroShopId] = useState<string|null>()
@@ -234,7 +234,7 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
   async function submit() {
     setBusy(true); setError('')
     try {
-      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, quality:quality || undefined, size, resolution, brandId, connectionId:heroShopId })
+      await createSuite({ collectedProductId:product?.id, title:product ? undefined : title.trim(), points:points.trim() || undefined, references:picked.map(p => p.source), types, size, brandId, connectionId:heroShopId })
       setRefresh(n => n + 1)
     } catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
@@ -252,15 +252,11 @@ export function ImageSuitePage({user, intent}:{user:SessionUser;intent?:ImageInt
         <label className="iw-field">品牌<select aria-label="套图品牌" value={brandId === undefined ? 'default' : brandId ?? ''} onChange={e => setBrandId(e.target.value === 'default' ? undefined : e.target.value || null)}><option value="default">使用默认品牌</option><option value="">不使用品牌</option>{brands.map(b => <option key={b.id} value={b.id}>{b.name}{b.connection_id ? '' : '（企业通用）'}</option>)}</select></label>
         {brand && <small>使用店铺模板的首图保留模板自带的 Logo。</small>}
       </div>}
-      <div className="iw-row">
-        <label className="iw-field">质量<select value={quality} onChange={e => setQuality(e.target.value)}><option value="">默认（{settings?.suite_quality ?? 'medium'}）</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
-        <label className="iw-field">比例<select value={size} onChange={e => setSize(e.target.value as '1:1'|'3:4')}><option value="1:1">1:1 主图</option><option value="3:4">3:4 竖版</option></select></label>
-        <label className="iw-field">分辨率<select value={resolution} onChange={e => setResolution(e.target.value as '1k'|'2k')}><option value="1k">1K</option><option value="2k">2K</option></select></label>
-      </div>
+      <label className="iw-field">比例<select value={size} onChange={e => setSize(e.target.value as '1:1'|'3:4')}><option value="1:1">1:1 主图</option><option value="3:4">3:4 竖版</option></select></label>
       <Note label="图片使用规则">{RIGHTS_NOTE}</Note>
-      {services && !services.apimart && <p className="iw-error"><AlertCircle size={14}/>服务器未配置 APIMART_API_KEY，电商套图暂不可用。</p>}
+      {services && !services.generation && <p className="iw-error"><AlertCircle size={14}/>图片生成服务暂不可用，请稍后重试。</p>}
       {error && <p className="iw-error"><AlertCircle size={14}/>{error}</p>}
-      <button className="catalog-primary iw-submit" disabled={!editable || busy || !picked.length || !types.length || (!product && title.trim().length < 2) || services?.apimart === false} onClick={() => void submit()}>
+      <button className="catalog-primary iw-submit" disabled={!editable || busy || !picked.length || !types.length || (!product && title.trim().length < 2) || services?.generation === false} onClick={() => void submit()}>
         {busy ? <LoaderCircle size={16} className="spin"/> : <Sparkles size={16}/>}生成 {types.length} 张套图</button>
       <small className="iw-cost">后台生成，可离开本页。</small>
     </section>
@@ -308,19 +304,18 @@ export function ProductImagesPanel({productId, title, user}:{productId:string;ti
 export function ImageAutomationSettings({editable}:{editable:boolean}) {
   const [settings, setSettings] = useState<ImageSettings|null>(null), [services, setServices] = useState<ImageServices|null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [agreed, setAgreed] = useState(false)
   useEffect(() => { getImageSettings().then(r => { setSettings(r.data); setServices(r.services) }).catch(cause => setError(message(cause))) }, [])
-  async function save(next:Partial<{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges:string[]}>, confirmed?:boolean) {
+  async function save(next:Partial<{autoReplace:boolean;heroBadges:string[]}>, confirmed?:boolean) {
     if (!settings) return
     setBusy(true); setError('')
-    try { setSettings((await saveImageSettings({ autoReplace:settings.auto_replace, suiteModel:settings.suite_model, suiteQuality:settings.suite_quality, ...next, revision:settings.revision, confirmed })).data); setConfirming(false); setAgreed(false) }
+    try { setSettings((await saveImageSettings({ autoReplace:settings.auto_replace, ...next, revision:settings.revision, confirmed })).data); setConfirming(false); setAgreed(false) }
     catch (cause) { setError(message(cause)) } finally { setBusy(false) }
   }
   return <section className="iw-settings">
     <h3><Wand2 size={18}/>AI 图片自动处理</h3>
-    <Note>开启后，进入<b>采集自动上架</b>的商品<b>不再检查原图</b>：直接以原图为参考，用团队的 GPT-Image 模型生成 5 张主图（依次为 1688 首图、卖点、场景、规格尺寸、白底）和 3 张详情图（主海报、产品优势、产品特点），<b>生成图也不做水印/Logo 复检</b>，自动上传店铺相册后用于上架；SKU 图保持原样。生成失败时任务停下并写明原因。未进入自动上架队列的商品仍按原方式检查主图，并为带他人标识的位置生成替代图。</Note>
+    <Note>开启后，进入<b>采集自动上架</b>的商品<b>不再检查原图</b>：直接以原图为参考，生成 5 张主图（依次为 1688 首图、卖点、场景、规格尺寸、白底）和 3 张详情图（主海报、产品优势、产品特点），<b>生成图也不做水印/Logo 复检</b>，自动上传店铺相册后用于上架；SKU 图保持原样。生成失败时任务停下并写明原因。未进入自动上架队列的商品仍按原方式检查主图，并为带他人标识的位置生成替代图。</Note>
     {settings && <div className="iw-settings-grid">
-      <label className="agent-switch"><input type="checkbox" role="switch" checked={settings.auto_replace} disabled={!editable || busy || (!settings.auto_replace && services?.apimart === false)} onChange={e => { if (e.target.checked) setConfirming(true); else void save({ autoReplace:false }) }}/><span>{settings.auto_replace ? '已开启' : '已关闭'}</span></label>
-      <label>默认质量<select value={settings.suite_quality} disabled={!editable || busy} onChange={e => void save({ suiteQuality:e.target.value })}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
-      <span className={`shop-status ${services?.apimart ? 'positive' : 'warning'}`}>{services?.apimart ? 'APIMart 已配置' : 'APIMart 未配置'}</span>
+      <label className="agent-switch"><input type="checkbox" role="switch" checked={settings.auto_replace} disabled={!editable || busy || (!settings.auto_replace && services?.generation === false)} onChange={e => { if (e.target.checked) setConfirming(true); else void save({ autoReplace:false }) }}/><span>{settings.auto_replace ? '已开启' : '已关闭'}</span></label>
+      <span className={`shop-status ${services?.generation ? 'positive' : 'warning'}`}>{services?.generation ? '图片生成服务可用' : '图片生成服务不可用'}</span>
     </div>}
     <ShopHeroTemplates editable={editable}/>
     {settings && <HeroBadges key={settings.hero_badges.join('|')} saved={settings.hero_badges} editable={editable} busy={busy} save={badges => void save({ heroBadges:badges })}/>}

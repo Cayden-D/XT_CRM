@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes }
 import { readFile, writeFile } from 'node:fs/promises'
 import { config } from '../config.js'
 import { db } from '../db.js'
+import { imageServiceMessage } from './image-service-message.js'
 import JSONbigFactory from 'json-bigint'
 
 const json = JSONbigFactory({ storeAsString: true, protoAction: 'error', constructorAction: 'error' })
@@ -102,6 +103,10 @@ export function photoUploadErrorMessage(code:string){
 
 /** Older queue rows stored a generic gateway error. Explain known photo errors when those rows are read. */
 export function collectionQueueMessage(message:string|null){
+  if (message?.startsWith('AI 生图失败：')) {
+    const reason = imageServiceMessage(message)
+    if (reason !== message) return 'AI 生图失败。请在采集商品的「商品图片」里重试后重新入队。'
+  }
   if(!message?.startsWith('AI 新图上传店铺相册'))return message
   return message.replace(/1688 接口调用失败（(\d+)），请检查接口权限或重新授权。?/, (original,code)=>photoUploadErrorMessage(code)??original)
 }

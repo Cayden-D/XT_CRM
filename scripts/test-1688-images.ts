@@ -36,6 +36,7 @@ globalThis.fetch=async(input,init)=>{
   // GPT-Image (the team's image model): submit, then the task is read until it is done. An edit sends the source as reference.
   if(url==='https://apimart.fixture.invalid/v1/images/generations'){
     generated++;const body=JSON.parse(String(init?.body));assert.equal(body.model,'gpt-image-2.5-flare');assert.equal(body.n,1)
+    assert.deepEqual([body.quality,body.resolution],['high','2k'])
     assert.ok(!Object.hasOwn(body,'image_urls')||body.image_urls.every((u:string)=>['https://cbu01.alicdn.com/img/source.png','https://cbu01.alicdn.com/img/generated.jpg'].includes(u)))
     return response({code:200,data:[{status:'submitted',task_id:`task_${generated}`}]})
   }
@@ -58,15 +59,19 @@ globalThis.fetch=async(input,init)=>{
 try{
   for(let i=0;i<2;i++)tenants.push((await db.query('INSERT INTO tenants(name,slug)VALUES($1,$2)RETURNING id',['image fixture',`image-${randomUUID()}`])).rows[0].id)
   const tenant=tenants[0],actor=(await db.query("INSERT INTO users(tenant_id,email,display_name,status)VALUES($1,$2,'图像测试','active')RETURNING id",[tenant,`${randomUUID()}@fixture.local`])).rows[0].id
+  await db.query("INSERT INTO image_workshop_settings(tenant_id,suite_quality,suite_resolution) VALUES($1,'high','2k')",[tenant])
   const token=(tenantId=tenant,permissions=['*'])=>app.jwt.sign({sub:actor,tenantId,email:'test',displayName:'test',roles:[],permissions})
   const request=(method:'GET'|'POST',path:string,payload?:object,bearer=token())=>app.inject({method,url:`/api/integrations/1688${path}`,headers:{authorization:`Bearer ${bearer}`},...(payload?{payload}:{})})
   const connection=await saveConnection(tenant,actor,{aliId:`images-${randomUUID()}`,access_token:'fixture',expires_in:36000})
   const product=(await db.query("INSERT INTO products(tenant_id,sku,name,base_price,base_currency,status,images)VALUES($1,$2,'图像商品',12,'CNY','active','[\"https://cbu01.alicdn.com/img/source.png\"]')RETURNING id",[tenant,`image-${randomUUID()}`])).rows[0]
   const draft=(await db.query("INSERT INTO integration_1688_publish_drafts(tenant_id,connection_id,product_id,cat_id,scene,platform_schema,data_body,status)VALUES($1,$2,$3,'101','cbu',$4,$5,'draft')RETURNING *",[tenant,connection.id,product.id,JSON.stringify({global:{},data:{primaryPicture:{fields:{maxItems:5}}}}),JSON.stringify({global:{},formValues:{title:'图像商品',primaryPicture:{imageList:[{url:'https://cbu01.alicdn.com/img/source.png'}]}}})])).rows[0]
   const path=`/drafts/${draft.id}/agent-images`
-  const create=(mode:'generate'|'edit',sourceIndex?:number,revision=1)=>request('POST',path,{revision,mode,model:'qwen-image-3.0',prompt:'保持商品形状，使用纯净白色背景',sourceIndex,confirmed:true})
-  assert.equal((await request('POST',path,{revision:1,mode:'generate',model:'qwen-image-3.0',prompt:'去除图片水印并替换商标',confirmed:true})).statusCode,400)
-  assert.equal((await request('POST',path,{revision:1,mode:'edit',model:'qwen-image-3.0',prompt:'保持商品形状，使用纯净白色背景',confirmed:true})).statusCode,400)
+  const create=(mode:'generate'|'edit',sourceIndex?:number,revision=1)=>request('POST',path,{revision,mode,prompt:'保持商品形状，使用纯净白色背景',sourceIndex,confirmed:true})
+  const modelOverride=await request('POST',path,{revision:1,mode:'generate',model:'qwen-image-3.0',prompt:'保持商品形状，使用纯净白色背景',confirmed:true})
+  assert.equal(modelOverride.statusCode,400)
+  assert.equal(generated,0)
+  assert.equal((await request('POST',path,{revision:1,mode:'generate',prompt:'去除图片水印并替换商标',confirmed:true})).statusCode,400)
+  assert.equal((await request('POST',path,{revision:1,mode:'edit',prompt:'保持商品形状，使用纯净白色背景',confirmed:true})).statusCode,400)
   assert.equal((await create('generate',undefined,2)).statusCode,409)
   assert.equal((await create('generate',undefined,1)).statusCode,200)
   const first=(await request('GET',path)).json().data[0];assert.equal(first.storage,'oss');assert.equal(new URL(first.url).hostname,'images.example.com');assert.equal(new URL(first.url).searchParams.get('x-oss-signature-version'),'OSS4-HMAC-SHA256');assert.equal(first.status,'preview');assert.equal(generated,1);assert.equal(vision,1);assert.equal(puts,1);assert.equal(photos,0)

@@ -13,7 +13,7 @@ import { defaultBrand } from './brands.js'
 import { heroDesignForShop } from './shop-hero-templates.js'
 import { CUSTOM_HERO_FRAME } from './hero-reference-frame.js'
 import { ensureAlbum, ensurePhoto, rehostToAlbum, retryableUpload } from './image-album.js'
-import { apimartConfigured } from '../llm/apimart-image.js'
+import { apimartConfigured, type ImageOutputSettings } from '../llm/apimart-image.js'
 
 // With AI image processing on, every listing gets new pictures: six main pictures and three detail pictures are generated
 // from the collected ones, put into the shop album and the product, and published without screening (the owner's choice).
@@ -23,8 +23,8 @@ const IMAGE_WAIT_MS=90*60_000,MAX_AUTO_RESUMES=3,IMAGE_POLL_SECONDS=45,MAX_SKU_P
 const GENERATED:GeneratedType[]=[...LISTING_MAIN_TYPES,...DETAIL_TYPES]
 type ImageStep={kind:'wait';message:string}|{kind:'block';message:string}|{kind:'applied';count:number}
 const autoImages=async(tenantId:string)=>{
-  const row=(await db.query('SELECT auto_replace,suite_model,suite_quality FROM image_workshop_settings WHERE tenant_id=$1',[tenantId])).rows[0]
-  return row?.auto_replace&&apimartConfigured()?row as {suite_model:string;suite_quality:string}:null
+  const row=(await db.query('SELECT auto_replace,suite_quality AS quality,suite_resolution AS resolution FROM image_workshop_settings WHERE tenant_id=$1',[tenantId])).rows[0]
+  return row?.auto_replace&&apimartConfigured()?row as ImageOutputSettings:null
 }
 import { collectedSkuAttributes } from './1688-collected-skus.js'
 import { runAgentDraft } from '../routes/1688-agent.js'
@@ -110,7 +110,7 @@ async function defer(job:QueueJob,message:string,report:Json,seconds=IMAGE_POLL_
 }
 
 /** Generates the listing's pictures (or reuses an unfinished batch), then puts them into the album and the product. */
-async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:{suite_model:string;suite_quality:string}|null,state:Json):Promise<ImageStep>{
+async function generateListingImages(job:QueueJob,source:Json,actor:Json,settings:({ suite_model: string } & ImageOutputSettings)|null,state:Json):Promise<ImageStep>{
   const resumeUpload=state.resumeAlbumUpload===true
   const design=state.imageBatch||resumeUpload?null:await heroDesignForShop(job.tenant_id,job.connection_id)
   const frame=design?.frame
@@ -153,7 +153,7 @@ async function generateListingImages(job:QueueJob,source:Json,actor:Json,setting
       const { prompt, options } = suiteDesign(type,facts,brand)
       await db.query(`INSERT INTO image_assets(tenant_id,collected_product_id,batch_id,operation,provider,model,reference_urls,options,prompt,trigger,created_by)
         VALUES($1,$2,$3,$4,'apimart',$5,$6,$7,$8,'agent',$9)`,[job.tenant_id,source.id,batch,type,settings.suite_model,JSON.stringify(refs),
-        JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',resolution:'1k',quality:settings.suite_quality,unchecked:true,listingConnectionId:job.connection_id,...options}),prompt,actor.id])
+        JSON.stringify({size:type.startsWith('detail_')?'3:4':'1:1',quality:settings.quality,resolution:settings.resolution,unchecked:true,listingConnectionId:job.connection_id,...options}),prompt,actor.id])
     }
     state.imageBatch=batch
     return {kind:'wait',message:`正在用 AI 生成 ${LISTING_MAIN_TYPES.length} 张主图和 ${DETAIL_TYPES.length} 张详情图，完成后自动上传店铺相册并上架。`}

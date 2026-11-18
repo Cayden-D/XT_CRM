@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, Check, LoaderCircle, RefreshCw } from 'lucide-react'
 import { request, type SessionUser } from './api'
 import TeamsAdmin from './TeamsAdmin'
+import ImageGenerationAdmin from './ImageGenerationAdmin'
 import './1688.css'
 
 type Role = { code: string; name: string }
@@ -61,5 +62,6 @@ export default function UsersAdminPage({ user }: { user: SessionUser }) {
         </table>
       </div> : members && <p className="shop-empty">暂无 1688 成员。</p>}
     {members?.scope === 'all' && <TeamsAdmin />}
+    {user.roles.includes('super_admin') && <ImageGenerationAdmin />}
   </div>
 }

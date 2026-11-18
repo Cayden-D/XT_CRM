@@ -4,18 +4,18 @@ export type Finding = { readable:boolean; watermark:boolean; rightsRisk:boolean;
 export type SuiteType = 'suite_hero'|'suite_white'|'suite_scene'|'suite_detail'|'suite_model'|'suite_selling'|'suite_spec'
 export type ImageOperation = 'upload'|'white_bg'|'background'|'resize'|SuiteType
 export type ImageAsset = {
-  id:string; collected_product_id:string|null; batch_id:string|null; operation:ImageOperation; label:string; provider:'local'|'qwen'|'apimart'; model:string|null
+  id:string; collected_product_id:string|null; batch_id:string|null; operation:ImageOperation; label:string; canRetry:boolean
   source_url:string|null; replaces_index:number|null; options:Record<string,unknown>; status:'pending'|'processing'|'completed'|'failed'; width:number|null; height:number|null
   findings:Finding|null; error:string|null; cost:string|null; trigger:'manual'|'agent'; created_at:string; url:string|null; risky:boolean; product_title?:string|null
   photo_status:'uploading'|'uploaded'|'unknown'|null; photo_url:string|null; photo_connection_id:string|null; photo_album_id:string|null
   applied_to:{ collectedProductId:string; index:number; placement:'replace'|'append'|'detail'; previousUrl:string|null; productId:string|null }|null; applied_at:string|null
 }
 export type AlbumShop = { id:string; display_name:string; status:string; album_id:string|null }
-export type ImageSettings = { auto_replace:boolean; suite_model:'gpt-image-2.5-flare'|'gpt-image-2.5-sunburst'; suite_quality:'low'|'medium'|'high'|'xhigh'; hero_badges:string[]; enabled_at:string|null; revision:number }
+export type ImageSettings = { auto_replace:boolean; hero_badges:string[]; enabled_at:string|null; revision:number }
 export type HeroTemplateMode = 'none'|'tuoyang-v1'|'custom-v1'
 export type CustomHeroTemplate = { id:string; name:string; previewUrl:string|null; adaptive:boolean }
 export type HeroTemplateShop = { id:string; display_name:string; mode:HeroTemplateMode; revision:number; activeTemplateId:string|null; templates:CustomHeroTemplate[]; heroOrigin:string|null; heroNotes:string[] }
-export type ImageServices = { qwen:boolean; apimart:boolean; oss:boolean }
+export type ImageServices = { screening:boolean; generation:boolean; oss:boolean }
 export type ProductImage = { url:string; finding:Finding|null }
 export type ProductImages = { gallery:ProductImage[]; details:ProductImage[]; screenedAt:string|null; assets:ImageAsset[] }
 export type ImageSource = { url:string }|{ assetId:string }
@@ -36,7 +36,7 @@ export const flagged = (f:Finding|null|undefined) => Boolean(f && (!f.readable |
 const base = '/api/image-workshop'
 const json = (method:string, body:unknown) => ({ method, body:JSON.stringify(body) })
 export const getImageSettings = () => request<{data:ImageSettings;services:ImageServices}>(`${base}/settings`)
-export const saveImageSettings = (input:{autoReplace:boolean;suiteModel:string;suiteQuality:string;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
+export const saveImageSettings = (input:{autoReplace:boolean;heroBadges?:string[];revision:number;confirmed?:boolean}) => request<{data:ImageSettings}>(`${base}/settings`, json('PUT', input))
 export const getHeroTemplateShops = () => request<{data:HeroTemplateShop[]}>(`${base}/hero-templates`)
 export const saveHeroTemplate = (id:string, input:{mode:HeroTemplateMode;revision:number;templateId?:string}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}`, json('PUT', input))
 export const saveShopHeroCopy = (id:string, input:{origin:string|null;notes:string[];revision:number}) => request<{data:HeroTemplateShop}>(`${base}/hero-templates/${id}/copy`, json('PUT', input))
@@ -47,8 +47,8 @@ export const getProductImages = (id:string, connectionId?:string|null) => reques
 export const screenProductImages = (id:string, details=false, connectionId?:string|null) => request<{data:ProductImage[]}>(`${base}/products/${id}/screen`, json('POST', { details, connectionId }))
 export const replaceFlagged = (id:string, connectionId?:string|null) => request<{data:{flagged:number;queued:number;clean:number;message:string}}>(`${base}/products/${id}/replace-flagged`, json('POST', { connectionId }))
 export const uploadImage = (content:string, collectedProductId?:string) => request<{data:ImageAsset}>(`${base}/uploads`, json('POST', { content, collectedProductId }))
-export const createEdit = (input:{source:ImageSource;operation:'white_bg'|'background'|'resize';collectedProductId?:string;scene?:string;model?:string;preset?:string;width?:number;height?:number;fit?:'pad'|'crop'}) => request<{data:ImageAsset}>(`${base}/edits`, json('POST', input))
-export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];model?:string;quality?:string;size?:'1:1'|'3:4';resolution?:'1k'|'2k';brandId?:string|null;connectionId?:string|null}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
+export const createEdit = (input:{source:ImageSource;operation:'white_bg'|'background'|'resize';collectedProductId?:string;scene?:string;preset?:string;width?:number;height?:number;fit?:'pad'|'crop'}) => request<{data:ImageAsset}>(`${base}/edits`, json('POST', input))
+export const createSuite = (input:{collectedProductId?:string;title?:string;points?:string;references:ImageSource[];types:SuiteType[];size?:'1:1'|'3:4';brandId?:string|null;connectionId?:string|null}) => request<{data:{batchId:string;assets:ImageAsset[]}}>(`${base}/suites`, json('POST', input))
 export function getAssets(params:{kind?:'edit'|'suite'|'upload';collectedProductId?:string;batchId?:string;ids?:string[];page?:number;pageSize?:number}) {
   const q = new URLSearchParams()
   Object.entries(params).forEach(([k,v]) => { if (v !== undefined && v !== '') q.set(k, Array.isArray(v) ? v.join(',') : String(v)) })

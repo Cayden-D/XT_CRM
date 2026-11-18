@@ -122,8 +122,6 @@
 .iw-settings { margin-top:22px; padding:18px; border:1px solid var(--line); border-radius:10px; background:#fff; }
 .iw-settings h3 { margin:0 0 6px; display:flex; align-items:center; gap:8px; font-size:15px; color:#293d54; }
 .iw-settings-grid { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin:10px 0 4px; }
-.iw-settings-grid > label:not(.agent-switch) { display:flex; align-items:center; gap:7px; font-size:12px; color:#405268; }
-.iw-settings-grid select { border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:12px; background:#fff; }
 @media (max-width:1180px) { .iw-page { grid-template-columns:1fr; } .iw-panel { position:static; max-height:none; } }
 @media (max-width:620px) {
   .iw-ops, .iw-suite-types { grid-template-columns:1fr; }
