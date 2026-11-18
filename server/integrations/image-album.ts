@@ -48,7 +48,12 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
   const finding = asset.options?.unchecked ? asset.findings as Finding
     : await checkAssetFinding(ctx.tenantId, { oss_key: asset.oss_key, findings: asset.findings, options: asset.options }, destination ?? null)
   if (!finding || flagged(finding)) throw new IntegrationError('IMAGE_RISK', '这张图片未通过目标店铺的复检。', 409)
-  if (reusablePhoto) return asset.photo_url as string
+  if (reusablePhoto) {
+    if (options.retry && asset.photo_connection_id && asset.photo_album_id) {
+      await confirmAlbumRollover(ctx, asset.photo_connection_id, asset.photo_album_id)
+    }
+    return asset.photo_url as string
+  }
   if (!connectionId || !albumId) throw new IntegrationError('ALBUM_REQUIRED', '请选择店铺并填写相册 ID。', 400)
   const shop = (await db.query("SELECT id,status FROM integration_1688_connections WHERE id=$1 AND tenant_id=$2", [connectionId, ctx.tenantId])).rows[0]
   if (!shop) throw new IntegrationError('NOT_FOUND', '店铺不存在。', 404)
@@ -58,10 +63,22 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
   if (!claimed.rows.length) throw new IntegrationError('PHOTO_UPLOADING', '这张图片正在上传相册，请稍候。', 409)
   const attempts = options.retry ? UPLOAD_ATTEMPTS : 1
   let photo: { url?: string; id?: string } | undefined, url = '', lastError: IntegrationError | null = null
+  let usedAlbum = albumId
+  let rolloverPending = false
   let uncertainUpload = asset.photo_status === 'unknown'
   for (let attempt = 1; attempt <= attempts && !url; attempt++) {
     if (attempt > 1) await sleep(UPLOAD_RETRY_MS * (attempt - 1))
-    try { photo = await uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, albumId, `ai-${String(asset.operation).replace('suite_', '')}-${asset.id.slice(0, 8)}.jpg`, bytes, 'image/jpeg', ctx.requestId) as { url?: string; id?: string } }
+    const name = `ai-${String(asset.operation).replace('suite_', '')}-${asset.id.slice(0, 8)}.jpg`
+    try {
+      if (options.retry) {
+        const uploaded = await uploadToAvailableAlbum(ctx, connectionId, albumId, name, bytes)
+        photo = uploaded.photo
+        usedAlbum = uploaded.album.album_id
+        rolloverPending = uploaded.album.rollover_pending
+      } else {
+        photo = await uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, albumId, name, bytes, 'image/jpeg', ctx.requestId) as typeof photo
+      }
+    }
     catch (error) {
       // A rejection reported by the platform (or a token problem before the call) stored nothing. A network failure or
       // unreadable answer may have stored it: unknown, tried again only with `retry`.
@@ -82,12 +99,13 @@ export async function ensurePhoto(ctx: AlbumContext, asset: Record<string, any>,
     if (options.retry && lastError) throw new IntegrationError(lastError.code, `${lastError.message.replace(/，?请到店铺相册核对[^。]*。?$/, '')}（已自动重试 ${attempts} 次）`, lastError.statusCode, lastError.detail)
     throw lastError ?? new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传结果未确认，请到店铺相册核对后再处理，勿重复上传。', 409)
   }
-  await db.query("UPDATE image_assets SET photo_status='uploaded',photo_url=$2,photo_connection_id=$3,photo_album_id=$4,photo_uploaded_at=now(),updated_at=now() WHERE id=$1", [asset.id, url, connectionId, albumId])
-  await db.query(`INSERT INTO integration_1688_album_settings(connection_id,tenant_id,album_id,updated_by) VALUES($1,$2,$3,$4)
-    ON CONFLICT(connection_id) DO UPDATE SET album_id=excluded.album_id,updated_by=excluded.updated_by,updated_at=now()`, [connectionId, ctx.tenantId, albumId, ctx.actorId])
+  await db.query("UPDATE image_assets SET photo_status='uploaded',photo_url=$2,photo_connection_id=$3,photo_album_id=$4,photo_uploaded_at=now(),updated_at=now() WHERE id=$1", [asset.id, url, connectionId, usedAlbum])
+  if (rolloverPending) await confirmAlbumRollover(ctx, connectionId, usedAlbum)
+  // A photo accepted by the old album while another worker switches must not make the old album active again.
+  if (!options.retry) await withAlbumLock(connectionId, client => saveChosenAlbum(client, ctx, connectionId, usedAlbum))
   // The album copy is the same picture that passed screening.
   await rememberFinding(ctx.tenantId, url, finding)
-  await audit(ctx, 'image.album.upload', asset.id, { connectionId, albumId, photoId: photo?.id ?? null })
+  await audit(ctx, 'image.album.upload', asset.id, { connectionId, albumId: usedAlbum, photoId: photo?.id ?? null })
   return url
 }
 
@@ -138,39 +156,125 @@ const platformError = (data: Record<string, unknown>) => {
   if (OK_CODES.has(code) && (!message || OK_CODES.has(message))) return null
   return new IntegrationError(code && !OK_CODES.has(code) ? code : 'ALBUM_ERROR', `1688 相册接口返回错误：${message || code}`, 502)
 }
-export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
-  const chosen = (await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connectionId])).rows[0]?.album_id as string | undefined
-  if (chosen) return chosen
+async function withAlbumLock<T>(connectionId: string, action: (client: PoolClient) => Promise<T>) {
   const client = await db.connect()
   try {
     await client.query('BEGIN')
-    // One album per shop even when several jobs reach this point together.
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`photobank-album:${connectionId}`])
-    const again = (await client.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connectionId])).rows[0]?.album_id as string | undefined
-    if (again) { await client.query('COMMIT'); return again }
-    const listed = await callProductApi(connectionId, ctx.tenantId, ctx.actorId, 'alibaba.photobank.album.getList', { webSite: '1688', albumType: 'CUSTOM' }, ctx.requestId) as Record<string, unknown>
-    const body = (listed.result && typeof listed.result === 'object' ? listed.result : listed) as Record<string, unknown>
-    const listError = platformError(body)
-    if (listError) throw listError
-    const albums = (Array.isArray(body.albumInfos) ? body.albumInfos : []) as Album[]
-    let albumId = albums.find(a => a?.name === AUTO_ALBUM_NAME && /^\d{1,20}$/.test(String(a.albumID ?? '')))?.albumID as string | number | undefined
-    let created = false
-    if (albumId == null) {
-      const made = await callProductApi(connectionId, ctx.tenantId, ctx.actorId, 'alibaba.photobank.album.add', { name: AUTO_ALBUM_NAME, description: '销途 CRM 自动上架生成的商品图片', authority: 0, webSite: '1688' }, ctx.requestId) as Record<string, unknown>
-      const answer = (made.result && typeof made.result === 'object' ? made.result : made) as Record<string, unknown>
-      const addError = platformError(answer)
-      if (addError) throw addError
-      albumId = answer.albumID as string | number | undefined
-      if (!/^\d{1,20}$/.test(String(albumId ?? ''))) throw new IntegrationError('ALBUM_UNKNOWN', '创建相册后平台没有返回相册编号，请到店铺相册核对。', 502)
-      created = true
-    }
-    await client.query(`INSERT INTO integration_1688_album_settings(connection_id,tenant_id,album_id,updated_by) VALUES($1,$2,$3,$4)
-      ON CONFLICT(connection_id) DO UPDATE SET album_id=excluded.album_id,updated_by=excluded.updated_by,updated_at=now()`, [connectionId, ctx.tenantId, String(albumId), ctx.actorId])
-    await client.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'image.album.auto','1688_connection',$3,$4,$5)",
-      [ctx.tenantId, ctx.actorId, connectionId, JSON.stringify({ albumId: String(albumId), name: AUTO_ALBUM_NAME, created }), ctx.requestId])
+    const result = await action(client)
     await client.query('COMMIT')
-    return String(albumId)
+    return result
   } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+
+type ChosenAlbum = { album_id: string; rollover_pending: boolean }
+
+async function chosenAlbum(client: PoolClient | typeof db, ctx: AlbumContext, connectionId: string): Promise<ChosenAlbum | undefined> {
+  return (await client.query<ChosenAlbum>('SELECT album_id,rollover_pending FROM integration_1688_album_settings WHERE connection_id=$1 AND tenant_id=$2', [connectionId, ctx.tenantId])).rows[0]
+}
+
+async function saveChosenAlbum(client: PoolClient, ctx: AlbumContext, connectionId: string, albumId: string, rolloverPending = false) {
+  const { rows } = await client.query<ChosenAlbum>(`INSERT INTO integration_1688_album_settings AS current(connection_id,tenant_id,album_id,updated_by,rollover_pending)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(connection_id) DO UPDATE SET album_id=excluded.album_id,updated_by=excluded.updated_by,updated_at=now(),
+      rollover_pending=excluded.rollover_pending OR (current.album_id=excluded.album_id AND current.rollover_pending)
+    RETURNING album_id,rollover_pending`, [connectionId, ctx.tenantId, albumId, ctx.actorId, rolloverPending])
+  return rows[0]
+}
+
+async function confirmAlbumRollover(ctx: AlbumContext, connectionId: string, albumId: string) {
+  // The album marker and the queue update commit together. Concurrent uploaders can only consume it once.
+  await db.query(`WITH confirmed AS (
+    UPDATE integration_1688_album_settings SET rollover_pending=false
+    WHERE tenant_id=$1 AND connection_id=$2 AND album_id=$3 AND rollover_pending
+    RETURNING connection_id
+  ), sources AS MATERIALIZED (
+    SELECT p.id,p.updated_at FROM confirmed
+    JOIN collection_listing_shops shop ON shop.connection_id=confirmed.connection_id AND shop.tenant_id=$1
+    JOIN integration_1688_collection_queue_jobs j ON j.connection_id=shop.connection_id AND j.tenant_id=$1
+    JOIN collected_products p ON p.id=j.collected_product_id AND p.tenant_id=$1
+    WHERE p.product_id IS NULL AND j.product_id IS NULL AND j.draft_id IS NULL
+      AND j.phase='screening' AND j.status IN ('blocked','failed')
+      AND coalesce(j.report->>'albumErrorCode',
+        CASE WHEN j.message LIKE 'AI 新图上传店铺相册失败：%'
+          AND j.message ~ '1688 (接口调用失败（13）|错误码 13）)' THEN '13' END)='13'
+    ORDER BY p.id FOR UPDATE OF p
+  ), resumed AS (
+    UPDATE integration_1688_collection_queue_jobs j SET status='queued',attempts=0,available_at=now(),
+      source_updated_at=p.updated_at,message='新相册已验证，已重新入队续传。',
+      report=(j.report-'uploadRounds'-'imageWaitSince'-'storageRevivals'-'albumErrorCode'-'autoResumes') || '{"resumeAlbumUpload":true}'::jsonb,
+      worker_id=NULL,lease_until=NULL,updated_at=now()
+    FROM sources p WHERE j.collected_product_id=p.id AND j.tenant_id=$1 AND j.connection_id=$2
+      AND j.phase='screening' AND j.status IN ('blocked','failed') AND j.product_id IS NULL AND j.draft_id IS NULL
+    RETURNING j.collected_product_id
+  )
+  UPDATE collected_products p SET processing_status='ai_processing'
+    FROM resumed r WHERE p.id=r.collected_product_id AND p.tenant_id=$1`, [ctx.tenantId, connectionId, albumId])
+}
+
+async function albumRequest(ctx: AlbumContext, connectionId: string, method: 'getList' | 'getProfile' | 'add', input: Record<string, unknown> = {}) {
+  const data = await callProductApi(connectionId, ctx.tenantId, ctx.actorId, `alibaba.photobank.album.${method}`, { webSite: '1688', ...input }, ctx.requestId) as Record<string, unknown>
+  const nested = data.result && typeof data.result === 'object' ? data.result as Record<string, unknown> : data
+  const error = platformError(data) ?? platformError(nested)
+  if (error) throw error
+  return nested
+}
+
+async function selectOrCreateAlbum(client: PoolClient, ctx: AlbumContext, connectionId: string, name: string, previousAlbumId?: string) {
+  const listed = await albumRequest(ctx, connectionId, 'getList', { albumType: 'CUSTOM' })
+  const albums = (Array.isArray(listed.albumInfos) ? listed.albumInfos : []) as Album[]
+  const existing = albums.find(a => a?.name === name && /^\d{1,20}$/.test(String(a.albumID ?? '')) && String(a.albumID) !== previousAlbumId)?.albumID
+  const albumId = String(existing ?? (await albumRequest(ctx, connectionId, 'add', {
+    name, description: '销途 CRM 自动上架生成的商品图片', authority: 0,
+  })).albumID ?? '')
+  if (!/^\d{1,20}$/.test(albumId) || albumId === previousAlbumId) throw new IntegrationError('ALBUM_UNKNOWN', '平台未返回可用的新相册编号，请到店铺相册核对。', 502)
+  const chosen = await saveChosenAlbum(client, ctx, connectionId, albumId, previousAlbumId !== undefined)
+  await client.query("INSERT INTO audit_logs(tenant_id,actor_id,action,entity_type,entity_id,after_data,request_id)VALUES($1,$2,'image.album.auto','1688_connection',$3,$4,$5)",
+    [ctx.tenantId, ctx.actorId, connectionId, JSON.stringify({ albumId, name, created: existing == null, previousAlbumId }), ctx.requestId])
+  return chosen
+}
+
+export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
+  const album = await chosenAlbum(db, ctx, connectionId) ?? await withAlbumLock(connectionId, async client =>
+    await chosenAlbum(client, ctx, connectionId) ?? await selectOrCreateAlbum(client, ctx, connectionId, AUTO_ALBUM_NAME))
+  return album.album_id
+}
+
+function albumBytes(value: unknown) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
+  if (typeof value === 'string' && /^\d{1,20}$/.test(value)) return BigInt(value)
+  return null
+}
+
+async function switchFullAlbum(ctx: AlbumContext, connectionId: string, fullAlbumId: string) {
+  return withAlbumLock(connectionId, async client => {
+    const current = await chosenAlbum(client, ctx, connectionId)
+    if (current && current.album_id !== fullAlbumId) return current
+    const profile = await albumRequest(ctx, connectionId, 'getProfile')
+    const used = albumBytes(profile.usedSpace), standard = albumBytes(profile.defaultSpace), extra = albumBytes(profile.externalSpace)
+    const total = standard !== null && extra !== null ? standard + extra : null
+    const measured = used !== null && total !== null
+    if (profile.full === true || profile.full === 'true' || (measured && used >= total)) {
+      throw new IntegrationError('ALBUM_STORAGE_FULL', '店铺相册总空间已满，创建新相册无法增加容量，请释放空间或扩容后重试。', 409)
+    }
+    if (profile.full !== false && profile.full !== 'false' && !measured) {
+      throw new IntegrationError('ALBUM_PROFILE_INVALID', '1688 未返回有效的店铺相册空间信息，请核对后重试。', 502)
+    }
+    // A timed-out album creation can be found by the same name on the next attempt.
+    return selectOrCreateAlbum(client, ctx, connectionId, `${AUTO_ALBUM_NAME}-${fullAlbumId}`, fullAlbumId)
+  })
+}
+
+async function uploadToAvailableAlbum(ctx: AlbumContext, connectionId: string, albumId: string, name: string, bytes: Uint8Array) {
+  let active = await chosenAlbum(db, ctx, connectionId) ?? { album_id: albumId, rollover_pending: false }
+  const upload = () => uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, active.album_id, name, bytes, 'image/jpeg', ctx.requestId)
+  let photo: unknown
+  try { photo = await upload() } catch (error) {
+    if (!(error instanceof IntegrationError) || error.code !== '13') throw error
+    active = await switchFullAlbum(ctx, connectionId, active.album_id)
+    photo = await upload()
+  }
+  return { photo: photo as { url?: string; id?: string } | undefined, album: active }
 }
 
 /**
@@ -179,7 +283,12 @@ export async function ensureAlbum(ctx: AlbumContext, connectionId: string) {
  */
 export async function rehostToAlbum(ctx: AlbumContext, connectionId: string, albumId: string, url: string, name: string) {
   const bytes = await albumJpeg(await download(sourceUrl(url), 15_000_000))
-  const photo = await uploadPhoto(connectionId, ctx.tenantId, ctx.actorId, albumId, name, bytes, 'image/jpeg', ctx.requestId) as { url?: string } | undefined
+  const { photo, album } = await uploadToAvailableAlbum(ctx, connectionId, albumId, name, bytes)
   if (typeof photo?.url !== 'string') throw new IntegrationError('PHOTO_UPLOAD_UNKNOWN', '相册上传未返回图片地址。', 502)
-  return publishingImages({ image: photo.url })[0]
+  const uploaded = publishingImages({ image: photo.url })[0]
+  if (album.rollover_pending) {
+    if (!(await reachable(uploaded))) throw new IntegrationError('PHOTO_UNREACHABLE', '相册返回的图片地址暂时打不开。', 409)
+    await confirmAlbumRollover(ctx, connectionId, album.album_id)
+  }
+  return uploaded
 }

@@ -6,3 +6,4 @@ tutorial/
 .env.*
 !.env.example
 *.log
+output/

@@ -337,7 +337,7 @@ export async function resumeImageBlockedJobs(tenantId?:string){
     WHERE p.id=j.collected_product_id AND p.product_id IS NULL AND j.status='blocked' AND j.phase='screening' AND j.draft_id IS NULL
       AND ($1::uuid IS NULL OR j.tenant_id=$1) AND j.updated_at>now()-interval '2 days'
       AND (j.message LIKE 'AI 生图%' OR j.message LIKE 'AI 新图上传店铺相册%')
-      AND j.report->>'albumErrorCode' IS NULL AND j.message !~ '1688 接口调用失败（[0-9]+）'
+      AND j.report->>'albumErrorCode' IS NULL AND j.message !~ '1688 (接口调用失败（[0-9]+）|错误码 [0-9]+）)'
       AND coalesce((j.report->>'autoResumes')::int,0)<$2
       AND j.report->>'imageBatch' ~ '^[0-9a-f-]{36}$'
       AND NOT EXISTS(SELECT 1 FROM image_assets a WHERE a.batch_id=(j.report->>'imageBatch')::uuid AND a.status IN ('pending','processing'))

@@ -284,7 +284,7 @@ export async function testMember(id: string, tenantId: string, actorId: string, 
 }
 
 export async function callProductApi(id: string, tenantId: string, actorId: string, name: string, input: Record<string, unknown>, requestId?: string) {
-  const allowed = ['alibaba.product.delete','alibaba.product.list.get','alibaba.product.get','alibaba.category.searchByKeyword','alibaba.category.get','alibaba.new.product.getSchema','alibaba.new.product.getSubSchema','alibaba.new.product.add','alibaba.product.modifyStock','alibaba.photobank.album.getList','alibaba.photobank.album.add']
+  const allowed = ['alibaba.product.delete','alibaba.product.list.get','alibaba.product.get','alibaba.category.searchByKeyword','alibaba.category.get','alibaba.new.product.getSchema','alibaba.new.product.getSubSchema','alibaba.new.product.add','alibaba.product.modifyStock','alibaba.photobank.album.getList','alibaba.photobank.album.getProfile','alibaba.photobank.album.add']
   if (!allowed.includes(name)) throw new IntegrationError('API_NOT_SUPPORTED', '该接口尚未接入。', 400)
   const started = Date.now()
   try {

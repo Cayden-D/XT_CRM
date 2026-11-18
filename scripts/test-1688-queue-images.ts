@@ -29,7 +29,8 @@ const app = await (await import('../server/app.js')).buildApp()
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
 const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [{ name: 'p-brand', label: '品牌', uiType: 'input' }] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true, uploadFailures = 0, uploadAttempts = 0, unreachable = 0
-let capacityLimit: number | null = null
+const fullAlbums = new Set<string>()
+let capacityLimit: number | null = null, profileFull = false, profileCalls = 0, lostAddReply = false
 let albums: { albumID: number; name: string }[] = [{ albumID: 5, name: '其他相册' }]
 const uploadedTo: string[] = []
 const reply = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -57,6 +58,11 @@ globalThis.fetch = async (input, init) => {
   if (/^https:\/\/cbu01\.alicdn\.com\/img\/ibank\/album-\d+\.jpg$/.test(url)) { if (unreachable > 0) { unreachable--; return new Response('', { status: 404 }) } return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } }) }
   if (url.startsWith('https://upload.apimart.fixture/')) return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
   assert.ok(url.startsWith('https://gw.open.1688.com/openapi/'), `unexpected request ${url}`)
+  if (url.includes('alibaba.photobank.album.getProfile')) {
+    assert.equal((init?.body as URLSearchParams).get('webSite'), '1688')
+    profileCalls++
+    return reply({ result: { usedSpace: profileFull ? '21474836480' : '7757165510', defaultSpace: '21474836480', externalSpace: 0, full: profileFull } })
+  }
   if (url.includes('alibaba.photobank.album.getList')) {
     const form = init?.body as URLSearchParams
     assert.deepEqual([form.get('webSite'), form.get('albumType')], ['1688', 'CUSTOM'])
@@ -65,13 +71,26 @@ globalThis.fetch = async (input, init) => {
   }
   if (url.includes('alibaba.photobank.album.add')) {
     const form = init?.body as URLSearchParams
-    assert.deepEqual([form.get('name'), form.get('authority'), form.get('webSite')], ['销途 AI 生图', '0', '1688'])
-    addCalls++; albums = [...albums, { albumID: 777, name: '销途 AI 生图' }]; return reply({ albumID: 777, errCode: '0', errMsg: '' })
+    const name = form.get('name')!
+    assert.match(name, /^销途 AI 生图(?:-\d{1,20})?$/)
+    assert.ok(name.length <= 30)
+    assert.deepEqual([form.get('authority'), form.get('webSite')], ['0', '1688'])
+    const albumID = 777 + addCalls++
+    albums.push({ albumID, name })
+    if (lostAddReply) { lostAddReply = false; throw new TypeError('fixture lost response after creation') }
+    return reply({ albumID, errCode: '0', errMsg: '' })
   }
   // `uploadFailures` makes the next uploads time out (outcome unknown).
   if (url.includes('alibaba.photobank.photo.add') && (uploadAttempts++, uploadFailures > 0)) { uploadFailures--; throw new TypeError('fetch failed') }
-  if (url.includes('alibaba.photobank.photo.add') && capacityLimit !== null && albumUploads === capacityLimit) return reply({ error_code: '0', result: { errorCode: 13, errorMsg: 'fixture album full' } })
-  if (url.includes('alibaba.photobank.photo.add')) { uploadedTo.push(String((init?.body as FormData).get('albumID'))); albumUploads++; return reply({ image: { id: `photo-${albumUploads}`, url: `https://cbu01.alicdn.com/img/ibank/album-${albumUploads}.jpg` } }) }
+  if (url.includes('alibaba.photobank.photo.add')) {
+    const albumId = String((init?.body as FormData).get('albumID'))
+    if (fullAlbums.has(albumId) || (albumId === '777' && capacityLimit !== null && albumUploads >= capacityLimit)) {
+      return reply({ error_code: '0', result: { errorCode: 13, errorMsg: 'fixture album full' } })
+    }
+    uploadedTo.push(albumId)
+    albumUploads++
+    return reply({ image: { id: `photo-${albumUploads}`, url: `https://cbu01.alicdn.com/img/ibank/album-${albumUploads}.jpg` } })
+  }
   if (url.includes('alibaba.new.product.getSchema')) return reply({ result: { success: true, bizData: schema } })
   if (url.includes('alibaba.new.product.add')) { published = JSON.parse((init?.body as URLSearchParams).get('dataBody')!); return reply({ result: { success: true, bizData: { dataJson: JSON.stringify({ itemId: '990001', offerStatus: 'auditing' }) } } }) }
   throw new Error(`unexpected gateway endpoint ${url}`)
@@ -180,7 +199,7 @@ try {
   await db.query("UPDATE image_assets SET options=options-'suiteCopyVersion' WHERE collected_product_id=$1", [sourceId])
   const legacy = await api('GET', `/api/product-collections/${sourceId}`)
   assert.match(legacy.json().data.product.queue_message, /目标相册的图片数量已满.*13/)
-  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'an album capacity error waits for an explicit retry')
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'an album capacity error waits for a verified rollover or an explicit retry')
   assert.equal((await retry([sourceId], token(['collection:read']))).statusCode, 403)
   const missing = randomUUID()
   const queued = await retry([sourceId, off.collected_product_id, missing, sourceId])
@@ -191,25 +210,27 @@ try {
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /上传店铺相册未确认（已上传 0\/8 张）.*已自动重试 3 次.*第 2 轮/)
   assert.deepEqual([uploadAttempts, albumUploads, state.attempts], [3, 0, 0])
   assert.equal((await db.query("SELECT count(*)::int AS n FROM image_assets WHERE collected_product_id=$1 AND photo_status='unknown'", [sourceId])).rows[0].n, 1)
-  // Next round: one more timeout is retried. Two pictures reach the album before it fills up.
+  // Next round: two pictures reach the album, then getProfile shows that the entire shop is full.
   uploadFailures = 1; unreachable = 1
-  capacityLimit = 2
+  capacityLimit = 2; profileFull = true
   state = await run(sourceId)
   assert.equal(state.status, 'blocked', state.message)
-  assert.match(state.message, /目标相册的图片数量已满.*13/)
-  assert.deepEqual([state.report.albumErrorCode, state.report.imageBatch, albumUploads, submits], ['13', resumed.report.imageBatch, 2, 8])
-  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'capacity errors do not repeatedly hit the gateway')
-  capacityLimit = null
-  // Bulk retry resumes the same batch and reuses the two uploaded pictures.
+  assert.match(state.message, /店铺相册总空间已满/)
+  assert.deepEqual([state.report.albumErrorCode, state.report.imageBatch, albumUploads, submits, profileCalls, addCalls], ['ALBUM_STORAGE_FULL', resumed.report.imageBatch, 2, 8, 1, 1])
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'shop-wide exhaustion does not keep creating albums')
+  profileFull = false
+  // Capacity was freed at shop level, but album 777 remains full. Bulk retry reuses the two pictures and switches albums.
   assert.deepEqual((await retry([sourceId])).json().data, { queued: [sourceId], skipped: [] })
   assert.deepEqual((await retry([sourceId])).json().data, { queued: [], skipped: [sourceId] })
   assert.equal((await job(sourceId)).report.imageBatch, resumed.report.imageBatch)
   state = await run(sourceId)
   assert.equal(state.status, 'queued', state.message); assert.match(state.message, /已生成并上传 8 张/)
   assert.equal(submits, 8, 'a retry does not generate again'); assert.equal(albumUploads, 8, 'the eight generated pictures')
-  assert.equal(uploadAttempts, 3 + 1 + 8 + 1, 'only the timed-out and rejected uploads were tried again')
-  assert.equal(addCalls, 1); assert.ok(uploadedTo.every(id => id === '777'), 'uploaded into the new album')
-  assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '777')
+  assert.equal(uploadAttempts, 3 + 1 + 8 + 2, 'the full album was rejected twice across the two rounds')
+  assert.deepEqual([addCalls, profileCalls, uploadedTo], [2, 2, ['777', '777', ...Array(6).fill('778')]])
+  assert.equal((await db.query('SELECT album_id FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])).rows[0].album_id, '778')
+  const albumCounts = (await db.query('SELECT photo_album_id, count(*)::int AS count FROM image_assets WHERE collected_product_id=$1 GROUP BY 1 ORDER BY 1', [sourceId])).rows
+  assert.deepEqual(albumCounts, [{ photo_album_id: '777', count: 2 }, { photo_album_id: '778', count: 6 }])
   const source = (await db.query('SELECT main_image_url,gallery_images,detail_images FROM collected_products WHERE id=$1', [sourceId])).rows[0]
   assert.equal(source.main_image_url, 'https://cbu01.alicdn.com/img/ibank/album-1.jpg', 'the 1688 首图 comes first')
   // 1688 order: 首图 first (not the white picture), the white picture fifth — the last of the five 1688 shows.
@@ -242,15 +263,59 @@ try {
   assert.deepEqual([published.formValues.description.smartDetail, published.formValues.description.sizeTableDescriptionBlackIdList], [{ kept: true }, '[1]'])
   assert.match(published.formValues.description.detailList[0].content, /album-6\.jpg[\s\S]*album-8\.jpg/, 'the generated detail pictures are in the text')
   assert.equal(albumUploads, 9, 'nothing is uploaded twice')
+  assert.equal(uploadedTo.at(-1), '778', 'the SKU image uses the current album')
   // A shop that already has the album (e.g. settings lost) finds it by name instead of creating another.
-  await db.query('DELETE FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])
-  const { ensureAlbum } = await import('../server/integrations/image-album.js')
-  assert.equal(await ensureAlbum({ tenantId: tenant, actorId: actor, requestId: randomUUID() }, connection.id), '777')
-  assert.equal(addCalls, 1, 'found by name, not created again')
+  const { ensureAlbum, rehostToAlbum } = await import('../server/integrations/image-album.js')
+  const ctx = { tenantId: tenant, actorId: actor, requestId: randomUUID() }
   const second = await saveConnection(tenant, actor, { aliId: `queue-pets-${randomUUID()}`, resource_owner: '义乌市智珀宠物', access_token: 'fixture', expires_in: 36000 })
   await db.query("INSERT INTO brands(tenant_id,connection_id,name,is_default,rights_confirmed_at) VALUES($1,$2,'智珀',true,now())", [tenant, second.id])
   await db.query('INSERT INTO integration_1688_agent_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
   await db.query('INSERT INTO integration_1688_collection_queue_settings(connection_id,tenant_id,enabled)VALUES($1,$2,true)', [second.id, tenant])
+  const pauseUpload = async (shopId: string, message: string, report: Record<string, unknown> = {}, status = 'blocked') => {
+    const id = await collect(shopId)
+    await db.query("UPDATE collected_products SET processing_status='failed',updated_at=now() WHERE id=$1", [id])
+    await db.query("UPDATE integration_1688_collection_queue_jobs SET status=$2,message=$3,report=$4,attempts=2 WHERE collected_product_id=$1", [id, status, message, report])
+    return id
+  }
+  const oldFullMessage = 'AI 新图上传店铺相册失败：1688 接口调用失败（13），请检查接口权限或重新授权。'
+  const fullMessage = 'AI 新图上传店铺相册失败：目标相册的图片数量已满（1688 错误码 13）。'
+  const historicalBatch = randomUUID()
+  const historical = await pauseUpload(connection.id, fullMessage, { albumErrorCode: '13', imageBatch: historicalBatch, uploadRounds: 2, imageWaitSince: '2025-01-01' })
+  const legacyBlocked = await pauseUpload(connection.id, oldFullMessage, {}, 'failed')
+  const otherShop = await pauseUpload(second.id, fullMessage, { albumErrorCode: '13' })
+  const fullShop = await pauseUpload(connection.id, oldFullMessage, { albumErrorCode: 'ALBUM_STORAGE_FULL' })
+  const otherError = await pauseUpload(connection.id, oldFullMessage.replace('（13）', '（31）'))
+  const unknown = await pauseUpload(connection.id, fullMessage, { albumErrorCode: '13' }, 'unknown')
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'capacity errors are excluded from periodic retries')
+  fullAlbums.add('778')
+  const parallel = await Promise.all(['parallel-one.jpg', 'parallel-two.jpg'].map(name => rehostToAlbum(ctx, connection.id, '778', cdn('sku-mark'), name)))
+  assert.equal(new Set(parallel).size, 2)
+  assert.deepEqual([addCalls, profileCalls, uploadedTo.slice(-2)], [3, 3, ['779', '779']], 'concurrent uploaders share one new album')
+  const recovered = await job(historical)
+  assert.deepEqual([recovered.status, recovered.attempts, recovered.actor_id, recovered.report, (await job(legacyBlocked)).status],
+    ['queued', 0, actor, { imageBatch: historicalBatch, resumeAlbumUpload: true }, 'queued'])
+  assert.match(recovered.message, /新相册已验证.*已重新入队续传/)
+  const recoveredSource = (await db.query('SELECT updated_at,processing_status FROM collected_products WHERE id=$1', [historical])).rows[0]
+  assert.deepEqual([recovered.source_updated_at, recoveredSource.processing_status], [recoveredSource.updated_at, 'ai_processing'])
+  assert.deepEqual(await Promise.all([otherShop, fullShop, otherError, unknown, sourceId].map(async id => (await job(id)).status)),
+    ['blocked', 'blocked', 'blocked', 'unknown', 'published'])
+  const delayed = await pauseUpload(connection.id, fullMessage)
+  assert.equal(await resumeImageBlockedJobs(tenant), 0, 'a localized error also stays blocked without a structured code')
+  await rehostToAlbum(ctx, connection.id, '779', cdn('sku-mark'), 'same-album.jpg')
+  assert.equal((await job(delayed)).status, 'blocked', 'the verified album does not resume later jobs a second time')
+  fullAlbums.add('779')
+  lostAddReply = true
+  await assert.rejects(rehostToAlbum(ctx, connection.id, '779', cdn('sku-mark'), 'lost-reply.jpg'), /网关暂时无法连接/)
+  assert.equal(await ensureAlbum(ctx, connection.id), '779', 'an unconfirmed creation cannot move the pointer')
+  unreachable = 3
+  await assert.rejects(rehostToAlbum(ctx, connection.id, '779', cdn('sku-mark'), 'unreachable.jpg'), /图片地址暂时打不开/)
+  assert.equal(await ensureAlbum(ctx, connection.id), '780', 'the created album is recovered by name')
+  assert.equal((await job(delayed)).status, 'blocked', 'the new album needs a usable photo before any job resumes')
+  await rehostToAlbum(ctx, connection.id, '779', cdn('sku-mark'), 'lost-reply.jpg')
+  assert.deepEqual([addCalls, uploadedTo.at(-1), (await job(delayed)).status], [4, '780', 'queued'], 'a later upload confirms the same replacement album')
+  await db.query('DELETE FROM integration_1688_album_settings WHERE connection_id=$1', [connection.id])
+  assert.equal(await ensureAlbum(ctx, connection.id), '777')
+  assert.equal(addCalls, 4, 'found by name, not created again')
   const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
   const customKey = await workshop.storeImage(tenant, randomUUID(), await prepareCustomHeroFrame(png, 800, 800))
   const active = (await db.query("INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key) VALUES($1,'宠物首图',$2) RETURNING id", [second.id, customKey])).rows[0].id
@@ -271,7 +336,7 @@ try {
   assert.notEqual(rerouted.report.imageBatch, routed.report.imageBatch)
   const reroutedFrame = (await db.query("SELECT options->>'heroFrame' AS frame FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [rerouted.report.imageBatch])).rows[0]
   assert.equal(reroutedFrame.frame, 'tuoyang-v1')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesEight: 'ok', shopTemplates: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesEight: 'ok', shopTemplates: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', albumRolloverRecovery: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)
