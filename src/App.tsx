@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { LogOut, Menu, Sparkles } from 'lucide-react'
 import AgentQueueSettings from './AgentQueueSettings'
 import LoginPage from './LoginPage'
+import { is1688SignInReturn } from './signIn1688'
 import CustomersPage from './CustomersPage'
 import ProductCatalogPage from './ProductCatalogPage'
 import DashboardPage from './DashboardPage'
@@ -90,6 +91,11 @@ function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route
 const imageRoute = (intent: ImageIntent) => intent.page === 'imageSuite' ? 'images/suite' : 'images/edit'
 
 export default function App() {
+  const [returning] = useState(() => is1688SignInReturn(window.location.search))
+  return returning ? <LoginPage returning /> : <Workspace />
+}
+
+function Workspace() {
   const [session, setSession] = useState<SessionUser | null | undefined>(undefined)
   const [hash, setHash] = useState(window.location.hash)
   const [imageIntent, setImageIntent] = useState<ImageIntent | undefined>()
@@ -125,7 +131,7 @@ export default function App() {
     return () => window.removeEventListener('crm:unauthorized', expired)
   }, [])
   if (session === undefined) return <div className="app-loading"><div className="brand-mark"><span /></div><p>正在恢复工作空间…</p></div>
-  if (session === null) return <LoginPage onLogin={setSession} />
+  if (session === null) return <LoginPage />
   if (oauthReturn) return <OAuthReturn />
   const logout = () => { clearToken(); setSession(null); setAiOpen(false); resetAiFocus() }
   // Opened by the 1688 collector to be approved; signing in (above) keeps the address, so it comes back here.

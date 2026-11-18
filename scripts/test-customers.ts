@@ -2,10 +2,8 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { buildApp } from '../server/app.js'
 import { db } from '../server/db.js'
-import { createTestAdmin, deleteTestAdmin } from './test-auth.js'
+import { createTestAdmin, deleteTestAdmin, testAdminAuth } from './test-auth.js'
 
-const password = process.env.CRM_ADMIN_PASSWORD
-if (!password) throw new Error('CRM_ADMIN_PASSWORD is required')
 
 const app = await buildApp()
 let accountId = ''
@@ -19,9 +17,7 @@ let testUserId = ''
 
 try {
   const identity = await createTestAdmin('customer'); testUserId = identity.userId
-  const login = await app.inject({ method:'POST',url:'/api/auth/login',payload:{ email:identity.email,password,tenant:'default' } })
-  assert.equal(login.statusCode,200,login.body)
-  const authorization = `Bearer ${login.json().token}`
+  const authorization = testAdminAuth(app, identity)
   const marker = randomUUID().slice(0,8)
 
   const created = await app.inject({ method:'POST',url:'/api/accounts',headers:{ authorization },payload:{ name:`Customer 360 ${marker}`,province:'浙江省',city:'杭州市',district:'余杭区',industry:'HVAC',creditLevel:'B',source:'integration-test' } })

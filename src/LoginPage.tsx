@@ -1,19 +1,27 @@
-import { useState, type FormEvent } from 'react'
-import { ArrowRight, Eye, EyeOff, Globe2, LockKeyhole, Mail, Radio, ShieldCheck } from 'lucide-react'
-import { ApiError, getCurrentUser, login, type SessionUser } from './api'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowRight, Globe2, Radio, ShieldCheck } from 'lucide-react'
+import { finish1688SignIn, start1688SignIn } from './signIn1688'
 
-export default function LoginPage({ onLogin }: { onLogin: (user: SessionUser) => void }) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
+export default function LoginPage({ returning = false }: { returning?: boolean }) {
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(returning)
+  const started = useRef(false)
 
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setError(''); setLoading(true)
-    try { await login(email, password); onLogin(await getCurrentUser()) }
-    catch (cause) { setError(cause instanceof ApiError ? cause.message : '无法连接服务器，请确认后端服务已启动。') }
-    finally { setLoading(false) }
+  function failed(cause: unknown) {
+    setError(cause instanceof Error && !(cause instanceof TypeError) ? cause.message : '暂时无法连接登录服务，请稍后重试。')
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    if (!returning || started.current) return
+    started.current = true
+    void finish1688SignIn().catch(failed)
+  }, [returning])
+
+  function authorize() {
+    setError('')
+    setLoading(true)
+    void start1688SignIn().catch(failed)
   }
 
   return <main className="login-page">
@@ -26,14 +34,15 @@ export default function LoginPage({ onLogin }: { onLogin: (user: SessionUser) =>
       <div className="signal-foot"><span><Globe2 size={15} /> 上海 · 北京时间</span><span><ShieldCheck size={15} /> 租户数据隔离已启用</span></div>
     </section>
     <section className="login-form-side">
-      <form className="login-card" onSubmit={submit}>
-        <p className="kicker">欢迎回来</p><h2>进入工作台</h2><p className="login-intro">使用你的工作邮箱登录默认组织。</p>
-        <label><span>邮箱</span><div className="field-with-icon"><Mail size={17} /><input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="username" required /></div></label>
-        <label><span>密码</span><div className="field-with-icon"><LockKeyhole size={17} /><input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" placeholder="输入密码" required minLength={8} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? '隐藏密码' : '显示密码'}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
+      <div className="login-card">
+        <p className="kicker">销途绩效</p>
+        <h2>进入工作台</h2>
+        <p className="login-intro">使用 1688 账号授权，完成后即可进入工作台。</p>
         {error && <div className="form-error" role="alert">{error}</div>}
-        <button className="login-submit" disabled={loading}>{loading ? '正在验证…' : <>登录 <ArrowRight size={17} /></>}</button>
-        <div className="login-security"><ShieldCheck size={15} /><span>登录凭据通过本地 API 验证，密码不会存储在浏览器中。</span></div>
-      </form>
+        <button type="button" className="login-submit" disabled={loading} onClick={authorize}>
+          {loading ? <span role="status">{returning ? '正在完成 1688 登录…' : '正在打开 1688 授权…'}</span> : <>使用 1688 账号授权登录 <ArrowRight size={17} aria-hidden="true" /></>}
+        </button>
+      </div>
     </section>
   </main>
 }

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 
-const password=process.env.CRM_ADMIN_PASSWORD
-if(!password)throw new Error('CRM_ADMIN_PASSWORD is required')
 type QwenRequest={model:string;messages:Array<{role:string;content:string}>}
 let receivedBody:QwenRequest|undefined
 const lastRequest=()=>{if(!receivedBody)throw new Error('Qwen request was not received');return receivedBody}
@@ -13,9 +11,9 @@ process.env.DASHSCOPE_API_KEY='test-dashscope-key'
 process.env.DASHSCOPE_BASE_URL=`http://127.0.0.1:${address.port}/compatible-mode/v1`
 process.env.QWEN_DEFAULT_MODEL='qwen3.8-flash'
 
-const [{buildApp},{db},{createTestAdmin,deleteTestAdmin}]=await Promise.all([import('../server/app.js'),import('../server/db.js'),import('./test-auth.js')])
+const [{buildApp},{db},{createTestAdmin,deleteTestAdmin,testAdminAuth}]=await Promise.all([import('../server/app.js'),import('../server/db.js'),import('./test-auth.js')])
 const app=await buildApp();let testUserId='',conversationId=''
-try{const identity=await createTestAdmin('ai');testUserId=identity.userId;const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{email:identity.email,password,tenant:'default'}});assert.equal(login.statusCode,200,login.body);const authorization=`Bearer ${login.json().token}`
+try{const identity=await createTestAdmin('ai');testUserId=identity.userId;const authorization = testAdminAuth(app, identity)
 const models=await app.inject({method:'GET',url:'/api/ai/models',headers:{authorization}});assert.equal(models.statusCode,200,models.body);assert.equal(models.json().data.configured,true);assert.equal(models.json().data.defaultModel,'qwen3.8-flash');assert.deepEqual(models.json().data.models,['qwen3.8-flash','qwen3.7-flash','qwen3.7-plus','qwen3.6-plus'])
 const chat=await app.inject({method:'POST',url:'/api/ai/chat',headers:{authorization},payload:{message:'请介绍你的能力',context:{page:'dashboard',pageTitle:'销售作战台'}}});assert.equal(chat.statusCode,200,chat.body);conversationId=chat.json().data.conversationId;assert.equal(chat.json().data.message.content,'这是来自千问测试适配器的回答。');assert.equal(lastRequest().model,'qwen3.8-flash');assert.equal(lastRequest().messages[0].role,'system')
 await db.query("INSERT INTO team_ai_settings(owner_user_id,tenant_id,text_model) SELECT id,tenant_id,'qwen3.7-plus' FROM users WHERE id=$1",[testUserId])

@@ -52,7 +52,7 @@ export const sections: Section[] = [
     { id: 'rules', label: '绩效规则', can: u => has(u, 'performance:read') },
     { id: 'automation', label: '自动上架', can: u => has(u, 'integration:read') },
     { id: 'credits', label: '我的积分', can: canViewTeamCredits },
-    { id: 'users', label: '账号权限', can: u => has(u, 'user:manage', 'user:manage_team') },
+    { id: 'users', label: '成员权限', can: u => has(u, 'user:manage', 'user:manage_team') },
     { id: 'logs', label: '调用记录', can: u => has(u, 'integration:read', 'performance:read') },
   ] },
 ]

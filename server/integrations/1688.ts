@@ -187,7 +187,10 @@ export async function getGrant(params: { code: string } | { refreshToken: string
   return grant
 }
 
-export async function saveConnection(tenantId: string, actorId: string, grant: Grant, obtainedAt = Date.now(), purpose: AppPurpose = 'product') {
+export async function saveConnection(tenantId: string, actorId: string, grant: Grant, obtainedAt = Date.now(), purpose: AppPurpose = 'product', options: {
+  client?: Pick<typeof db, 'query'>;
+  preserveConnectionSettings?: boolean;
+} = {}) {
   const credentials = appCredentials(purpose)
   const table = connectionTables[purpose]
   const aliId = String(grant.aliId || '')
@@ -195,12 +198,16 @@ export async function saveConnection(tenantId: string, actorId: string, grant: G
   const ciphertext = await encryptGrant(grant)
   const expiry = new Date(obtainedAt + Number(grant.expires_in) * 1000)
   if (expiry.getTime() <= Date.now()) throw new IntegrationError('TOKEN_EXPIRED', '导入的访问令牌已过期，请重新授权。', 409)
-  const result = await db.query(`INSERT INTO ${table}(tenant_id,app_key,ali_id,member_id,login_id,display_name,token_ciphertext,access_expires_at,refresh_expires_at,created_by)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    ON CONFLICT(app_key,ali_id) DO UPDATE SET member_id=excluded.member_id,login_id=excluded.login_id,display_name=excluded.display_name,token_ciphertext=excluded.token_ciphertext,access_expires_at=excluded.access_expires_at,refresh_expires_at=excluded.refresh_expires_at,status='connected',member_capability='unknown',${purpose === 'performance' ? "account_role='unknown'," : ''}updated_at=now()
+  const preserve = options.preserveConnectionSettings
+  const result = await (options.client ?? db).query(`INSERT INTO ${table}(tenant_id,app_key,ali_id,member_id,login_id,display_name,token_ciphertext,access_expires_at,refresh_expires_at,created_by${purpose === 'performance' ? ',account_role' : ''})
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10${purpose === 'performance' ? ',$11' : ''})
+    ON CONFLICT(app_key,ali_id) DO UPDATE SET token_ciphertext=excluded.token_ciphertext,access_expires_at=excluded.access_expires_at,refresh_expires_at=excluded.refresh_expires_at,updated_at=now(),
+      ${preserve ? `status=CASE WHEN ${table}.status='reauthorize' THEN 'connected' ELSE ${table}.status END` :
+      `member_id=excluded.member_id,login_id=excluded.login_id,display_name=excluded.display_name,status='connected',member_capability='unknown'${purpose === 'performance' ? ",account_role='unknown'" : ''}`}
     WHERE ${table}.tenant_id=excluded.tenant_id
     RETURNING ${purpose === 'performance' ? publicPerfConnectionColumns : publicConnectionColumns}`,
-  [tenantId, credentials.appKey, aliId, grant.memberId || null, grant.resource_owner || null, grant.resource_owner || grant.memberId || aliId, ciphertext, expiry, parseRefreshExpiry(grant.refresh_token_timeout), actorId])
+  [tenantId, credentials.appKey, aliId, grant.memberId || null, grant.resource_owner || null, grant.resource_owner || grant.memberId || aliId, ciphertext, expiry, parseRefreshExpiry(grant.refresh_token_timeout), actorId,
+    ...(purpose === 'performance' ? [preserve && grant.resource_owner?.includes(':') ? 'sub' : 'unknown'] : [])])
   if (!result.rows[0]) throw new IntegrationError('ALREADY_BOUND', '该 1688 账号已绑定其他租户。', 409)
   return result.rows[0]
 }

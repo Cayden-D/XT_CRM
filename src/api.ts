@@ -64,6 +64,7 @@ export class ApiError extends Error {
 }
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY)
+export const setToken = (token: string) => localStorage.setItem(TOKEN_KEY, token)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -72,7 +73,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     ...options,
     headers: { ...(options.body != null ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
   })
-  if (response.status === 401 && path !== '/api/auth/login') {
+  if (response.status === 401) {
     clearToken()
     window.dispatchEvent(new Event('crm:unauthorized'))
   }
@@ -98,14 +99,6 @@ export async function download(path: string, fallbackName: string) {
   const link = Object.assign(document.createElement('a'), { href: url, download: match ? decodeURIComponent(match[1]) : fallbackName })
   document.body.append(link); link.click(); link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-export async function login(email: string, password: string) {
-  const result = await request<{ token: string; user: SessionUser }>('/api/auth/login', {
-    method: 'POST', body: JSON.stringify({ email, password, tenant: 'default' }),
-  })
-  localStorage.setItem(TOKEN_KEY, result.token)
-  return result.user
 }
 
 export async function getCurrentUser() {

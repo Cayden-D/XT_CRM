@@ -10,7 +10,7 @@ const reasons: Record<Movement['reason'], string> = { adjust: '调整', publish:
 const day = (value: string) => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
 /**
- * 团队额度与模型 (super administrator): every team (a top-level account and the sub-accounts it opened) with the text and
+ * 团队额度与模型 (super administrator): every team (a workspace lead and the members assigned to them) with the text and
  * image model it uses and its credits. Listing a collected product costs `perListing` credits.
  */
 export default function TeamsAdmin() {
@@ -34,15 +34,15 @@ export default function TeamsAdmin() {
   }
 
   return <section className="teams-admin" aria-label="团队额度与模型">
-    <div className="shop-page-heading"><div><h3><Coins size={17} />团队额度与模型</h3><p>团队 = 顶层账号及其开设的子账号。采集商品上架成功每件扣 {teams?.perListing ?? 10} 积分，平台拒绝会退回；超级管理员团队不限额度。</p></div>
+    <div className="shop-page-heading"><div><h3><Coins size={17} />团队额度与模型</h3><p>团队 = 工作区负责人及其团队成员。采集商品上架成功每件扣 {teams?.perListing ?? 10} 积分，平台拒绝会退回；超级管理员团队不限额度。</p></div>
       <button className="shop-icon" title="刷新" aria-label="刷新团队" disabled={Boolean(busy)} onClick={() => void load()}><RefreshCw size={17} /></button></div>
     {error && <p className="shop-alert error" role="alert"><AlertCircle size={16} />{error}</p>}
     {notice && <p className="shop-alert" role="status"><Check size={16} />{notice}</p>}
     {!teams ? <div className="shop-empty"><LoaderCircle className="spin" /></div>
       : <div className="shop-table-scroll"><table className="shop-table teams-table"><thead><tr><th>团队负责人</th><th>成员</th><th>文字模型</th><th>图片模型</th><th>积分</th><th>调整额度</th></tr></thead>
         <tbody>{teams.data.map(team => <tr key={team.ownerId} className={team.status !== 'active' ? 'users-disabled' : ''}>
-          <td><strong>{team.name}</strong><small className="users-sub">{team.email}</small></td>
-          <td>{team.members} 个子账号</td>
+          <td><strong>{team.name}</strong></td>
+          <td>{team.members} 位团队成员</td>
           <td><select aria-label={`${team.name} 文字模型`} value={team.textModel} disabled={Boolean(busy)} onChange={e => void save(team, { textModel: e.target.value }, `${team.name} 团队的文字模型已改为 ${e.target.value}`)}>{teams.textModels.map(m => <option key={m} value={m}>{m}</option>)}</select></td>
           <td><select aria-label={`${team.name} 图片模型`} value={team.imageModel} disabled={Boolean(busy)} onChange={e => void save(team, { imageModel: e.target.value }, `${team.name} 团队的图片模型已改为 ${teams.imageModels.find(m => m.id === e.target.value)?.name ?? e.target.value}`)}>{teams.imageModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></td>
           <td>{team.unlimited ? <span className="shop-status positive">不限</span> : <strong className={team.credits < (teams.perListing) ? 'teams-low' : ''}>{team.credits}</strong>}
