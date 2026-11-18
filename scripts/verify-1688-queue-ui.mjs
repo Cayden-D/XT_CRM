@@ -17,7 +17,7 @@ try{
   let enqueueCalls=0,platformWrites=0
   const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[]
   page.on('pageerror',error=>errors.push(error.message))
-  await page.addInitScript(value=>localStorage.setItem('ai_crm_access_token',value),token)
+  await page.addInitScript(value=>sessionStorage.setItem('ai_crm_access_token',value),token)
   await page.route('**/api/product-collections**',route=>{
     const path=new URL(route.request().url()).pathname
     if(path.endsWith('/product-collections'))return route.fulfill({contentType:'application/json',body:JSON.stringify({data:[blocked,available]})})

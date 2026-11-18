@@ -21,4 +21,5 @@ export interface AuthToken {
   displayName: string
   roles: string[]
   permissions: string[]
+  oauth1688?: { appKey: string; aliId: string }
 }

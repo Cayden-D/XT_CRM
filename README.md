@@ -159,14 +159,31 @@ psql -h 127.0.0.1 -U crm_app -d ai_crm \
 **1688 登录与历史工作区迁移**
 
 1. 配置销途绩效应用的 `ALI1688_PERFORMANCE_APP_KEY`、`ALI1688_PERFORMANCE_APP_SECRET` 和 `ALI1688_PERFORMANCE_REDIRECT_URI`。回调地址应与 1688 开放平台中登记的值完全一致，使用与工作台同源的 HTTPS 前端地址（例如 `https://crm.example.com/`；也可以使用由前端接管的回调路径）。服务市场的应用使用入口应指向工作台地址。
-2. 更新已有实例时，应用迁移 `067_1688_sign_in.sql` 后、切换版本前，为仍需访问历史工作区的成员绑定已核实的 1688 `aliId`。已有绩效连接可从同一应用的 `integration_1688_perf_connections.ali_id` 核实店铺账号。仅在确认该 1688 账号有权使用指定历史成员的权限后操作；不要根据昵称或邮箱自动匹配，也不要把普通店铺成员绑定到超级管理员。
-3. 部署后从服务市场入口用真实 1688 店铺主账号验证一次：点击「使用 1688 账号授权登录」→ 平台同意授权 → 自动打开工作台。首次授权的新商家会自动创建隔离的工作区和绩效店铺连接。已关联旧店铺的账号会回到原工作区；已存在绩效连接但尚未绑定历史成员的账号会提示运营方迁移，不会获得旧租户的数据权限。
+2. 更新已有实例时，应用迁移 `067_1688_sign_in.sql` 和 `069_1688_workspace_ownership.sql` 后、切换版本前，为仍需访问历史工作区的成员绑定已核实的 1688 `aliId`。已有绩效连接可从同一应用的 `integration_1688_perf_connections.ali_id` 核实店铺账号。仅在确认该 1688 账号有权使用指定历史成员的权限后操作；不要根据昵称或邮箱自动匹配，也不要把普通店铺成员绑定到超级管理员。
+3. 部署后从服务市场入口用真实 1688 店铺主账号验证一次：点击「使用 1688 账号授权登录」→ 平台同意授权 → 自动打开工作台。首次授权的新商家会自动创建独立工作区和绩效店铺连接。已有店铺在绑定历史成员且核对归属后，可回到原工作区。
 
 ```bash
 npm run 1688:link-identity -- <历史用户UUID> <已核实的1688-aliId>
 ```
 
-历史绑定不修改业务数据和角色。上线时旧密码会话失效，用户重新走 1688 授权即可。本地回归使用模拟网关：`npm run test:1688-sign-in`、`npm run test:users-admin`。
+每个工作区归属于一个 1688 `aliId`，仅接受该账号的商品和绩效授权。其他商家应使用各自的账号登录。会话按浏览器标签页保存，上线后旧会话失效，需重新授权。
+
+历史工作区如果混有多个 `aliId`，系统会暂停该工作区的登录和采集器访问，保留全部历史数据。部署时可先用以下只读查询定位需要核对归属的工作区。确认归属并完成拆分后，再为每个工作区绑定相应的 1688 账号。
+
+```sql
+WITH shop_owners AS (
+  SELECT tenant_id, ali_id FROM integration_1688_connections
+  UNION
+  SELECT tenant_id, ali_id FROM integration_1688_perf_connections
+  UNION
+  SELECT u.tenant_id, i.ali_id FROM auth_1688_identities i JOIN users u ON u.id = i.user_id
+)
+SELECT t.slug, count(*) AS accounts
+FROM shop_owners s JOIN tenants t ON t.id = s.tenant_id
+GROUP BY t.id HAVING count(*) > 1;
+```
+
+本地回归使用模拟网关。`npm run test:1688-sign-in` 验证登录、工作区隔离和旧会话失效，`npm run test:collector-connect` 验证采集器连接。
 
 ### 5. 首次启动 API 与 Nginx
 

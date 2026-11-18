@@ -8,7 +8,7 @@ let template={values:{},revision:0},writes=0,conflict=false
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[]
  page.on('pageerror',error=>errors.push(error.message))
- await page.addInitScript(()=>localStorage.setItem('ai_crm_access_token','ui-fixture'))
+ await page.addInitScript(()=>sessionStorage.setItem('ai_crm_access_token','ui-fixture'))
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname
   let data={data:[]}

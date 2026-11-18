@@ -45,8 +45,8 @@ export async function buildApp() {
   const collectorCors = { origin: true, credentials: false, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'X-Collector-Key'] }
   const collectorPath = /^\/api\/product-collections\/(session|import|connect\/redeem)(\?|$)/
   await app.register(cors, { delegator: (request, callback) => callback(null, collectorPath.test(request.url ?? '') ? collectorCors : appCors) })
-  // Rotate the signing namespace so sessions previously issued via passwords cannot be reused.
-  await app.register(jwt, { secret: createHmac('sha256', config.JWT_SECRET).update('crm:1688-sign-in:v1').digest('hex') })
+  // Invalidate sessions issued before the 1688 workspace ownership check.
+  await app.register(jwt, { secret: createHmac('sha256', config.JWT_SECRET).update('crm:1688-sign-in:v2').digest('hex') })
 
   app.setErrorHandler((error, request, reply) => {
     const apiError = error as FastifyError

@@ -8,7 +8,7 @@ const output='/tmp/crm-queue-page';await mkdir(output,{recursive:true})
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[]
  page.on('pageerror',e=>errors.push(e.message))
- await page.addInitScript(()=>localStorage.setItem('ai_crm_access_token','fixture'))
+ await page.addInitScript(()=>sessionStorage.setItem('ai_crm_access_token','fixture'))
  await page.route('**/api/**',async route=>{
   const url=new URL(route.request().url()),path=url.pathname
   let data={data:[]}

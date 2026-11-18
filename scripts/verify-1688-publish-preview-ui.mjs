@@ -9,7 +9,7 @@ try{
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[]
  let writes=0
  page.on('pageerror',e=>errors.push(e.message))
- await page.addInitScript(()=>localStorage.setItem('ai_crm_access_token','preview-fixture'))
+ await page.addInitScript(()=>sessionStorage.setItem('ai_crm_access_token','preview-fixture'))
  await page.route('**/api/**',async route=>{
   if(route.request().method()!=='GET'){writes++;return route.fulfill({status:418,body:'{}'})}
   const path=new URL(route.request().url()).pathname

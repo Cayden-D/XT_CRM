@@ -2,17 +2,18 @@ import { db } from '../db.js'
 import type { AuthToken } from '../types/fastify.js'
 import { IntegrationError, saveConnection, stateHash, type Grant } from './1688.js'
 import type { PoolClient } from 'pg'
+import { claim1688Workspace } from './1688-workspace.js'
 
 const OWNER_PERMISSIONS = [
   'dashboard:*', 'report:*', 'account:*', 'product:*', 'collection:*', 'integration:*',
   'performance:*', 'payroll:*', 'customer_ops:*', 'order:*', 'settlement:*',
 ]
 
-export async function lock1688Identity(client: PoolClient, appKey: string, aliId: string) {
-  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([appKey, aliId])])
+export async function lock1688Identity(client: PoolClient, aliId: string) {
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify(['1688-workspace', aliId])])
 }
 
-export async function signIn1688(appKey: string, grant: Grant, obtainedAt: number): Promise<AuthToken> {
+export async function signIn1688(appKey: string, grant: Grant, obtainedAt: number): Promise<AuthToken & { oauth1688: { appKey: string; aliId: string } }> {
   // Only identity from the server-to-server exchange is trusted. Never match a nickname, email, or callback parameter.
   const aliId = typeof grant.aliId === 'string' || Number.isSafeInteger(grant.aliId) ? String(grant.aliId).trim() : ''
   if (!aliId || aliId.length > 255) throw new IntegrationError('IDENTITY_MISSING', '1688 未返回有效的账号标识，请重新授权。', 502)
@@ -26,7 +27,7 @@ export async function signIn1688(appKey: string, grant: Grant, obtainedAt: numbe
   const client = await db.connect()
   try {
     await client.query('BEGIN')
-    await lock1688Identity(client, appKey, aliId)
+    await lock1688Identity(client, aliId)
     const identity = await client.query<{ id: string; tenant_id: string; active: boolean }>(`
       SELECT u.id,u.tenant_id,(u.status='active' AND u.deleted_at IS NULL AND t.status='active') AS active
       FROM auth_1688_identities i JOIN users u ON u.id=i.user_id JOIN tenants t ON t.id=u.tenant_id
@@ -35,7 +36,7 @@ export async function signIn1688(appKey: string, grant: Grant, obtainedAt: numbe
     if (existing && !existing.active) throw new IntegrationError('ACCOUNT_DISABLED', '当前工作区或成员权限已停用，请联系管理员。', 403)
 
     const connection = (await client.query<{ tenant_id: string }>(
-      'SELECT tenant_id FROM integration_1688_perf_connections WHERE app_key=$1 AND ali_id=$2 FOR UPDATE', [appKey, aliId])).rows[0]
+      'SELECT tenant_id FROM integration_1688_perf_connections WHERE app_key=$1 AND ali_id=$2', [appKey, aliId])).rows[0]
     // A legacy shop may live alongside other merchants. Its grant alone cannot give access to that whole workspace.
     if (connection && !existing) throw new IntegrationError('LEGACY_WORKSPACE', '该 1688 账号已关联旧版店铺。请联系应用运营方完成历史工作区迁移后重试。', 409)
 
@@ -56,6 +57,11 @@ export async function signIn1688(appKey: string, grant: Grant, obtainedAt: numbe
       await client.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [appKey, aliId, userId])
     }
 
+    if (connection && connection.tenant_id !== tenantId) {
+      throw new IntegrationError('WORKSPACE_ISOLATION_REQUIRED', '该店铺的历史连接和登录工作区不一致，请联系运营方核对。', 409)
+    }
+    await claim1688Workspace(client, tenantId, aliId)
+
     // Keep a store's existing verification and suspension settings. An existing member login cannot move or attach a store.
     if (!existing || connection?.tenant_id === tenantId) {
       await saveConnection(tenantId, userId, { ...grant, aliId }, obtainedAt, 'performance', { client, preserveConnectionSettings: true })
@@ -73,7 +79,7 @@ export async function signIn1688(appKey: string, grant: Grant, obtainedAt: numbe
     if (!session) throw new IntegrationError('ACCOUNT_DISABLED', '当前工作区或成员权限已停用，请联系管理员。', 403)
     await client.query('UPDATE users SET last_login_at=now() WHERE id=$1', [userId])
     await client.query('COMMIT')
-    return session
+    return { ...session, oauth1688: { appKey, aliId } }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error

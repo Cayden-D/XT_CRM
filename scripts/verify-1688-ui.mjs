@@ -18,7 +18,7 @@ try{
   const errors=[],writes=[];page.on('pageerror',error=>errors.push(error.message))
   // Runs against the real local API with no fixtures: this walk only reads, so refuse and count any write.
   await page.route('**/api/**',route=>{if(route.request().method()==='GET')return route.fallback();writes.push(route.request().url());return route.abort()})
-  await page.addInitScript(value=>localStorage.setItem('ai_crm_access_token',value),token)
+  await page.addInitScript(value=>sessionStorage.setItem('ai_crm_access_token',value),token)
   const section=name=>page.locator('.sidebar').getByRole('button',{name,exact:true}).click()
   const tab=(group,name)=>page.getByRole('navigation',{name:group}).getByRole('button',{name,exact:true})
   await page.goto('http://127.0.0.1:5173/')

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { db } from '../server/db.js'
 import { appCredentials } from '../server/integrations/1688.js'
+import { claim1688Workspace } from '../server/integrations/1688-workspace.js'
 import { lock1688Identity } from '../server/integrations/1688-sign-in.js'
 
 // Deployment operator only: the platform ID and the existing workspace membership must have been verified.
@@ -10,11 +11,12 @@ try {
   const client = await db.connect()
   try {
     await client.query('BEGIN')
-    await lock1688Identity(client, appKey, aliId)
-    const user = (await client.query('SELECT tenant_id FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE', [userId])).rows[0]
+    await lock1688Identity(client, aliId)
+    const user = (await client.query('SELECT tenant_id FROM users WHERE id=$1 AND deleted_at IS NULL', [userId])).rows[0]
     if (!user) throw new Error('找不到指定的历史成员。')
-    const shop = (await client.query('SELECT tenant_id FROM integration_1688_perf_connections WHERE app_key=$1 AND ali_id=$2 FOR UPDATE', [appKey, aliId])).rows[0]
+    const shop = (await client.query('SELECT tenant_id FROM integration_1688_perf_connections WHERE app_key=$1 AND ali_id=$2', [appKey, aliId])).rows[0]
     if (shop && shop.tenant_id !== user.tenant_id) throw new Error('该 1688 账号的店铺连接属于另一个工作区。')
+    await claim1688Workspace(client, user.tenant_id, aliId)
     await client.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [appKey, aliId, userId])
     const { rowCount } = await client.query('SELECT 1 FROM auth_1688_identities WHERE app_key=$1 AND ali_id=$2 AND user_id=$3', [appKey, aliId, userId])
     if (!rowCount) throw new Error('该平台身份或历史成员已有其他绑定，未修改数据。')

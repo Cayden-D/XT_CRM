@@ -198,7 +198,7 @@ export async function saveConnection(tenantId: string, actorId: string, grant: G
 } = {}) {
   const credentials = appCredentials(purpose)
   const table = connectionTables[purpose]
-  const aliId = String(grant.aliId || '')
+  const aliId = String(grant.aliId || '').trim()
   if (!aliId || !grant.access_token || !Number.isFinite(Number(grant.expires_in)) || Number(grant.expires_in) <= 0) throw new IntegrationError('IDENTITY_MISSING', '授权结果缺少平台账号身份或有效期。', 400)
   const ciphertext = await encryptGrant(grant)
   const expiry = new Date(obtainedAt + Number(grant.expires_in) * 1000)
@@ -212,7 +212,12 @@ export async function saveConnection(tenantId: string, actorId: string, grant: G
     WHERE ${table}.tenant_id=excluded.tenant_id
     RETURNING ${purpose === 'performance' ? publicPerfConnectionColumns : publicConnectionColumns}`,
   [tenantId, credentials.appKey, aliId, grant.memberId || null, grant.resource_owner || null, grant.resource_owner || grant.memberId || aliId, ciphertext, expiry, parseRefreshExpiry(grant.refresh_token_timeout), actorId,
-    ...(purpose === 'performance' ? [preserve && grant.resource_owner?.includes(':') ? 'sub' : 'unknown'] : [])])
+    ...(purpose === 'performance' ? [preserve && grant.resource_owner?.includes(':') ? 'sub' : 'unknown'] : [])]).catch(error => {
+    if (error.constraint === 'crm_1688_workspace_owner') {
+      throw new IntegrationError('SHOP_ACCOUNT_MISMATCH', '请选择当前工作区绑定的 1688 账号授权。其他店铺请使用对应的 1688 账号登录。', 409)
+    }
+    throw error
+  })
   if (!result.rows[0]) throw new IntegrationError('ALREADY_BOUND', '该 1688 账号已绑定其他租户。', 409)
   return result.rows[0]
 }

@@ -20,7 +20,7 @@ try{
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[]
   let bindingWrites=0,platformWrites=0
   page.on('pageerror',e=>errors.push(e.message))
-  await page.addInitScript(value=>localStorage.setItem('ai_crm_access_token',value),token)
+  await page.addInitScript(value=>sessionStorage.setItem('ai_crm_access_token',value),token)
   await page.route('**/api/products**',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:[product],total:1})}))
   await page.route('**/api/integrations/1688/listings**',async route=>{
     const req=route.request(),url=new URL(req.url()),path=url.pathname

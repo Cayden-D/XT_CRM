@@ -7,7 +7,7 @@ try{
  const shop=randomUUID(),listing={id:randomUUID(),connection_id:shop,offer_id:'1234567890123456789',title:'删除界面测试',status:'published',deletion_state:'active',display_name:'测试店铺',synced_at:new Date().toISOString(),snapshot:{}}
  let calls=0
  page.on('pageerror',e=>errors.push(e.message))
- await page.addInitScript(()=>localStorage.setItem('ai_crm_access_token','fixture'))
+ await page.addInitScript(()=>sessionStorage.setItem('ai_crm_access_token','fixture'))
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname
   let data={data:[]}

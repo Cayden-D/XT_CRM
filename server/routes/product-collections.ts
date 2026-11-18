@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { db } from '../db.js'
 import { requirePermission } from '../auth.js'
 import { adjustedCollectorPrices } from '../integrations/collector-pricing.js'
+import { collectorCanAccessWorkspace } from '../integrations/1688-workspace.js'
 import { collectionQueueMessage, IntegrationError } from '../integrations/1688.js'
 import { collectorExtensionZip } from '../integrations/collector-extension.js'
 import { saveCollectedPackage } from '../integrations/product-attributes.js'
@@ -36,7 +37,10 @@ async function getCollectorIdentity(request:FastifyRequest,reply:FastifyReply){
     FROM product_collector_keys k JOIN users u ON u.id=k.user_id AND u.tenant_id=k.tenant_id AND u.status='active' AND u.deleted_at IS NULL
     WHERE k.key_hash=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`,[hashKey(key)])
   const identity=result.rows[0]
-  if(!identity){reply.code(401).send({error:'INVALID_COLLECTOR_KEY',message:'采集密钥无效或已被吊销。'});return null}
+  if (!identity || !await collectorCanAccessWorkspace(db, identity.tenant_id, identity.user_id)) {
+    reply.code(401).send({ error: 'INVALID_COLLECTOR_KEY', message: '采集授权已失效，请从 1688 登录后重新连接采集器。' })
+    return null
+  }
   await db.query('UPDATE product_collector_keys SET last_used_at=now() WHERE id=$1',[identity.id])
   return identity
 }
@@ -99,7 +103,10 @@ export async function productCollectionRoutes(app:FastifyInstance){
       const grant=(await client.query(`UPDATE product_collector_connects SET redeemed_at=now() WHERE challenge=$1 AND redeemed_at IS NULL AND expires_at>now() RETURNING tenant_id,user_id`,[challenge])).rows[0]
       if(!grant){await client.query('ROLLBACK');return reply.code(202).send({data:{pending:true}})}
       const user=(await client.query(`SELECT id,email::text,display_name FROM users WHERE id=$1 AND tenant_id=$2 AND status='active' AND deleted_at IS NULL`,[grant.user_id,grant.tenant_id])).rows[0]
-      if(!user){await client.query('ROLLBACK');return reply.code(403).send({error:'USER_INACTIVE',message:'授权账号已停用。'})}
+      if (!user || !await collectorCanAccessWorkspace(client, grant.tenant_id, grant.user_id)) {
+        await client.query('ROLLBACK')
+        return reply.code(403).send({ error: 'COLLECTOR_WORKSPACE_UNAVAILABLE', message: '工作区无法连接采集器，请重新授权。' })
+      }
       const plainKey=`crm1688_${randomBytes(24).toString('base64url')}`
       await client.query(`INSERT INTO product_collector_keys(tenant_id,user_id,name,key_prefix,key_hash)VALUES($1,$2,$3,$4,$5)`,[grant.tenant_id,grant.user_id,input.data.client==='extension'?'浏览器插件':'油猴脚本',plainKey.slice(0,16),hashKey(plainKey)])
       await client.query('COMMIT')

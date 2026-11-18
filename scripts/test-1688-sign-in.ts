@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { buildApp } from '../server/app.js'
 import { config } from '../server/config.js'
 import { db } from '../server/db.js'
@@ -11,6 +11,9 @@ const key = `signin-${randomUUID()}`
 const redirect = 'https://crm.example.test/1688/return'
 const secret = 'signin-test-secret'
 Object.assign(config, {
+  ALI1688_APP_KEY: `product-${key}`,
+  ALI1688_APP_SECRET: secret,
+  ALI1688_REDIRECT_URI: redirect,
   ALI1688_PERFORMANCE_APP_KEY: key,
   ALI1688_PERFORMANCE_APP_SECRET: secret,
   ALI1688_PERFORMANCE_REDIRECT_URI: redirect,
@@ -19,8 +22,8 @@ Object.assign(config, {
 const app = await buildApp()
 const originalFetch = globalThis.fetch
 const tenantIds = new Set<string>()
-const [shopA, shopB, legacyShop] = Array.from({ length: 3 }, () => randomUUID())
-const ids: Record<string, string> = { first: shopA, same: shopA, second: shopB, legacy: legacyShop }
+const [shopA, shopB, legacyShop, mixedShop, otherMixedShop] = Array.from({ length: 5 }, () => randomUUID())
+const ids: Record<string, string> = { first: shopA, same: shopA, second: shopB, legacy: legacyShop, mixed: mixedShop }
 let exchanges = 0
 globalThis.fetch = async (url, init) => {
   assert.equal(String(url), `https://gw.open.1688.com/openapi/http/1/system.oauth2/getToken/${key}`)
@@ -76,11 +79,16 @@ try {
   assert.ok(!first.user.permissions.includes('*') && !first.user.permissions.includes('user:manage'))
   const me = await app.inject({ method: 'GET', url: '/api/auth/me', headers: headers(first.token) })
   assert.equal(me.json().user.sub, first.user.sub)
-  // Former password sessions, signed with the former namespace, cannot open the application.
+  assert.equal(me.json().user.oauth1688, undefined)
+  assert.match(me.headers['cache-control'] ?? '', /no-store/)
+  // Sessions from before workspace ownership checks cannot open the application.
   const encode = (v: object) => Buffer.from(JSON.stringify(v)).toString('base64url')
   const payload = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode(first.user)}`
-  const oldToken = `${payload}.${createHmac('sha256', config.JWT_SECRET).update(payload).digest('base64url')}`
-  assert.equal((await app.inject({ method: 'GET', url: '/api/auth/me', headers: headers(oldToken) })).statusCode, 401)
+  const oldNamespace = createHmac('sha256', config.JWT_SECRET).update('crm:1688-sign-in:v1').digest('hex')
+  for (const secret of [config.JWT_SECRET, oldNamespace]) {
+    const oldToken = `${payload}.${createHmac('sha256', secret).update(payload).digest('base64url')}`
+    assert.equal((await app.inject({ method: 'GET', url: '/api/auth/me', headers: headers(oldToken) })).statusCode, 401)
+  }
 
   const current = (await db.query('SELECT * FROM integration_1688_perf_connections WHERE tenant_id=$1', [first.user.tenantId])).rows[0]
   assert.equal(current.ali_id, shopA)
@@ -94,8 +102,32 @@ try {
 
   const second = signedIn(await complete('second', await start()))
   assert.notEqual(second.user.tenantId, first.user.tenantId)
-  const stores = await app.inject({ method: 'GET', url: '/api/integrations/1688/performance/connections', headers: headers(second.token) })
+  assert.equal((await db.query('SELECT ali1688_owner_id FROM tenants WHERE id=$1', [second.user.tenantId])).rows[0].ali1688_owner_id, shopB)
+  const get = (url: string, token = second.token) => app.inject({ method: 'GET', url, headers: headers(token) })
+  const stores = await get('/api/integrations/1688/performance/connections')
   assert.deepEqual(stores.json().data.map((row: { ali_id: string }) => row.ali_id), [shopB])
+  const productAccount = await saveConnection(first.user.tenantId, first.user.sub, { aliId: shopA, access_token: 'product-test', expires_in: 3600 })
+  assert.equal((await get('/api/integrations/1688/connections')).json().data.length, 0)
+  await assert.rejects(saveConnection(second.user.tenantId, second.user.sub,
+    { aliId: shopA, access_token: 'wrong-account-test', expires_in: 3600 }), { code: 'SHOP_ACCOUNT_MISMATCH' })
+  await assert.rejects(saveConnection(second.user.tenantId, second.user.sub,
+    { aliId: shopA, access_token: 'wrong-performance-test', expires_in: 3600 }, Date.now(), 'performance'), { code: 'SHOP_ACCOUNT_MISMATCH' })
+  await assert.rejects(db.query('UPDATE integration_1688_connections SET tenant_id=$2 WHERE id=$1', [productAccount.id, second.user.tenantId]),
+    { constraint: 'crm_1688_workspace_owner' })
+  const item = (await db.query(`
+    INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,collected_by)
+    VALUES($1,'1688',$2,'https://detail.1688.com/offer/1.html','隔离用商品',$3) RETURNING id`,
+  [first.user.tenantId, randomUUID(), first.user.sub])).rows[0].id
+  assert.equal((await get('/api/product-collections')).json().total, 0)
+  assert.equal((await get(`/api/product-collections/${item}`)).statusCode, 404)
+  assert.equal((await get(`/api/product-collections/${item}`, first.token)).statusCode, 200)
+  assert.equal((await get(`/api/dashboard?connectionId=${current.id}`)).statusCode, 404)
+  assert.equal((await get(`/api/integrations/1688/performance/order-list?connectionId=${current.id}&from=2026-11-01&to=2026-11-02`)).statusCode, 404)
+  const mismatchedToken = app.jwt.sign({ ...second.user, tenantId: first.user.tenantId, oauth1688: { appKey: key, aliId: shopB } })
+  assert.equal((await get('/api/auth/me', mismatchedToken)).statusCode, 401)
+  const liveLink = (await db.query('DELETE FROM auth_1688_identities WHERE app_key=$1 AND ali_id=$2 RETURNING user_id', [key, shopB])).rows[0]
+  assert.equal((await get('/api/auth/me')).statusCode, 401, 'an unlinked browser session immediately loses access')
+  await db.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [key, shopB, liveLink.user_id])
 
   const legacyTenant = (await db.query("INSERT INTO tenants(name,slug) VALUES('历史店铺',$1) RETURNING id", [`legacy-${key}`])).rows[0].id
   tenantIds.add(legacyTenant)
@@ -109,6 +141,23 @@ try {
     ['--import', 'tsx', 'scripts/link-1688-identity.ts', id, legacyShop],
     { env: { ...process.env, ALI1688_PERFORMANCE_APP_KEY: key, ALI1688_PERFORMANCE_APP_SECRET: secret, ALI1688_PERFORMANCE_REDIRECT_URI: redirect } })
   await assert.rejects(bind(second.user.sub), (error: { stderr?: string }) => /另一个工作区/.test(error.stderr ?? ''))
+  const mixedTenant = (await db.query("INSERT INTO tenants(name,slug) VALUES('历史混用店铺',$1) RETURNING id", [`mixed-${key}`])).rows[0].id
+  tenantIds.add(mixedTenant)
+  const mixedUser = (await db.query("INSERT INTO users(tenant_id,email,display_name) VALUES($1,'mixed@integration.local','历史成员') RETURNING id", [mixedTenant])).rows[0].id
+  await saveConnection(mixedTenant, mixedUser, { aliId: mixedShop, access_token: 'mixed-perf-test', expires_in: 3600 }, Date.now(), 'performance')
+  await saveConnection(mixedTenant, mixedUser, { aliId: otherMixedShop, access_token: 'mixed-product-test', expires_in: 3600 })
+  await db.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [key, mixedShop, mixedUser])
+  const blocked = await complete('mixed', await start())
+  assert.equal(blocked.statusCode, 409)
+  assert.equal(blocked.json().error, 'WORKSPACE_ISOLATION_REQUIRED')
+  const collectorKey = 'crm1688_' + randomBytes(24).toString('base64url')
+  await db.query(`
+    INSERT INTO product_collector_keys(tenant_id,user_id,name,key_prefix,key_hash)
+    VALUES($1,$2,'旧采集器',$3,$4)`,
+  [mixedTenant, mixedUser, collectorKey.slice(0, 16), createHash('sha256').update(collectorKey).digest('hex')])
+  const collectorSession = await app.inject({ method: 'GET', url: '/api/product-collections/session', headers: { 'x-collector-key': collectorKey } })
+  assert.equal(collectorSession.statusCode, 401)
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM integration_1688_connections WHERE tenant_id=$1', [mixedTenant])).rows[0].n, 1)
   await bind(legacy)
   await bind(legacy) // Repeating a planned migration is safe.
   const migrated = signedIn(await complete('legacy', await start()))

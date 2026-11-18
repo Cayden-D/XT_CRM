@@ -18,7 +18,7 @@ try{
   let generateCalls=0,applyCalls=0,platformWrites=0,preview=null
   const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[]
   page.on('pageerror',error=>errors.push(error.message))
-  await page.addInitScript(value=>localStorage.setItem('ai_crm_access_token',value),token)
+  await page.addInitScript(value=>sessionStorage.setItem('ai_crm_access_token',value),token)
   await page.route('**/api/products**',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:[product]})}))
   await page.route('**/api/integrations/1688/**',route=>{
     const req=route.request(),path=new URL(req.url()).pathname

@@ -85,7 +85,7 @@ try{
   const upload=await request('POST',`/api/integrations/1688/connections/${connection.id}/photos`,{albumId:'1',name:'test.png',mime:'image/png',content:Buffer.from([137,80,78,71,13,10,26,10,0]).toString('base64')});assert.equal(upload.statusCode,200,upload.body)
   const state=await request('POST','/api/integrations/1688/authorizations');assert.equal(state.statusCode,200)
   const url=new URL(state.json().data.authorizationUrl),callback=new URL(appCredentials().redirect)
-  currentAliId=`oauth-${marker}`;callback.searchParams.set('state',url.searchParams.get('state')!);callback.searchParams.set('code','mock-code')
+  currentAliId=grant.aliId;callback.searchParams.set('state',url.searchParams.get('state')!);callback.searchParams.set('code','mock-code')
   const authorized=await request('POST','/api/integrations/1688/authorizations/complete',{callbackUrl:callback.href});assert.equal(authorized.statusCode,201,authorized.body)
   const replay=await request('POST','/api/integrations/1688/authorizations/complete',{callbackUrl:callback.href});assert.equal(replay.statusCode,409)
   const key=await request('POST','/api/product-collections/access-key');assert.equal(key.statusCode,200,key.body)

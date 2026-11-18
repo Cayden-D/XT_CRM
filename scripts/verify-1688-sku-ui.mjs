@@ -19,7 +19,7 @@ try{
   let draft={id:randomUUID(),connection_id:connection.id,product_id:randomUUID(),name:'SKU 界面测试产品',sku:'UI-TEST',cat_id:'101',scene:'cbu',revision:1,status:'draft',offer_id:null,platform_schema:{global:{systemParam:{catId:101}},data:{title:{fields:{label:'标题',maxLength:60}},saleProp:{fields:{label:'销售规格',dataSource:dimensions}},skuTable:{supportLevelProp:true,fields:{label:'规格报价',column:[]}},quotationType:{fields:{label:'报价方式',dataSource:[{value:1,text:'按产品规格报价'},{value:2,text:'按数量报价'}]}}}},data_body:{global:{systemParam:{catId:101}},formValues:{title:'SKU 界面测试产品',primaryPicture:{imageList:[{url:image}]},quotationType:{value:1,text:'按产品规格报价'},saleProp:{'p-1':[{value:10,text:'红色'}],'p-2':[{value:-1,text:'L',custom:true}]},skuTable:[{sku_props:properties,sku_price:12,sku_amountOnSale:10,sku_status:1}]}}}
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[]
   page.on('pageerror',e=>errors.push(e.message));await page.emulateMedia({reducedMotion:'reduce'})
-  await page.addInitScript(value=>localStorage.setItem('ai_crm_access_token',value),token)
+  await page.addInitScript(value=>sessionStorage.setItem('ai_crm_access_token',value),token)
   let platformWrites=0,ruleCalls=0,mappingCalls=0
   await page.route('**/api/integrations/1688/drafts**',async route=>{
     const req=route.request(),path=new URL(req.url()).pathname,payload=req.method()==='GET'?{}:req.postDataJSON()

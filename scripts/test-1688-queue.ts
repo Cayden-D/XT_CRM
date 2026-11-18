@@ -109,7 +109,7 @@ try{
   assert.equal((await request('GET','/agent/queue?page=0')).statusCode,400)
   assert.equal((await request('GET','/agent/queue?pageSize=101')).statusCode,400)
   assert.equal((await request('GET','/agent/queue?status=invalid')).statusCode,400)
-  // Two shops can be enabled concurrently. A collector import routes to the selected one and adjusts every quote.
+  // Historical queue jobs may still exist for multiple stores. The collector must not expose that workspace.
   assert.equal((await request('PUT',`/connections/${other.id}/agent-queue-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
   const enabledShops=(await request('GET','/agent/queue')).json().data.settings.filter((item:any)=>item.enabled)
   assert.deepEqual(new Set(enabledShops.map((item:any)=>item.id)),new Set([connection.id,other.id]))
@@ -118,18 +118,21 @@ try{
   const key=(await app.inject({method:'POST',url:'/api/product-collections/access-key',headers:{authorization:`Bearer ${token}`}})).json().data.key
   const headers={'x-collector-key':key}
   const importProduct=(payload:object)=>app.inject({method:'POST',url:'/api/product-collections/import',headers,payload})
+  const mixedSession=await app.inject({method:'GET',url:'/api/product-collections/session',headers})
+  assert.equal(mixedSession.statusCode,401)
+  await db.query('DELETE FROM integration_1688_connections WHERE id=$1',[other.id])
   const session=await app.inject({method:'GET',url:'/api/product-collections/session',headers})
-  assert.deepEqual(session.json().data.listingShops.map((item:any)=>item.id),[connection.id,other.id])
+  assert.deepEqual(session.json().data.listingShops.map((item:any)=>item.id),[connection.id])
   const selectedId=randomUUID()
   const payload={source:'1688',sourceProductId:selectedId,sourceUrl:'https://detail.1688.com/offer/123.html',
     sourceCategoryId:'101',title:'多店铺调价测试',mainImageUrl:'https://cbu01.alicdn.com/img/main.jpg',detailImages:['https://cbu01.alicdn.com/img/detail.jpg'],
     priceMin:10.05,priceMax:12.55,attributes:{材质:'棉',阶梯价格:'¥12.55 (2 pieces) / ¥10.05 (10 pieces)'},
     rawData:{priceMin:10.05},variants:[{label:'红色',price:12.55,stock:7}],priceAdjustmentPercent:10}
-  const unavailable=await importProduct({...payload,targetConnectionId:randomUUID()})
+  const unavailable=await importProduct({...payload,targetConnectionId:other.id})
   assert.equal(unavailable.json().error,'COLLECTOR_SHOP_UNAVAILABLE')
-  const selected=await importProduct({...payload,targetConnectionId:other.id})
+  const selected=await importProduct({...payload,targetConnectionId:connection.id})
   assert.equal(selected.statusCode,201,selected.body)
-  assert.equal(selected.json().data.queuedShop.id,other.id)
+  assert.equal(selected.json().data.queuedShop.id,connection.id)
   const selectedSource=selected.json().data.id
   const source=(await db.query('SELECT * FROM collected_products WHERE id=$1',[selectedSource])).rows[0]
   assert.deepEqual([Number(source.price_min),Number(source.price_max),source.raw_data.priceMin,source.attributes.阶梯价格],[11.06,13.81,10.05,'¥13.81 (2 pieces) / ¥11.06 (10 pieces)'])
@@ -140,7 +143,7 @@ try{
   await runClaimedCollectionQueueJob(selectedJob,worker)
   const listed=(await db.query(`SELECT j.status,d.connection_id,d.data_body,p.base_price,v.unit_price FROM integration_1688_collection_queue_jobs j
     JOIN integration_1688_publish_drafts d ON d.id=j.draft_id JOIN products p ON p.id=j.product_id JOIN product_variants v ON v.product_id=p.id WHERE j.id=$1`,[selectedJob])).rows[0]
-  assert.deepEqual([listed.status,listed.connection_id,Number(listed.base_price),Number(listed.unit_price)],['published',other.id,13.81,13.81])
+  assert.deepEqual([listed.status,listed.connection_id,Number(listed.base_price),Number(listed.unit_price)],['published',connection.id,13.81,13.81])
   assert.deepEqual(listed.data_body.formValues.priceRange.map((tier:any)=>tier.pricerange_price),[13.81,11.06])
   const savedOnly={...payload,sourceProductId:randomUUID(),targetConnectionId:null,priceAdjustmentPercent:-20}
   for(let i=0;i<2;i++){
@@ -153,8 +156,10 @@ try{
   assert.equal((await importProduct({...savedOnly,priceAdjustmentPercent:-100})).statusCode,400)
   const legacy=await importProduct({...payload,sourceProductId:randomUUID(),priceAdjustmentPercent:undefined})
   assert.equal(legacy.json().data.queuedShop.id,connection.id)
-  assert.equal((await request('PUT',`/connections/${other.id}/agent-queue-settings`,{enabled:false,revision:1,confirmed:true})).statusCode,200)
-  assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:other.id})).json().error,'COLLECTOR_SHOP_UNAVAILABLE')
+  const settings=enabledShops.find((shop:any)=>shop.id===connection.id)
+  assert.equal((await request('PUT',`/connections/${connection.id}/agent-queue-settings`,{enabled:false,revision:settings.revision,confirmed:true})).statusCode,200)
+  assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:connection.id})).json().error,'COLLECTOR_SHOP_UNAVAILABLE')
+  assert.equal((await request('PUT',`/connections/${connection.id}/agent-queue-settings`,{enabled:true,revision:settings.revision+1,confirmed:true})).statusCode,200)
   await db.query('DELETE FROM user_roles WHERE user_id=$1 AND role_id=$2',[actor.id,role])
   assert.equal((await importProduct({...payload,sourceProductId:randomUUID(),targetConnectionId:connection.id})).statusCode,403)
   manySkuSchema=true

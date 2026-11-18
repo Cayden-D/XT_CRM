@@ -50,10 +50,13 @@ export async function authRoutes(app: FastifyInstance) {
       AND expires_at>now() RETURNING state_hash`, [stateHash(state), stateHash(verifier), appKey, redirect])
     if (!consumed.rowCount) throw new IntegrationError('INVALID_STATE', '1688 登录已过期或已使用，请重新发起。', 409)
     const grant = await getGrant({ code }, 'performance')
-    const user = await signIn1688(appKey, grant, Date.now())
-    const token = await reply.jwtSign(user, { expiresIn: config.JWT_EXPIRES_IN })
+    const { oauth1688, ...user } = await signIn1688(appKey, grant, Date.now())
+    const token = await reply.jwtSign({ ...user, oauth1688 }, { expiresIn: config.JWT_EXPIRES_IN })
     return { token, user }
   })
 
-  app.get('/me', { preHandler: requireAuth }, async request => ({ user: request.authUser }))
+  app.get('/me', { preHandler: requireAuth }, async request => {
+    const { oauth1688: _identity, ...user } = request.authUser
+    return { user }
+  })
 }
