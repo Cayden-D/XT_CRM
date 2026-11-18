@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
+import { applyCustomHeroFrame, prepareCustomHeroFrame } from '../server/integrations/hero-reference-frame.js'
 
 // Image workshop against mocked DashScope (Qwen vision + Qwen image), APIMart (GPT-Image-2.5, async tasks) and OSS.
 process.env.DASHSCOPE_API_KEY = 'workshop-fixture-key'
@@ -324,15 +325,43 @@ try {
   assert.equal(replacement.options.heroFrame, 'tuoyang-v1')
   assert.match(replacement.prompt, /左侧居中排产品文案/)
   assert.equal((await changeFrame(shop.id, 'none', 1)).json().data.mode, 'none')
+  const block = (width: number, height: number, background: string) => ({ create: { width, height, channels: 4 as const, background } })
+  const transparentFrame = await sharp(block(640, 640, '#00000000')).composite([
+    { input: block(410, 44, '#179f47'), left: 170, top: 0 },
+    { input: block(640, 80, '#179f47'), left: 0, top: 560 },
+    { input: block(24, 640, '#179f47'), left: 0, top: 0 },
+  ]).png().toBuffer()
+  const transparent = await prepareCustomHeroFrame(transparentFrame, 640, 640)
+  assert.ok(transparent.insets)
+  assert.equal(transparent.insets.right, 0)
+  assert.deepEqual(transparent.frame, transparentFrame, 'transparent shapes are preserved')
+
+  const flattened = await sharp(block(640, 640, '#ffffff')).composite([
+    { input: block(245, 39, '#ca1224'), left: 199, top: 0 },
+    { input: block(640, 437, '#234f87'), left: 0, top: 77 },
+    { input: block(640, 82, '#4c1e80'), left: 0, top: 558 },
+  ]).jpeg({ quality: 92 }).toBuffer()
+  const extracted = await prepareCustomHeroFrame(flattened, 640, 640)
+  assert.ok(extracted.insets, 'a completed JPEG can expose blank gutters on both sides of its sample')
+  assert.ok(Math.abs(extracted.insets.top - 39 / 640) < 0.01)
+  assert.ok(Math.abs(extracted.insets.bottom - 82 / 640) < 0.01)
+  const portrait = await sharp(block(600, 800, '#d7e2dc')).png().toBuffer()
+  const composed = await applyCustomHeroFrame(portrait, 600, 800, extracted.frame, extracted.insets)
+  const composedPixel = async (y: number) => [...await sharp(composed).extract({ left: 300, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  for (const y of [75, 400, 660]) assert.deepEqual(await composedPixel(y), [215, 226, 220], 'the body fills both gutters and replaces the sample')
+
   const coloredFrame = async (background: string) => (await sharp({ create: { width: 640, height: 640, channels: 3, background } }).png().toBuffer()).toString('base64')
   const customPath = `/hero-templates/${petShop.id}/custom`
-  const firstContent = await coloredFrame('#ca1224'), secondContent = await coloredFrame('#13681d')
+  const firstContent = (await sharp(block(594, 504, '#ffffff'))
+    .extend({ top: 40, bottom: 96, left: 15, right: 31, background: '#ca1224' }).png().toBuffer()).toString('base64')
+  const secondContent = await coloredFrame('#13681d')
   const first = await call('POST', customPath, { name: '宠物红框', revision: 0, content: firstContent })
   assert.equal(first.statusCode, 201, first.body)
   const uploadedFrame = first.json().data
   assert.equal(uploadedFrame.mode, 'none', 'adding a template keeps the current selection')
   const firstTemplate = uploadedFrame.templates[0]
   assert.ok(firstTemplate.previewUrl)
+  assert.equal(firstTemplate.adaptive, true)
   assert.equal(firstTemplate.storage_key, undefined)
   assert.equal((await changeFrame(shop.id, 'custom-v1', 2, firstTemplate.id)).statusCode, 404)
   assert.equal((await changeFrame(petShop.id, 'custom-v1', 1, firstTemplate.id)).json().data.activeTemplateId, firstTemplate.id)
@@ -341,16 +370,21 @@ try {
   assert.equal(customHero.options.heroShopId, petShop.id)
   assert.equal(customHero.options.heroFrameKey, undefined)
   assert.equal(customHero.options.brand, undefined)
+  assert.ok(customHero.options.heroFrameInsets.left < customHero.options.heroFrameInsets.right)
+  const { rows: [customJob] } = await db.query('SELECT prompt FROM image_assets WHERE id=$1', [customHero.id])
+  assert.match(customJob.prompt, /上方 10%、下方 19%、左侧 6%、右侧 8%/)
   const duplicate = await call('POST', customPath, { name: '宠物红框', revision: 2, content: secondContent })
   assert.equal(duplicate.json().error, 'HERO_TEMPLATE_NAME_TAKEN')
   const secondUpload = await call('POST', customPath, { name: '宠物绿框', revision: 2, content: secondContent })
   assert.equal(secondUpload.statusCode, 201, secondUpload.body)
   const secondShopState = secondUpload.json().data
   const secondTemplate = secondShopState.templates.find((template: any) => template.name === '宠物绿框')
+  assert.equal(secondTemplate.adaptive, false, 'an ambiguous opaque image uses fixed bands')
   assert.deepEqual(secondShopState.templates.map((template: any) => template.name).sort(), ['宠物红框', '宠物绿框'].sort())
   assert.equal(secondShopState.activeTemplateId, firstTemplate.id)
   const renamed = await call('PATCH', `${customPath}/${firstTemplate.id}`, { name: '宠物节日红框', revision: 3 })
   assert.equal(renamed.json().data.templates.find((template: any) => template.id === firstTemplate.id).name, '宠物节日红框')
+  assert.equal(renamed.json().data.templates.find((template: any) => template.id === firstTemplate.id).adaptive, true)
   assert.equal(renamed.json().data.activeTemplateId, firstTemplate.id)
   assert.equal((await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 3 })).statusCode, 409)
   assert.equal((await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 4 }, token(tenants[1]))).statusCode, 404)
@@ -358,10 +392,11 @@ try {
   const removeInactive = (await call('DELETE', `${customPath}/${firstTemplate.id}`, { revision: 5 })).json().data
   assert.equal(removeInactive.activeTemplateId, secondTemplate.id)
   assert.deepEqual(removeInactive.templates.map((template: any) => template.id), [secondTemplate.id])
-  const updatedImage = await call('PATCH', `${customPath}/${secondTemplate.id}`, { name: '宠物绿框', revision: 6, content: await coloredFrame('#179f47') })
+  const updatedImage = await call('PATCH', `${customPath}/${secondTemplate.id}`, { name: '宠物绿框', revision: 6, content: transparentFrame.toString('base64') })
   assert.equal(updatedImage.statusCode, 200, updatedImage.body)
   assert.equal(updatedImage.json().data.activeTemplateId, secondTemplate.id)
   assert.notEqual(updatedImage.json().data.templates[0].previewUrl, secondTemplate.previewUrl)
+  assert.equal(updatedImage.json().data.templates[0].adaptive, true)
   const { frame: selectedFrame } = await (await import('../server/integrations/shop-hero-templates.js')).heroDesignForShop(tenant, petShop.id)
   assert.equal(selectedFrame?.mode, 'custom-v1')
   const secondBytes = objects.get(selectedFrame.key)!
@@ -385,9 +420,12 @@ try {
   assert.ok(footer[0] > footer[1] && footer[1] > footer[2], 'the original gold footer is present')
   assert.deepEqual(objects.get('image-workshop/' + tenant + '/' + white.id + '.png'), (await workshop.toPng(png)).png)
   const customBytes = objects.get('image-workshop/' + tenant + '/' + customHero.id + '.png')!
-  const customPixel = async (y: number) => [...await sharp(customBytes).extract({ left: 512, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  const customPixel = async (y: number, x = 512) => [...await sharp(customBytes).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
   assert.deepEqual(await customPixel(16), [202, 18, 36], 'the queued task retains its first uploaded version')
+  assert.deepEqual(await customPixel(100), [215, 226, 220], 'the template needs less than the legacy top band')
+  assert.deepEqual(await customPixel(850), [215, 226, 220], 'the template needs less than the legacy bottom band')
   assert.deepEqual(await customPixel(512), [215, 226, 220], 'the sample center does not cover the generated product')
+  assert.deepEqual(await customPixel(512, 8), [202, 18, 36], 'the uploaded side rail is preserved')
   assert.deepEqual(await customPixel(1000), [202, 18, 36], 'the matching custom footer is used')
   const wrongAlbum = await call('POST', `/assets/${customHero.id}/photo`, { connectionId: shop.id, albumId: '1001', confirmed: true })
   assert.equal(wrongAlbum.json().error, 'HERO_SHOP_MISMATCH')

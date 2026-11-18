@@ -1,14 +1,14 @@
 import type { PoolClient } from 'pg'
 import { db } from '../db.js'
 import { IntegrationError } from './1688.js'
-import { CUSTOM_HERO_FRAME, HERO_REFERENCE_FRAME } from './hero-reference-frame.js'
+import { CUSTOM_HERO_FRAME, HERO_REFERENCE_FRAME, type HeroInsets } from './hero-reference-frame.js'
 
 export const SHOP_HERO_MODES = ['none', HERO_REFERENCE_FRAME, CUSTOM_HERO_FRAME] as const
 export type ShopHeroMode = typeof SHOP_HERO_MODES[number]
 export type HeroFrame = { connectionId: string; name: string } & (
-  { mode: typeof HERO_REFERENCE_FRAME } | { mode: typeof CUSTOM_HERO_FRAME; key: string }
+  { mode: typeof HERO_REFERENCE_FRAME } | { mode: typeof CUSTOM_HERO_FRAME; key: string; insets: HeroInsets | null }
 )
-type CustomTemplate = { id: string; name: string; storage_key: string }
+type CustomTemplate = { id: string; name: string; storage_key: string; frame_insets: HeroInsets | null }
 export type ShopHeroCopy = { origin: string | null; notes: string[] }
 type ShopState = { id: string; display_name: string; mode: ShopHeroMode; active_template_id: string | null; revision: number; hero_origin: string | null; hero_notes: string[] }
 type ShopRow = ShopState & { templates: CustomTemplate[] }
@@ -16,7 +16,7 @@ const stateColumns = `c.id,c.display_name,coalesce(t.mode,'none') AS mode,t.acti
   t.hero_origin,coalesce(t.hero_notes,'[]'::jsonb) AS hero_notes`
 const shopTables = `FROM integration_1688_connections c LEFT JOIN image_shop_hero_templates t ON t.connection_id=c.id`
 const shops = `SELECT ${stateColumns}, coalesce((SELECT jsonb_agg(jsonb_build_object(
-    'id', custom.id, 'name', custom.name, 'storage_key', custom.storage_key) ORDER BY custom.created_at, custom.id)
+    'id', custom.id, 'name', custom.name, 'storage_key', custom.storage_key, 'frame_insets', custom.frame_insets) ORDER BY custom.created_at, custom.id)
     FROM image_shop_hero_custom_templates custom WHERE custom.connection_id=c.id),'[]'::jsonb) AS templates
   ${shopTables} WHERE c.tenant_id=$1`
 
@@ -32,7 +32,7 @@ export async function heroShop(tenantId: string, id: string, client: PoolClient 
 
 export async function heroDesignForShop(tenantId: string, id: string | null | undefined): Promise<{ frame: HeroFrame | null; copy: ShopHeroCopy | null }> {
   if (!id) return { frame: null, copy: null }
-  const shop = (await db.query<ShopState & { storage_key: string | null }>(`SELECT ${stateColumns}, custom.storage_key
+  const shop = (await db.query<ShopState & { storage_key: string | null; frame_insets: HeroInsets | null }>(`SELECT ${stateColumns}, custom.storage_key, custom.frame_insets
     ${shopTables} LEFT JOIN image_shop_hero_custom_templates custom ON custom.connection_id=c.id AND custom.id=t.active_template_id
     WHERE c.tenant_id=$1 AND c.id=$2`, [tenantId, id])).rows[0]
   if (!shop) throw new IntegrationError('HERO_SHOP_NOT_FOUND', '店铺不存在。', 404)
@@ -41,7 +41,7 @@ export async function heroDesignForShop(tenantId: string, id: string | null | un
   const identity = { connectionId: shop.id, name: shop.display_name }
   if (shop.mode === CUSTOM_HERO_FRAME) {
     if (!shop.storage_key) throw new IntegrationError('HERO_TEMPLATE_FILE', '该店铺的自定义首图模板缺少图片。', 409)
-    return { frame: { ...identity, mode: CUSTOM_HERO_FRAME, key: shop.storage_key }, copy }
+    return { frame: { ...identity, mode: CUSTOM_HERO_FRAME, key: shop.storage_key, insets: shop.frame_insets }, copy }
   }
   return { frame: { ...identity, mode: HERO_REFERENCE_FRAME }, copy }
 }

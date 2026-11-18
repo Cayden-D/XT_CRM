@@ -25,7 +25,8 @@ async function present(shop: Shop, tenantId: string) {
     id: shop.id, display_name: shop.display_name, mode: shop.mode, revision: shop.revision, activeTemplateId: shop.active_template_id,
     heroOrigin: shop.hero_origin, heroNotes: shop.hero_notes,
     templates: await Promise.all(shop.templates.map(async template => ({
-      id: template.id, name: template.name, previewUrl: await imageUrl(template.storage_key, tenantId).catch(() => null),
+      id: template.id, name: template.name, adaptive: template.frame_insets !== null,
+      previewUrl: await imageUrl(template.storage_key, tenantId).catch(() => null),
     }))),
   }
 }
@@ -36,7 +37,8 @@ async function uploadTemplate(tenantId: string, content: string) {
   if (!meta?.format || !['png', 'jpeg', 'webp'].includes(meta.format)) throw new IntegrationError('HERO_TEMPLATE_FILE', '请上传 PNG、JPG 或 WebP 图片。', 400)
   const { png, width, height } = await toPng(input)
   if (Math.min(width, height) < 300) throw new IntegrationError('HERO_TEMPLATE_SIZE', '模板图片短边至少需要 300 像素。', 400)
-  return storeImage(tenantId, randomUUID(), await prepareCustomHeroFrame(png, width, height))
+  const { frame, insets } = await prepareCustomHeroFrame(png, width, height)
+  return { key: await storeImage(tenantId, randomUUID(), frame), insets }
 }
 
 async function mutateShop(
@@ -120,9 +122,9 @@ export async function imageHeroTemplateRoutes(app: FastifyInstance) {
     const { tenantId } = request.authUser
     const shop = await heroShop(tenantId, id)
     if (shop.revision !== revision) throw stale()
-    const key = await uploadTemplate(tenantId, content)
+    const { key, insets } = await uploadTemplate(tenantId, content)
     const saved = await mutateShop(request, id, revision, 'create', async client => {
-      await client.query('INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key) VALUES($1,$2,$3)', [id, name, key])
+      await client.query('INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key,frame_insets) VALUES($1,$2,$3,$4)', [id, name, key, insets])
     }, key)
     return reply.code(201).send(saved)
   })
@@ -131,17 +133,19 @@ export async function imageHeroTemplateRoutes(app: FastifyInstance) {
     const { id, templateId } = templatePath.parse(request.params)
     const { name, revision, content } = revisionBody.extend({ name: nameInput, content: imageInput.optional() }).strict().parse(request.body)
     const { tenantId } = request.authUser
-    let key: string | undefined
+    let image: Awaited<ReturnType<typeof uploadTemplate>> | undefined
     if (content) {
       const shop = await heroShop(tenantId, id)
       if (shop.revision !== revision) throw stale()
       if (!shop.templates.some(template => template.id === templateId)) throw missingTemplate()
-      key = await uploadTemplate(tenantId, content)
+      image = await uploadTemplate(tenantId, content)
     }
     return mutateShop(request, id, revision, 'edit', async client => {
-      const updated = await client.query('UPDATE image_shop_hero_custom_templates SET name=$3,storage_key=coalesce($4,storage_key) WHERE connection_id=$1 AND id=$2', [id, templateId, name, key ?? null])
+      const updated = await client.query(`UPDATE image_shop_hero_custom_templates
+        SET name=$3,storage_key=coalesce($4,storage_key),frame_insets=CASE WHEN $4 IS NULL THEN frame_insets ELSE $5 END
+        WHERE connection_id=$1 AND id=$2`, [id, templateId, name, image?.key ?? null, image?.insets ?? null])
       if (!updated.rowCount) throw missingTemplate()
-    }, key)
+    }, image?.key)
   })
 
   app.delete('/hero-templates/:id/custom/:templateId', { preHandler: manage }, async request => {

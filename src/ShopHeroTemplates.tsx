@@ -156,7 +156,9 @@ function ShopTemplateRow({ shop, editable, changed }:{shop:HeroTemplateShop;edit
     {shop.templates.length > 0 && <ul className="iw-shop-template-list" aria-label={`${shop.display_name} 自定义模板`}>
       {shop.templates.map(template => <li key={template.id}>
         {template.previewUrl && <img src={template.previewUrl} loading="lazy" alt="" referrerPolicy="no-referrer"/>}
-        <span className="iw-shop-template-name">{template.name}{shop.activeTemplateId === template.id && <small>使用中</small>}</span>
+        <span className="iw-shop-template-name">{template.name}{shop.activeTemplateId === template.id && <small>使用中</small>}
+          {template.adaptive === false && <small>固定边框</small>}
+        </span>
         {editable && <div className="iw-shop-template-actions">
           <button className="shop-button" type="button" disabled={busy || Boolean(editor)} aria-label={`编辑 ${template.name}`}
             onClick={e => startEditing({ kind:'edit', template }, e.currentTarget)}><Pencil size={14} aria-hidden="true"/>编辑</button>
@@ -181,7 +183,7 @@ export default function ShopHeroTemplates({ editable }:{ editable:boolean }) {
   const { shops, setShops, error } = useHeroTemplateShops()
   return <section className="iw-shop-templates" aria-labelledby="iw-shop-templates-title">
     <h4 id="iw-shop-templates-title">1688 首图参考模板</h4>
-    <p>每家店铺可保存多个模板，并选择一个使用。自定义模板支持 PNG、JPG、WebP，保留上方 12% 和下方 20% 的边框、文字和 Logo。</p>
+    <p>自定义模板支持 PNG、JPG、WebP，自动识别边框并为商品留出空间。显示「固定边框」的模板可编辑并重新上传，优先使用中间透明或留空的模板原图。</p>
     {error ? <p className="iw-error" role="alert">{error}</p> : shops === null ? <p role="status">正在读取店铺…</p> : shops.length === 0 ? <p>还没有授权商品应用的店铺。</p> :
       <ul className="iw-shop-template-shops">{shops.map(shop => <ShopTemplateRow key={shop.id} shop={shop} editable={editable}
         changed={next => setShops(list => list?.map(row => row.id === next.id ? next : row) ?? null)}/>)}</ul>}

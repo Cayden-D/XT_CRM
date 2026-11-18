@@ -317,14 +317,18 @@ try {
   assert.equal(await ensureAlbum(ctx, connection.id), '777')
   assert.equal(addCalls, 4, 'found by name, not created again')
   const { prepareCustomHeroFrame } = await import('../server/integrations/hero-reference-frame.js')
-  const customKey = await workshop.storeImage(tenant, randomUUID(), await prepareCustomHeroFrame(png, 800, 800))
-  const active = (await db.query("INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key) VALUES($1,'宠物首图',$2) RETURNING id", [second.id, customKey])).rows[0].id
+  const template = await sharp(png).extend({ top: 48, bottom: 96, left: 16, right: 32, background: '#244973' }).png().toBuffer()
+  const { frame, insets } = await prepareCustomHeroFrame(template, 848, 944)
+  assert.ok(insets)
+  const customKey = await workshop.storeImage(tenant, randomUUID(), frame)
+  const active = (await db.query("INSERT INTO image_shop_hero_custom_templates(connection_id,name,storage_key,frame_insets) VALUES($1,'宠物首图',$2,$3) RETURNING id", [second.id, customKey, insets])).rows[0].id
   await db.query("INSERT INTO image_shop_hero_templates(connection_id,mode,active_template_id,hero_origin) VALUES($1,'custom-v1',$2,'浙江义乌')", [second.id, active])
   const secondSource = await collect(second.id)
   const routed = await run(secondSource)
   assert.equal(routed.connection_id, second.id)
   const secondHero = (await db.query("SELECT options,prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [routed.report.imageBatch])).rows[0]
   assert.deepEqual([secondHero.options.heroFrame, secondHero.options.heroFrameKey, secondHero.options.heroShopId], ['custom-v1', customKey, second.id])
+  assert.deepEqual(secondHero.options.heroFrameInsets, insets)
   assert.doesNotMatch(secondHero.prompt, /深蓝黑渐变/)
   assert.match(secondHero.prompt, /产地：浙江义乌/)
   const secondSelling = (await db.query("SELECT prompt FROM image_assets WHERE batch_id=$1 AND operation='suite_selling'", [routed.report.imageBatch])).rows[0]

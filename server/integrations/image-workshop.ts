@@ -280,8 +280,13 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
       if (facts.heroReferenceFrame) {
         const builtin = facts.heroReferenceFrame.mode === HERO_REFERENCE_FRAME
         const style = builtin ? '深蓝黑渐变背景，主标题用大号粗体和浅色描边，卖点用纵排的金色圆角标签。' : '按商品选取简洁、对比清晰的背景，主标题清楚醒目，卖点用纵排标签。'
+        const insets = facts.heroReferenceFrame.mode === CUSTOM_HERO_FRAME ? facts.heroReferenceFrame.insets : null
+        const margin = (inset: number) => Math.ceil(inset * 100) + 3
+        const room = insets
+          ? `上方 ${margin(insets.top)}%、下方 ${margin(insets.bottom)}%、左侧 ${margin(insets.left)}%、右侧 ${margin(insets.right)}%`
+          : `上方 ${HERO_TOP_PERCENT}%、下方 ${HERO_BOTTOM_PERCENT}% 和两侧 5%`
         return `${base}生成 1688 批发商品首图的中间内容：左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。${style}${productCopy}${fixedCopy}以上是全部文案。`
-          + `将商品和文案放在画面中部，上方 ${HERO_TOP_PERCENT}%、下方 ${HERO_BOTTOM_PERCENT}% 和两侧 5% 仅延伸背景，供程序合成固定边框。不要另画边框、品牌字样或品牌标识。${text}${noFake}${CLEAN}`
+          + `将商品和文案放在画面中部，${room} 仅延伸背景，供程序合成固定边框。不要另画边框、品牌字样或品牌标识。${text}${noFake}${CLEAN}`
       }
       const badges = configured ? [] : (facts.badges ?? HERO_BADGES).slice(0, 3)
       const terms = fixedCopy || (badges.length ? `用一行小字写已配置的店铺优势：${badges.join('、')}。` : '')
@@ -361,7 +366,7 @@ async function complete(asset: Asset, png: Buffer, cost?: number) {
   const mode = asset.operation === 'suite_hero' ? asset.options.heroFrame : undefined
   let normalized = decoded
   if (mode === HERO_REFERENCE_FRAME) normalized = await applyHeroReferenceFrame(decoded, width, height)
-  else if (mode === CUSTOM_HERO_FRAME) normalized = await applyCustomHeroFrame(decoded, width, height, await readImage(asset.options.heroFrameKey, asset.tenant_id))
+  else if (mode === CUSTOM_HERO_FRAME) normalized = await applyCustomHeroFrame(decoded, width, height, await readImage(asset.options.heroFrameKey, asset.tenant_id), asset.options.heroFrameInsets)
   else if (asset.options.brand?.logo) normalized = await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id))
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
@@ -476,7 +481,8 @@ export async function queueReplacements(tenantId: string, productId: string, act
 export function suiteDesign(type: GeneratedType, facts: SuiteFacts, brand: OwnBrand | null) {
   const framed = type === 'suite_hero' && facts.heroReferenceFrame
   const selected = brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
-  const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name, ...(framed.mode === CUSTOM_HERO_FRAME ? { heroFrameKey: framed.key } : {}) }
+  const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name,
+    ...(framed.mode === CUSTOM_HERO_FRAME ? { heroFrameKey: framed.key, ...(framed.insets ? { heroFrameInsets: framed.insets } : {}) } : {}) }
     : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected), ...(type === 'suite_white' || !brand.connection_id ? {} : { connectionId: brand.connection_id }) } } : {}
   return { prompt: suitePrompt(type, facts, selected), options: {
     ...options, suiteCopyVersion: SUITE_COPY_VERSION, ...(type === 'suite_hero' && facts.shopCopy ? { heroShopCopy: facts.shopCopy } : {}),
