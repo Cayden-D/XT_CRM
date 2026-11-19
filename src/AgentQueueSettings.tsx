@@ -5,7 +5,7 @@ import {DraftEditor} from './1688Page'
 import {request,type SessionUser} from './api'
 import {canViewTeamCredits,navigate} from './navigation'
 import './1688.css'
-const evidenceNames:Record<string,string>={title:'标题',attributes:'采集属性',image:'图片',inferred:'AI 判断',default:'其它选项',rule:'固定规则'}
+const evidenceNames:Record<string,string>={title:'标题',attributes:'采集属性',image:'图片',inferred:'AI 判断',estimated:'AI 推测（待人工审核）',default:'其它选项',rule:'固定规则'}
 function AiFillReport({fill}:{fill:AgentAiFill}){
   if(!fill.filled.length&&!fill.refused.length&&!fill.repairs.length)return null
   return <div className="queue-ai-fill">

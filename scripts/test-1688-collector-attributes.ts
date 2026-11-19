@@ -27,7 +27,7 @@ const named={global:{systemParam:{catId:1}},data:{catProp:{fields:{dataSource:[
   {name:'p',label:'电源型式',uiType:'select',dataSource:[{value:1,text:'USB'},{value:2,text:'电池'}]},
   {name:'g',label:'适用送礼场合',uiType:'checkbox',customizable:true,dataSource:[{value:3,text:'节日'}]},{name:'f',label:'功率',uiType:'input'}]}}}}
 const filled=collectedCategoryDefaults(named,{source:'1688',source_category_id:'1',source_category_attributes:[],attributes:{电压:'12V',规格尺寸:'15×7×5cm',重量:'320g',产品重量:'0.3kg',供电方式:'usb',适用送礼场合:'节日,广告促销',功率:'详情可咨询客服'}})
-assert.deepEqual(filled,{v:'12V',s:'15×7×5cm',p:{value:1,text:'USB'}},'ambiguous synonyms, multi-select and placeholders are left for review')
+assert.deepEqual(filled,{v:'12V',s:'15×7×5cm',p:{value:1,text:'USB'},g:[{value:3,text:'节日'},{value:-1,text:'广告促销',custom:true}]},'ambiguous synonyms and placeholders are left for review')
 const base={title:'测试',mainImages:[],detailImages:[],attributes:{},skuProps:[],skus:[]}
 assert.equal(merge({...base,attributes:attrs,sourceCategoryAttributes:rows},base).sourceCategoryAttributes.length,20)
 const root=fixture.Root.fields.dataJson;root.offerDomain=JSON.parse(root.offerDomain)
@@ -39,3 +39,15 @@ assert.equal(extract({}).length,0)
 assert.match(script,/sourceCategoryAttributes: extract1688SourceCategoryAttributes\(data\)/)
 assert.match(script,/sourceCategoryAttributes: product\.sourceCategoryAttributes/)
 console.log(JSON.stringify({sourceFixture:'ok',stringAndObject:'ok',attributeIdsAndUnits:'ok',malformedFallback:'ok',mergeAndPayload:'ok',draftModelAndVoltage:'ok',unmatchedType:'preserved for review',customizableSameSiteId:'ok',customValue:'ok',synonyms:'ok',caseInsensitive:'ok'}))
+
+// Changing the destination category must not discard source text or reuse category-specific IDs.
+const differentCategory={...schema,global:{systemParam:{catId:999}}}
+assert.equal(collectedCategoryDefaults(differentCategory,{source:'1688',source_category_id:'1032097',attributes:attrs,source_category_attributes:rows})['p-821'],'12')
+const voltageSchema={data:{catProp:{fields:{dataSource:[{name:'v',label:'额定电压',unit:'V',uiType:'input',maxLength:5}]}}}}
+assert.equal(collectedCategoryDefaults(voltageSchema,{source:'1688',source_category_id:'other',attributes:{电压:'11.1（V）'}}).v,'11.1')
+assert.equal(collectedCategoryDefaults(voltageSchema,{source:'1688',attributes:{电压:'11.1mV'}}).v,undefined,'an incompatible unit is never silently stripped')
+const differentCustom={...custom,global:{systemParam:{catId:999}}}
+assert.deepEqual(collectedCategoryDefaults(differentCustom,{source:'1688',source_category_id:'1032097',source_category_attributes:rows})['p-1836'],{value:-1,text:'车载',custom:true})
+
+const voltageSelect={data:{catProp:{fields:{dataSource:[{name:'v',label:'额定电压',unit:'V',uiType:'select',dataSource:[{value:111,text:'11.1V'}]}]}}}}
+assert.deepEqual(collectedCategoryDefaults(voltageSelect,{attributes:{额定电压:'11.1（V）'}}).v,{value:111,text:'11.1V'})

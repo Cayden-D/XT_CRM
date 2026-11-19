@@ -12,7 +12,7 @@ import { collectedCategoryDefaults } from '../integrations/1688-collected-attrib
 import { fillFromProductData, loadProductData } from '../integrations/product-attributes.js'
 import { loadReviewedVariants } from '../integrations/1688-collected-skus.js'
 import { defaultBrand, otherShopBrandNames, ownBrandNames } from '../integrations/brands.js'
-import { attributeFacts, attributePictures, BRAND_FIELD, fillRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
+import { attributeFacts, attributePictures, BRAND_FIELD, fillRequiredAttributes, estimateMissingRequiredAttributes, isAttributeRejection, repairRejectedAttributes, type AttributeFillReport } from '../integrations/1688-attribute-fill.js'
 import { validatePublishBody } from './1688.js'
 
 type Publisher=(request:Pick<FastifyRequest,'params'|'body'|'authUser'|'id'>,agent?:{jobId:string;settingsRevision:number;queue?:{id:string;workerId:string}})=>Promise<unknown>
@@ -107,7 +107,7 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
         if(ownBrand||elsewhere(defaults[field.name]))delete defaults[field.name]
         if(elsewhere(catProp[field.name]))delete catProp[field.name]
       }
-      for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||typeof catProp[name]==='object'&&catProp[name].value==null)catProp[name]=value
+      for(const [name,value] of Object.entries(defaults))if(catProp[name]==null||catProp[name]===''||(Array.isArray(catProp[name])?catProp[name].length===0:typeof catProp[name]==='object'&&catProp[name].value==null))catProp[name]=value
       // Only the destination's own brands are exempt from source-name removal.
       const avoid=sourceNames(source,product,ownNames)
       let formValues=await prepareAgentFields(draft.platform_schema,{...current,catProp},product,reviewed,avoid)
@@ -122,6 +122,13 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
       const fill=await fillRequiredAttributes(draft.platform_schema,formValues,facts,pictures)
       formValues=fill.values
       const ai:AttributeFillReport={filled:fill.filled,refused:fill.refused,repairs:[]}
+      // Missing ordinary required attributes get two estimation attempts before local validation blocks the job.
+      const estimated=await estimateMissingRequiredAttributes(draft.platform_schema,formValues,facts,pictures)
+      formValues=estimated.values
+      ai.filled.push(...estimated.filled)
+      const estimatedNames=new Set(estimated.filled.map(item=>item.name))
+      const refusedNames=new Set(estimated.refused.map(item=>item.name))
+      ai.refused=[...ai.refused.filter(item=>!estimatedNames.has(item.name)&&!refusedNames.has(item.name)),...estimated.refused]
       report={...report,ai}
       const requireComplete=()=>{
         const missing=validatePublishBody(draft.platform_schema,{...draft.data_body,formValues})
@@ -160,7 +167,8 @@ async function agentDraft(request:Pick<FastifyRequest,'params'|'body'|'authUser'
           requireComplete()
         }
       }
-      const summary=[ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:'',skuImageSample&&!queue?.skipImageCheck?`SKU 图片抽查 ${skuImageSample.checked}/${skuImageSample.total} 张`:''].filter(Boolean).join('，')
+      const estimateCount=ai.filled.filter(item=>item.evidence==='estimated').length
+      const summary=[estimateCount?`其中 ${estimateCount} 项为 AI 推测，请上架后人工审核修改`:'',ai.filled.length?`AI 代填 ${ai.filled.length} 项属性`:'',ai.repairs.length?`平台拒绝后自动修复 ${ai.repairs.length} 次`:'',skuImageSample&&!queue?.skipImageCheck?`SKU 图片抽查 ${skuImageSample.checked}/${skuImageSample.total} 张`:''].filter(Boolean).join('，')
       await db.query("UPDATE integration_1688_agent_jobs SET status='published',report=$2,message=$3,updated_at=now() WHERE id=$1",[job.id,JSON.stringify(report),`已提交平台；审核状态以平台为准。${summary?`${summary}，可在任务详情核对。`:''}${report.skuWarning?`注意：${report.skuWarning}`:report.skuCheck&&report.skuCheck!=='unread'?`${report.skuCheck}。`:''}`])
     }catch(error){
       const state=(await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1 AND tenant_id=$2',[id,tenant])).rows[0]?.status

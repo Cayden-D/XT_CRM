@@ -40,7 +40,7 @@ try{
   assert.equal((await request('PUT',`/connections/${connection.id}/agent-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
   assert.equal((await request('PUT',`/connections/${other.id}/agent-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
   assert.equal((await request('PUT',`/connections/${connection.id}/agent-queue-settings`,{enabled:true,revision:0,confirmed:true})).statusCode,200)
-  assert.deepEqual(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'999',source_category_attributes:[{attrName:'材质',attrValue:'棉'}]}),{})
+  assert.deepEqual(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'999',source_category_attributes:[{attrName:'材质',attrValue:'棉'}]}),{'p-1':{value:1,text:'棉'}},'cross-category source text still fills a matching option')
   assert.equal(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'101',source_category_attributes:[{attrName:'材质',attrNameId:'1',attrValue:'棉',attrValueIds:['1']}],attributes:{}})['p-1'].value,1)
   assert.deepEqual(collectedCategoryDefaults(schema,{source:'1688',source_category_id:'101',source_category_attributes:[],attributes:{材质:'棉',功率:'120',风量:'详情可咨询客服'}}),{'p-1':{value:1,text:'棉'},'p-2':'120'})
   async function fixture(stock:number|null,categoryId:string|null='101'){
