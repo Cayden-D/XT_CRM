@@ -70,11 +70,12 @@ async function claim(workerId:string){
   return result.rows[0] as QueueJob|undefined
 }
 
+// The publication trigger may already have marked this job published; its owner still saves the final report, without allowing a downgrade.
 async function finish(job:QueueJob,status:string,message:string,report:Json={}){
   const client=await db.connect()
   try{
     await client.query('BEGIN')
-    const result=await client.query('UPDATE integration_1688_collection_queue_jobs SET status=$3,message=$4,report=$5::jsonb,worker_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker_id=$2 AND status=\'processing\' RETURNING collected_product_id',[job.id,job.worker_id,status,message,JSON.stringify(report)])
+    const result=await client.query('UPDATE integration_1688_collection_queue_jobs SET status=$3,message=$4,report=$5::jsonb,worker_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND worker_id=$2 AND (status=\'processing\' OR (status=\'published\' AND $3=\'published\')) RETURNING collected_product_id',[job.id,job.worker_id,status,message,JSON.stringify(report)])
     if(result.rows.length)await client.query('UPDATE collected_products SET processing_status=$2,updated_at=now() WHERE id=$1',[job.collected_product_id,status==='published'?'published':'failed'])
     await client.query('COMMIT')
   }catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}

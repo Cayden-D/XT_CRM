@@ -14,7 +14,7 @@ function AiFillReport({fill}:{fill:AgentAiFill}){
     {fill.repairs.length>0&&<><h3>平台拒绝后的修复</h3><ul>{fill.repairs.map((item,index)=><li key={index}><b>{item.code}</b><span>{item.changed.join('、')||'没有修改'}</span><small>{item.diagnosis}{item.detail?` · 平台原文：${item.detail}`:''}</small></li>)}</ul></>}
   </div>
 }
-const names:Record<AgentQueueJob['status'],string>={queued:'排队中',processing:'处理中',blocked:'需核对',failed:'处理失败',published:'已提交平台',unknown:'结果待核对',cancelled:'已取消'}
+const names:Record<AgentQueueJob['status'],string>={queued:'排队中',processing:'处理中',blocked:'需核对',failed:'处理失败',published:'已发布',unknown:'结果待核对',cancelled:'已取消'}
 export default function AgentQueueSettings({user}:{user:SessionUser}){
  const [shops,setShops]=useState<AgentQueueSetting[]>([]),[jobs,setJobs]=useState<AgentQueueJob[]>([])
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('')
@@ -26,7 +26,7 @@ export default function AgentQueueSettings({user}:{user:SessionUser}){
  const [draft,setDraft]=useState<{data:PublishDraft;shop:string}|null>(null),[opening,setOpening]=useState('')
  const has=(p:string)=>(user.permissions||[]).some(v=>v==='*'||v===p||v===`${p.split(':')[0]}:*`)
  const canRead=has('integration:read'),canRetry=has('integration:publish')&&has('collection:read')
- const load=useCallback(async()=>{const ticket=++sequence.current;setLoading(true);setError('');if(!canRead){setLoading(false);return}try{const {data}=await getAgentQueue({page,pageSize,status,connectionId:shopId,search:query});if(ticket!==sequence.current)return;setShops(data.settings);setJobs(data.jobs);setTotal(data.total);if(data.page!==page)setPage(data.page)}catch(cause){if(ticket===sequence.current)setError(cause instanceof Error?cause.message:'队列读取失败。')}finally{if(ticket===sequence.current)setLoading(false)}},[page,pageSize,status,shopId,query,canRead])
+ const load=useCallback(async()=>{const ticket=++sequence.current;setLoading(true);setError('');if(!canRead){setLoading(false);return}try{const {data}=await getAgentQueue({page,pageSize,status,connectionId:shopId,search:query});if(ticket!==sequence.current)return;setShops(data.settings);setJobs(data.jobs);setDetail(current=>current?data.jobs.find(job=>job.id===current.id)||null:null);setTotal(data.total);if(data.page!==page)setPage(data.page)}catch(cause){if(ticket===sequence.current)setError(cause instanceof Error?cause.message:'队列读取失败。')}finally{if(ticket===sequence.current)setLoading(false)}},[page,pageSize,status,shopId,query,canRead])
  useEffect(()=>{void load();return()=>{sequence.current++}},[load])
  useEffect(()=>{const escape=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busy)setDetail(null)};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape)},[busy])
  async function retry(job:AgentQueueJob){setBusy(true);setError('');try{await retryAgentQueueJob(job.id);setDetail(null);await load()}catch(cause){setError(cause instanceof Error?cause.message:'重新入队失败。')}finally{setBusy(false)}}

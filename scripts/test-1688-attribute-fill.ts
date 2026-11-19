@@ -271,9 +271,23 @@ try {
   assert.equal(finished.status, 'published', finished.message); assert.equal(publishCalls, 1)
   assert.equal(finished.ai_fill.filled.length, 6, 'the queue shows what AI wrote')
 
+  // Running AI directly from a previously blocked draft must synchronize its queue too.
+  const directDraft = await draft()
+  const directJob = await queued(directDraft.id, directDraft.product_id)
+  const directResult = await run(directDraft)
+  assert.equal(directResult.status, 'published', directResult.message)
+  const directQueue = (await request('GET', '/agent/queue')).json().data.jobs.find((j: any) => j.id === directJob)
+  assert.equal(directQueue.status, 'published')
+  assert.doesNotMatch(directQueue.message, /未通过/)
+  const directSource = (await db.query('SELECT processing_status FROM collected_products WHERE product_id=$1', [directDraft.product_id])).rows[0]
+  assert.equal(directSource.processing_status, 'published')
+  const completedWorker = (await db.query('SELECT worker_id,lease_until FROM integration_1688_collection_queue_jobs WHERE id=$1', [jobId])).rows[0]
+  assert.equal(completedWorker.worker_id, null, 'worker still finishes and releases the lease after the publication trigger')
+  assert.equal(completedWorker.lease_until, null)
+
   const unknownJob = await queued(uncertainDraft.id, uncertainDraft.product_id)
   assert.equal((await request('POST', `/agent/queue-jobs/${unknownJob}/retry`, {})).statusCode, 409, 'a draft that may have reached the shop cannot be retried')
-  console.log(JSON.stringify({ groundingRules: 'ok', brandAndDeclarationsByRule: 'ok', multiSelect: 'ok', measuredValues: 'ok', estimatedMissingBeforePublish: 'ok', estimatedPlatformMissing: 'ok', estimatesMarkedForReview: 'ok', estimationBounded: 'ok', fillAndPublish: 'ok', repairFromPlatformReason: 'ok', titleOnlyShorter: 'ok', repairBounded: 'ok', nonContentNoResend: 'ok', unknownNoResend: 'ok', licenceBlocked: 'ok', resumeFromDraft: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ groundingRules: 'ok', brandAndDeclarationsByRule: 'ok', multiSelect: 'ok', measuredValues: 'ok', estimatedMissingBeforePublish: 'ok', estimatedPlatformMissing: 'ok', estimatesMarkedForReview: 'ok', estimationBounded: 'ok', fillAndPublish: 'ok', repairFromPlatformReason: 'ok', titleOnlyShorter: 'ok', repairBounded: 'ok', nonContentNoResend: 'ok', unknownNoResend: 'ok', licenceBlocked: 'ok', resumeFromDraft: 'ok', directAgentStatusSync: 'ok', workerReportPreserved: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   for (const id of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }

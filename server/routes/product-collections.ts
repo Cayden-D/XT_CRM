@@ -15,7 +15,7 @@ const idSchema=z.object({id:z.string().uuid()})
 const listSchema=z.object({search:z.string().trim().max(100).optional(),source:z.enum(['1688','alibaba']).optional(),status:z.enum(['collected','ai_processing','ai_completed','ready','published','failed']).optional(),
   stage:z.enum(['pending','queue','attention','promoted','published']).optional(),page:z.coerce.number().int().min(1).max(10000).default(1),pageSize:z.coerce.number().int().min(1).max(100).default(24)})
 /** Where a collected product stands, from its latest queue job and whether it became a catalogue product. */
-const stageSql=`CASE WHEN q.status='published' THEN 'published' WHEN q.status IN ('blocked','failed','unknown') THEN 'attention' WHEN q.status IN ('queued','processing') THEN 'queue'
+const stageSql=`CASE WHEN cp.processing_status='published' OR q.status='published' THEN 'published' WHEN q.status IN ('blocked','failed','unknown') THEN 'attention' WHEN q.status IN ('queued','processing') THEN 'queue'
   WHEN cp.product_id IS NOT NULL THEN 'promoted' ELSE 'pending' END`
 const nullableUrl=z.union([z.string().url().max(2000),z.literal(''),z.null()]).optional().transform(value=>value||null)
 const variantSchema=z.object({externalSkuId:z.string().trim().max(200).optional().nullable(),label:z.string().trim().min(1).max(500),attributes:z.record(z.string(),z.string()).default({}),imageUrl:nullableUrl,priceText:z.string().trim().max(200).optional().nullable(),price:z.coerce.number().min(0).optional().nullable(),stockText:z.string().trim().max(200).optional().nullable(),stock:z.coerce.number().min(0).optional().nullable(),rawData:z.record(z.string(),z.unknown()).default({})})

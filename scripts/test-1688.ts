@@ -119,15 +119,37 @@ try{
   onSubSchema=async()=>{await db.query('UPDATE integration_1688_publish_drafts SET revision=revision+1 WHERE id=$1',[draft.id])}
   const rulesRace=await request('POST',`/api/integrations/1688/drafts/${draft.id}/sku-rules`,{revision:4});assert.equal(rulesRace.statusCode,409);onSubSchema=null
   await db.query('UPDATE integration_1688_publish_drafts SET platform_schema=$2::jsonb,data_body=jsonb_set(data_body,\'{formValues}\',$3::jsonb),revision=2 WHERE id=$1',[draft.id,JSON.stringify(schema),JSON.stringify(values)])
+  // A successful manual publication must replace the old collection/queue failure.
+  const queueJob=(await db.query("INSERT INTO integration_1688_collection_queue_jobs(tenant_id,connection_id,collected_product_id,source_updated_at,status,product_id,draft_id,message)VALUES($1,$2,$3,now(),'blocked',$4,$5,'发布规则未通过：材质')RETURNING id",[tenantId,connection.id,collectionId,productId,draft.id])).rows[0]
+  const collectionState=async()=>{
+    const result=await request('GET',`/api/product-collections?search=${marker}`)
+    assert.equal(result.statusCode,200,result.body)
+    return result.json()
+  }
+  assert.equal((await collectionState()).data[0].stage,'attention')
   const publish=await request('POST',`/api/integrations/1688/drafts/${draft.id}/publish`,{revision:2,confirmed:true});assert.equal(publish.statusCode,200,publish.body);assert.equal(publish.json().data.offerId,'9007199254740993123')
+  const publishedCollection=await collectionState()
+  assert.equal(publishedCollection.data[0].stage,'published')
+  assert.equal(publishedCollection.data[0].processing_status,'published')
+  assert.equal(publishedCollection.data[0].queue_status,'published')
+  assert.doesNotMatch(publishedCollection.data[0].queue_message,/未通过/)
+  assert.equal(publishedCollection.facets.attention,0)
+  assert.equal(publishedCollection.facets.published,1)
+  const publishedQueue=(await request('GET','/api/integrations/1688/agent/queue?status=published')).json().data.jobs
+  assert.ok(publishedQueue.some((j:any)=>j.id===queueJob.id))
+  assert.equal((await request('GET','/api/integrations/1688/agent/queue?status=blocked')).json().data.total,0)
   const repeated=await request('POST',`/api/integrations/1688/drafts/${draft.id}/publish`,{revision:2,confirmed:true});assert.equal(repeated.statusCode,200);assert.equal(publishCalls,1)
   await db.query("UPDATE integration_1688_publish_drafts SET status='draft',offer_id=NULL WHERE id=$1",[draft.id]);unknownPublish=true
   await db.query('UPDATE integration_1688_listings SET product_id=NULL,sku_bindings=\'[]\'::jsonb,binding_revision=binding_revision+1 WHERE id=$1',[listing.id])
+  await db.query("UPDATE integration_1688_collection_queue_jobs SET status='unknown',message='结果待核对' WHERE id=$1",[queueJob.id])
+  await db.query("UPDATE collected_products SET processing_status='failed' WHERE id=$1",[collectionId])
   const timeout=await request('POST',`/api/integrations/1688/drafts/${draft.id}/publish`,{revision:2,confirmed:true});assert.equal(timeout.statusCode,502)
   assert.equal((await db.query('SELECT status FROM integration_1688_publish_drafts WHERE id=$1',[draft.id])).rows[0].status,'unknown')
+  assert.equal((await collectionState()).data[0].stage,'attention','an unknown result never turns into published')
   const retry=await request('POST',`/api/integrations/1688/drafts/${draft.id}/publish`,{revision:2,confirmed:true});assert.equal(retry.statusCode,409);assert.equal(publishCalls,2)
   const reconcile=await request('POST',`/api/integrations/1688/drafts/${draft.id}/reconcile`,{offerId:platformProduct.productID});assert.equal(reconcile.statusCode,200,reconcile.body)
-  console.log(JSON.stringify({encryption:'ok',losslessIdentifiers:'ok',signature:'ok',refreshExpiry:'ok',concurrentRefresh:'ok',tenantIsolation:'ok',permissions:'ok',oauthReplay:'ok',collectionPromotion:'ok',independentVariants:'ok',draftRevision:'ok',requiredProperties:'ok',publishIdempotency:'ok',uncertainPublishGuard:'ok',reconciliation:'ok',absoluteStockSpecId:'ok',staleStockGuard:'ok',photoMultipartSignature:'ok',skuMapping:'ok',mappingRevision:'ok',skuRuleRefresh:'ok',rulePreservation:'ok',ruleReloadGuard:'ok',ruleResponseGuard:'ok',ruleRaceGuard:'ok',livePlatformWrites:0}))
+  assert.equal((await collectionState()).data[0].stage,'published','manual reconciliation also synchronizes the labels')
+  console.log(JSON.stringify({encryption:'ok',losslessIdentifiers:'ok',signature:'ok',refreshExpiry:'ok',concurrentRefresh:'ok',tenantIsolation:'ok',permissions:'ok',oauthReplay:'ok',collectionPromotion:'ok',independentVariants:'ok',draftRevision:'ok',requiredProperties:'ok',publishIdempotency:'ok',uncertainPublishGuard:'ok',reconciliation:'ok',manualPublishStatusSync:'ok',collectionFacetsSync:'ok',queueStatusFiltersSync:'ok',absoluteStockSpecId:'ok',staleStockGuard:'ok',photoMultipartSignature:'ok',skuMapping:'ok',mappingRevision:'ok',skuRuleRefresh:'ok',rulePreservation:'ok',ruleReloadGuard:'ok',ruleResponseGuard:'ok',ruleRaceGuard:'ok',livePlatformWrites:0}))
 }finally{
   globalThis.fetch=originalFetch
   for(const id of tenantIds){await db.query('DELETE FROM audit_logs WHERE tenant_id=$1',[id]);await db.query('DELETE FROM tenants WHERE id=$1',[id])}

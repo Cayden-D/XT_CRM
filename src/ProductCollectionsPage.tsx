@@ -8,10 +8,10 @@ import { enqueueCollectedProduct, retryCollectedProducts } from './1688Api'
 import { ProductImagesPanel } from './ImageWorkshop'
 
 const money=(value:string|number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:2}).format(Number(value))
-const queueNames:Record<NonNullable<CollectedProductCard['queue_status']>,string>={queued:'排队中',processing:'Agent 处理中',blocked:'需核对',failed:'处理失败',published:'已提交平台',unknown:'结果待核对',cancelled:'已取消'}
-const stageNames:Record<CollectionStage,string>={pending:'待处理',queue:'队列中',attention:'需核对',promoted:'已转正式产品',published:'已提交平台'}
-const collectionStatus=(item:CollectedProductCard)=>item.queue_status&&item.queue_status!=='cancelled'?queueNames[item.queue_status]:stageNames[item.stage]
-const canRetryCollection=(item:CollectedProductCard)=>item.queue_status==='blocked'||item.queue_status==='failed'
+const queueNames:Record<NonNullable<CollectedProductCard['queue_status']>,string>={queued:'排队中',processing:'Agent 处理中',blocked:'需核对',failed:'处理失败',published:'已发布',unknown:'结果待核对',cancelled:'已取消'}
+const stageNames:Record<CollectionStage,string>={pending:'待处理',queue:'队列中',attention:'需核对',promoted:'已转正式产品',published:'已发布'}
+const collectionStatus=(item:CollectedProductCard)=>item.stage==='published'?stageNames.published:item.queue_status&&item.queue_status!=='cancelled'?queueNames[item.queue_status]:stageNames[item.stage]
+const canRetryCollection=(item:CollectedProductCard)=>item.stage!=='published'&&(item.queue_status==='blocked'||item.queue_status==='failed')
 const priceText=(item:CollectedProductCard)=>item.min_price==null?'价格待确认':Number(item.min_price)===Number(item.max_price)?money(item.min_price):`${money(item.min_price)} 起`
 /** "3 分钟前" up to a week, then the date. */
 export function ago(value:string){const minutes=Math.round((Date.now()-Date.parse(value))/60000);if(minutes<1)return '刚刚';if(minutes<60)return `${minutes} 分钟前`;if(minutes<1440)return `${Math.floor(minutes/60)} 小时前`;if(minutes<10080)return `${Math.floor(minutes/1440)} 天前`;return new Date(value).toLocaleDateString('zh-CN')}
@@ -31,6 +31,7 @@ export default function ProductCollectionsPage({user}:{user:SessionUser}){
    // A deletion can leave the last page empty: step back.
    if(!r.data.length&&page>1)setPage(Math.max(1,Math.ceil(r.total/pageSize)))}catch(cause){setError(cause instanceof ApiError?cause.message:'采集商品数据加载失败。')}finally{setLoading(false)}},[query,stage,source,page,pageSize])
  useEffect(()=>{void load()},[load])
+ useEffect(()=>{const refresh=()=>{void load()};window.addEventListener('focus',refresh);return()=>window.removeEventListener('focus',refresh)},[load])
  const filtered=Boolean(query||stage||source)
  const selectable=collections.filter(item=>canDelete||(canRetry&&canRetryCollection(item)))
  const selection=useSelection(selectable.map(c=>c.id))
