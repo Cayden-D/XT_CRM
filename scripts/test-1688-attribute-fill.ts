@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 // AI filling of required attributes and repair after a platform rejection. Every model and platform call is mocked.
 process.env.DASHSCOPE_API_KEY = 'attribute-fixture-key'
 process.env.DASHSCOPE_BASE_URL = 'https://attribute-fixture.invalid/compatible-mode/v1'
-const [{ buildApp }, { db }, { saveConnection, IntegrationError }, { runClaimedCollectionQueueJob }, { fillRequiredAttributes, isAttributeRejection, attributeFacts }] = await Promise.all([import('../server/app.js'), import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/1688-attribute-fill.js')])
+const [{ buildApp }, { db }, { saveConnection, IntegrationError }, { runClaimedCollectionQueueJob }, { fillRequiredAttributes, estimateMissingRequiredAttributes, isAttributeRejection, attributeFacts }] = await Promise.all([import('../server/app.js'), import('../server/db.js'), import('../server/integrations/1688.js'), import('../server/integrations/1688-collection-queue.js'), import('../server/integrations/1688-attribute-fill.js')])
 
 type Answer = { name: string; values: Array<string | number>; evidence: string; confidence: number; reason: string }
 const good: Answer[] = [
@@ -27,6 +27,7 @@ const schema = (extra: object[] = []) => ({ global: { systemParam: { catId: 101 
 let answers = good, repairAnswers: Answer[] = [], repairQueue: Answer[][] = [], repairTitle: string | undefined, malformed = false
 let currentSchema: object = schema(), publishCalls = 0, offerSeq = 0, published: any = null
 let rejections: Array<{ code: string; message?: string; form?: string } | 'transport'> = []
+let fillerAnswerQueue: Answer[][] = []
 const fillerFields: string[][] = [], repairInputs: any[] = []
 
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
@@ -38,7 +39,7 @@ globalThis.fetch = async (input, init) => {
     const body = JSON.parse(String(init?.body)), system = String(body.messages[0].content), content = body.messages.at(-1).content
     const text = Array.isArray(content) ? content.find((part: any) => part.type === 'text').text : content
     if (system.includes('视觉检查器')) return model({ images: content.filter((p: any) => p.type === 'image_url').map((_: unknown, index: number) => ({ index, readable: true, companyWatermark: { detected: false, name: '', confidence: 0 }, famousBrandLogo: { detected: false, name: '', confidence: 0 } })) })
-    if (system.includes('类目属性填写员')) { fillerFields.push(JSON.parse(text).fields.map((f: any) => f.label)); return model(malformed ? { nope: true } : { fields: answers, cannot: [] }) }
+    if (system.includes('类目属性填写员')) { fillerFields.push(JSON.parse(text).fields.map((f: any) => f.label)); return model(malformed ? { nope: true } : { fields: fillerAnswerQueue.shift() ?? answers, cannot: [] }) }
     if (system.includes('发布修复员')) { repairInputs.push(JSON.parse(text)); return model({ diagnosis: '平台认为香型不对', title: repairTitle, fields: repairQueue.shift() ?? repairAnswers, cannot: [] }) }
     return model({ title: '车载香薰测试商品', catProp: {}, unknown: ['香型'] })
   }
@@ -67,7 +68,7 @@ try {
   assert.deepEqual(first.values.catProp['p-patent'], { value: 32, text: '否' })
   assert.deepEqual(first.values.catProp['p-scent'], { value: 2, text: '海洋' })
   assert.deepEqual(first.values.catProp['p-func'], [{ value: 21, text: '芳香' }, { value: 22, text: '除异味' }], 'an option the platform does not list is dropped')
-  assert.equal(first.values.catProp['p-volt'], '12V')
+  assert.equal(first.values.catProp['p-volt'], '12')
   assert.equal(first.refused.length, 0)
 
   answers = [{ ...good[3], values: ['24V'] }]
@@ -90,6 +91,43 @@ try {
   assert.deepEqual((await fields({ 'p-scent': { value: 1, text: '森林' } })).values.catProp['p-scent'], { value: 1, text: '森林' }, 'what is already filled stays')
   malformed = true
   assert.equal((await fields()).values.catProp['p-scent'], undefined, 'an unusable answer fills nothing'); malformed = false
+
+  // The source already states the voltage: even an empty model answer cannot lose it.
+  const sourceFacts = attributeFacts({ name: '手持吸尘器', specifications: {} }, [], { attributes: { 额定电压: '11.1（V）', 颜色分类: '银紫色' } })
+  answers = []
+  const sourceFilled = await fillRequiredAttributes(schema() as any, { catProp: {} }, sourceFacts, [])
+  assert.equal(sourceFilled.values.catProp['p-volt'], '11.1')
+  assert.equal(sourceFilled.values.catProp['p-keep'], '银紫色', 'optional source attributes are copied too')
+  assert.equal(sourceFilled.refused.some(r => r.name === 'p-volt'), false)
+  assert.ok(sourceFilled.filled.some(f => f.name === 'p-volt' && f.evidence === 'attributes'))
+  const beforeRetry = fillerFields.length
+  fillerAnswerQueue = [[], good]
+  const retried = await fields()
+  assert.equal(retried.values.catProp['p-volt'], '12')
+  assert.equal(retried.refused.length, 0, 'retry clears earlier missing reasons')
+  assert.equal(fillerFields.length - beforeRetry, 2, 'only one missing-field retry')
+  answers = good
+
+  // Estimation is a separate bounded fallback: it accepts ungrounded measurements,
+  // keeps existing values, and never sends credentials or optional attributes to the model.
+  const estimateSchema = schema([{ name: 'p-cert', label: '生产许可证编号', required: true, uiType: 'input' }])
+  const kept = { ...first.values.catProp, 'p-volt': undefined }
+  answers = [{ ...good[3], values: ['24V'], confidence: 0.2, evidence: 'attributes', reason: '同类产品常见电压' }]
+  const estimated = await estimateMissingRequiredAttributes(estimateSchema, { catProp: kept }, facts, [])
+  assert.equal(estimated.values.catProp['p-volt'], '24')
+  assert.equal(estimated.filled[0].evidence, 'estimated', 'fallback never represents guesses as collected facts')
+  assert.match(estimated.filled[0].reason, /待人工审核/)
+  assert.equal(estimated.values.catProp['p-cert'], undefined)
+  assert.deepEqual(fillerFields.at(-1), ['额定电压'])
+  answers = [{ ...good[3], values: ['未知'] }]
+  const estimateCalls = fillerFields.length
+  const failedEstimate = await estimateMissingRequiredAttributes(schema(), { catProp: kept }, facts, [])
+  assert.equal(failedEstimate.values.catProp['p-volt'], undefined)
+  assert.equal(fillerFields.length - estimateCalls, 2, 'estimation cannot loop forever')
+  answers = [{ ...good[0], values: ['非法选项'], confidence: 0.1 }]
+  const badOption = await estimateMissingRequiredAttributes(schema(), { catProp: { ...first.values.catProp, 'p-scent': undefined } }, facts, [])
+  assert.equal(badOption.values.catProp['p-scent'], undefined, 'estimation still respects closed platform options')
+  answers = good
 
   assert.equal(isAttributeRejection(new IntegrationError('CHK_ATTR', 'x', 400)), true)
   assert.equal(isAttributeRejection(new IntegrationError('CHK_LOGISTICS_ITEM_NUM_ERROR', 'x', 400)), false)
@@ -123,6 +161,42 @@ try {
   assert.deepEqual(published.formValues.catProp['p-func'], [{ value: 21, text: '芳香' }, { value: 22, text: '除异味' }])
   assert.equal((await db.query('SELECT data_body FROM integration_1688_publish_drafts WHERE status=$1 ORDER BY updated_at DESC LIMIT 1', ['published'])).rows[0].data_body.formValues.skuTable[0].sku_price, 15, 'prices are not the AI’s to touch')
   assert.equal(published.formValues.skuTable[0].sku_price, 15)
+
+  // End to end: a collected product from a different category supplies voltage,
+  // even though the model does not answer that field at all.
+  const voltageDraft = await draft()
+  await db.query("INSERT INTO collected_products(tenant_id,source,source_product_id,source_url,title,currency,attributes,source_category_id,product_id,collected_by)VALUES($1,'1688',$2,$3,'手持吸尘器','CNY',$4,'different-category',$5,$6)", [tenant, randomUUID(), 'https://detail.1688.com/offer/fixture.html', JSON.stringify({额定电压:'11.1（V）'}), voltageDraft.product_id, actor])
+  answers = good.filter(a => a.name !== 'p-volt')
+  const voltagePublished = await run(voltageDraft)
+  assert.equal(voltagePublished.status, 'published', voltagePublished.message)
+  assert.equal(published.formValues.catProp['p-volt'], '11.1')
+  assert.ok(!fillerFields.at(-1)!.includes('额定电压'), 'known voltage never depends on the model')
+  answers = good
+
+  // Local missing-field failure is repaired before publishing with an explicit review warning.
+  publishCalls = 0
+  const guessedDraft = await draft()
+  await db.query("UPDATE products SET name='手持吸尘器',description='无线款' WHERE id=$1", [guessedDraft.product_id])
+  fillerAnswerQueue = [good.filter(a => a.name !== 'p-volt'), [], [{ ...good[3], values: ['11.1V'], evidence: 'inferred', confidence: 0.3, reason: '同类无线吸尘器常见电压' }]]
+  const guessedPublished = await run(guessedDraft)
+  assert.equal(guessedPublished.status, 'published', guessedPublished.message)
+  assert.equal(publishCalls, 1, 'no need to send an incomplete listing first')
+  assert.equal(published.formValues.catProp['p-volt'], '11.1')
+  assert.equal(guessedPublished.report.ai.filled.find((f: any) => f.name === 'p-volt').evidence, 'estimated')
+  assert.equal(guessedPublished.report.ai.refused.some((f: any) => f.name === 'p-volt'), false)
+  assert.match(guessedPublished.message, /1 项为 AI 推测.*人工审核/)
+
+  // The platform may require a field the schema marks optional: infer it after a definite rejection and resend.
+  currentSchema = schema([{ name: 'p-current', label: '额定电流', required: false, uiType: 'input', unit: 'A' }])
+  publishCalls = 0; rejections = [{ code: 'CHK_ATTR_REQUIRED', message: '属性额定电流不能为空' }]
+  repairAnswers = [{ name: 'p-current', values: ['2A'], evidence: 'inferred', confidence: 0.2, reason: '按同类产品推测' }]
+  const platformMissing = await run(await draft())
+  assert.equal(platformMissing.status, 'published', platformMissing.message)
+  assert.equal(publishCalls, 2)
+  assert.equal(published.formValues.catProp['p-current'], '2')
+  assert.equal(platformMissing.report.ai.filled.find((f: any) => f.name === 'p-current').evidence, 'estimated')
+  assert.ok(repairInputs.at(-1).estimateFields.includes('p-current'))
+  currentSchema = schema(); repairAnswers = []
 
   // Rejected for a named attribute: corrected, sent again, published.
   publishCalls = 0; rejections = [{ code: 'CHK_ATTR_VALUE', message: '属性香型取值错误' }]
@@ -199,7 +273,7 @@ try {
 
   const unknownJob = await queued(uncertainDraft.id, uncertainDraft.product_id)
   assert.equal((await request('POST', `/agent/queue-jobs/${unknownJob}/retry`, {})).statusCode, 409, 'a draft that may have reached the shop cannot be retried')
-  console.log(JSON.stringify({ groundingRules: 'ok', brandAndDeclarationsByRule: 'ok', multiSelect: 'ok', measuredValues: 'ok', fillAndPublish: 'ok', repairFromPlatformReason: 'ok', titleOnlyShorter: 'ok', repairBounded: 'ok', nonContentNoResend: 'ok', unknownNoResend: 'ok', licenceBlocked: 'ok', resumeFromDraft: 'ok', livePlatformWrites: 0 }))
+  console.log(JSON.stringify({ groundingRules: 'ok', brandAndDeclarationsByRule: 'ok', multiSelect: 'ok', measuredValues: 'ok', estimatedMissingBeforePublish: 'ok', estimatedPlatformMissing: 'ok', estimatesMarkedForReview: 'ok', estimationBounded: 'ok', fillAndPublish: 'ok', repairFromPlatformReason: 'ok', titleOnlyShorter: 'ok', repairBounded: 'ok', nonContentNoResend: 'ok', unknownNoResend: 'ok', licenceBlocked: 'ok', resumeFromDraft: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   for (const id of tenants) { await db.query('DELETE FROM audit_logs WHERE tenant_id=$1', [id]); await db.query('DELETE FROM tenants WHERE id=$1', [id]) }

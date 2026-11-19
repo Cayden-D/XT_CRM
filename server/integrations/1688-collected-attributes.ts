@@ -38,8 +38,10 @@ function sourceFor(field:Json,rows:Json[],attributes:Json){
 
 export function collectedCategoryDefaults(schema:Json,source:Json|null){
   const result:Json={}
-  if(!source||source.source!=='1688'||String(source.source_category_id||'')!==String(schema.global?.systemParam?.catId||''))return result
-  const rows=Array.isArray(source.source_category_attributes)?source.source_category_attributes:[]
+  if(!source)return result
+  const sameCategory=source.source==='1688'&&String(source.source_category_id||'')===String(schema.global?.systemParam?.catId||'')
+  // Platform IDs are category-specific; across categories retain names and text only.
+  const rows=Array.isArray(source.source_category_attributes)?source.source_category_attributes.map((row:Json)=>sameCategory?row:{attrName:row?.attrName,attrValue:row?.attrValue}):[]
   const attributes=source.attributes&&typeof source.attributes==='object'?source.attributes:{}
   return categoryValues(schema,rows,attributes)
 }
@@ -52,18 +54,27 @@ function categoryValues(schema:Json,rows:Json[],attributes:Json){
   for(const field of schema.data?.catProp?.fields?.dataSource||[]){
     if(!field?.name||!field.label||field.readonly||field.visible===false)continue
     const found=sourceFor(field,rows,attributes)
-    const sourceValue=found?.value??''
+    const sourceValue=normalizeAttributeUnit(found?.value??'',field.unit)
     if(!sourceValue||placeholder.test(sourceValue)||field.maxLength&&sourceValue.length>field.maxLength)continue
     if(!Array.isArray(field.dataSource)||!field.dataSource.length){
       if(['input','cbuinput'].includes(field.uiType))result[field.name]=sourceValue
       continue
     }
-    // Multi-select values cannot be represented by the single-choice editor yet; leave them for review.
-    if(field.uiType==='checkbox')continue
+    if(field.uiType==='checkbox'){
+      const parts=sourceValue.split(/[,，、;；]/).map(value=>value.trim()).filter(Boolean)
+      const picked=parts.map(text=>{
+        const matches=field.dataSource.filter((option:Json)=>normalized(option.text)===normalized(text))
+        if(matches.length===1)return {value:matches[0].value,text:matches[0].text}
+        return field.customizable===true&&matches.length===0?{value:-1,text,custom:true}:null
+      })
+      const limit=Number(field.maxItems)||5
+      if(picked.length&&picked.length<=limit&&picked.every(Boolean))result[field.name]=picked
+      continue
+    }
     const sourceIds=(found?.ids??[]).filter(id=>id&&id!=='0')
     const fits=(option:Json)=>sourceIds.length===0||sourceIds.includes(String(option.value))
-    let matches=field.dataSource.filter((option:Json)=>String(option.text||'').trim()===sourceValue&&fits(option))
-    if(!matches.length)matches=field.dataSource.filter((option:Json)=>normalized(option.text)===normalized(sourceValue)&&fits(option))
+    let matches=field.dataSource.filter((option:Json)=>normalizeAttributeUnit(String(option.text||'').trim(),field.unit)===sourceValue&&fits(option))
+    if(!matches.length)matches=field.dataSource.filter((option:Json)=>normalized(normalizeAttributeUnit(String(option.text||''),field.unit))===normalized(sourceValue)&&fits(option))
     if(matches.length===1)result[field.name]={value:matches[0].value,text:matches[0].text}
     // Customizable fields only: on the same site and attribute, the source listing's value ID is a platform value even
     // when the publishing rules list only the common options; without an ID the seller's own text is used.
@@ -71,4 +82,12 @@ function categoryValues(schema:Json,rows:Json[],attributes:Json){
     else if(!matches.length&&field.customizable===true&&!sourceIds.length)result[field.name]={value:-1,text:sourceValue,custom:true}
   }
   return result
+}
+
+/** Strip only the field's own explicit unit; do not turn mV into V or guess conversions. */
+export function normalizeAttributeUnit(value:string,unit:unknown):string{
+  if(typeof unit!=='string'||!unit.trim())return value
+  const escaped=unit.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')
+  const match=value.match(new RegExp(`^([+-]?\\d+(?:\\.\\d+)?)\\s*(?:[（(]\\s*${escaped}\\s*[）)]|${escaped})$`,'i'))
+  return match?match[1]:value
 }
