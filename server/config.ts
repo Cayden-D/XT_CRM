@@ -22,6 +22,12 @@ const schema = z.object({
   ALI1688_PERFORMANCE_APP_SECRET: z.string().min(1).optional(),
   ALI1688_PERFORMANCE_REDIRECT_URI: z.string().url().optional(),
   ALI1688_TOKEN_ENCRYPTION_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+  MARKETPLACE_SUPPORT_PHONE: z.string().regex(/^\+?[\d -]{5,30}$/).default('18879905890'),
+  MARKETPLACE_SUPPORT_WANGWANG: z.string().min(1).max(100).default('t_1516142198847_0435'),
+  MARKETPLACE_PRODUCT_URL: z.string().url().refine(v => { const u = new URL(v); return u.protocol === 'https:' && (u.hostname === '1688.com' || u.hostname.endsWith('.1688.com')) && !u.username && !u.password }).default('https://app.1688.com/'),
+  MARKETPLACE_PERFORMANCE_URL: z.string().url().refine(v => { const u = new URL(v); return u.protocol === 'https:' && (u.hostname === '1688.com' || u.hostname.endsWith('.1688.com')) && !u.username && !u.password }).default('https://app.1688.com/'),
+  // First possible marketplace order date, independent of when a shop authorized this CRM.
+  ALI1688_MARKETPLACE_HISTORY_START: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/).refine(v => Number.isFinite(Date.parse(v))).default('2020-07-01'),
   DASHSCOPE_API_KEY: z.string().min(1).optional(),
   DASHSCOPE_BASE_URL: z.string().url().default('https://dashscope.aliyuncs.com/compatible-mode/v1'),
   QWEN_DEFAULT_MODEL: z.enum(['qwen3.8-flash','qwen3.7-flash','qwen3.7-plus','qwen3.6-plus']).default('qwen3.8-flash'),

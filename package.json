@@ -29,6 +29,7 @@
     "test:inquiry-review": "tsx scripts/test-inquiry-review.ts",
     "test:product-collection": "tsx scripts/test-product-collection.ts",
     "test:1688": "tsx scripts/test-1688.ts",
+    "test:1688-marketplace": "tsx scripts/test-1688-marketplace.ts",
     "test:1688-skus": "tsx scripts/test-1688-skus.ts",
     "test:1688-performance": "tsx scripts/test-1688-performance.ts",
     "test:1688-performance-sync": "PERF_SYNC_MAX_QPS=100 tsx scripts/test-1688-performance-sync.ts",

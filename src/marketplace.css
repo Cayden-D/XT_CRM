@@ -1,0 +1,30 @@
+.marketplace-header { display:flex; flex-wrap:wrap; align-items:center; gap:12px 20px; padding:12px 32px; background:#fff; border-bottom:1px solid var(--line); font-size:12px; min-width:0; }
+.marketplace-header a { color:var(--ink); text-decoration:none; }
+.marketplace-header a:hover,.help-page a:hover { text-decoration:underline; }
+.marketplace-brand { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.marketplace-brand strong { color:#bd4700; font-size:24px; line-height:1; letter-spacing:-1px; }
+.marketplace-brand span { color:var(--ink); }
+.marketplace-service { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; flex:1; }
+.marketplace-service select { max-width:240px; min-height:32px; border:1px solid var(--line); border-radius:4px; color:var(--ink); background:#fff; font-size:12px; padding:4px; }
+.marketplace-service > span { color:#526174; }
+.marketplace-service button { border:0; background:transparent; color:var(--brand); cursor:pointer; padding:4px; }
+.marketplace-service .marketplace-renew { color:#a33e00; border:1px solid #ecc8aa; border-radius:4px; padding:6px 8px; background:#fff6ed; }
+.marketplace-header nav { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin-left:auto; }
+.marketplace-header nav a { display:inline-flex; gap:4px; align-items:center; padding:4px 0; }
+.marketplace-renew-urgent { font-weight:700; animation:marketplace-renew-pulse 2s ease-in-out infinite; }
+@keyframes marketplace-renew-pulse { 50% { box-shadow:0 0 0 3px #ecc8aa; } }
+.marketplace-header :is(a,button,select):focus-visible,.help-page a:focus-visible { outline:3px solid var(--brand); outline-offset:3px; }
+.help-page { max-width:960px; font-size:14px; line-height:1.8; }
+.help-intro { margin:0 0 20px; color:#526174; }
+.help-section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:24px; margin-bottom:16px; overflow-wrap:anywhere; }
+.help-section h2 { margin:0 0 12px; font-size:18px; }
+.help-section ol { padding-left:24px; margin:0 0 12px; }
+.help-section li + li { margin-top:8px; }
+.help-section p { margin:8px 0; }
+.help-section a { color:#2363bd; }
+.help-contacts { display:flex; flex-wrap:wrap; gap:12px 24px; padding:8px 0; }
+@media (max-width:820px) { .marketplace-header { padding:12px 16px; gap:12px; } .marketplace-service { flex-basis:100%; order:2; } .marketplace-service select { max-width:100%; } .marketplace-header nav { gap:12px; } .help-section { padding:16px; } }
+@media (max-width:420px) { .marketplace-header nav { width:100%; margin:0; justify-content:space-between; gap:8px; } }
+@media (prefers-reduced-motion:reduce) { .marketplace-renew-urgent { animation:none; } }
+.app-toolbar { position:sticky; top:0; z-index:10; }
+.app-toolbar > .topbar { position:relative; z-index:auto; }

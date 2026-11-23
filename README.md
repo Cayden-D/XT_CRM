@@ -360,6 +360,20 @@ npm run test:order-list
 
 采集器 2.1.2 优先读取 `window.context.result.data.Root.fields.dataJson.tempModel.postCategoryId`，并与 `offerBaseInfo.catId` 核对后作为来源商品的发布子类目 ID；`topCategoryId` 只是顶级类目，不用于自动上品。明确 ID 缺失或冲突时仍会拦截自动发布；其它类目字段和面包屑链接仅作兜底。请在 Tampermonkey 更新本项目的 `scripts/1688-product-collector.user.js` 后重新采集缺类目的商品。若旧任务因类目缺失而被拦截，重新采集补齐 ID 后会自动重新入队（已生成正式产品或发布结果未知的任务不会自动重试）。本地提取回归：`npm run test:1688-collector-category`。
 
+## 1688 应用市场审核入口
+
+登录后的各业务页面顶部固定显示服务市场栏，提供使用指南、联系客服、返回 PC 应用市场及订购/续费入口。「帮助与客服」对所有已登录账号开放，包含授权、采集上架、图片、订单客户聊天、绩效工资和续费说明，并提供公告中的千牛 PC / 手机市场入口。默认客服电话为 `18879905890`，旺旺为 `t_1516142198847_0435`，可通过 `.env.local` 的 `MARKETPLACE_SUPPORT_PHONE`、`MARKETPLACE_SUPPORT_WANGWANG` 调整。
+
+部署时执行新迁移 `071_1688_marketplace_subscription.sql` 并重启 API。商品和绩效应用须分别获准调用 `cn.alibaba.open:app.order.get-1`；查询使用各自的 AppKey、签名、令牌及当前租户店铺的订购会员身份，不向浏览器返回原始订单、款项或令牌。订购服务到期与 OAuth 授权过期分别计算。剩余 14 天以内显示续费文字，7 天以内显示动态入口；对减少动画的系统设置停止动画。未知、未付款或查询失败的记录不会被当作已订购或已到期。
+
+首次打开某店铺时，按 29 天步长重叠查询历史订单，每次请求最多一页 50 条，分页与日期进度保存至数据库，关闭页面后下次继续。最早下单日由 `ALI1688_MARKETPLACE_HISTORY_START` 设置，默认 `2020-07-01`，应不晚于该应用最早可能的订购日期，不能用店铺授权日替代。回查完成后每天自动核对近期和已知服务中/服务前/挂起订单的下单窗口；手动刷新和错误重试至少间隔 15 分钟。没有打开页面时不主动调用平台。连续服务的续费订单延长当前服务期，有间断的未来订单不计入当前剩余天数。
+
+`MARKETPLACE_PRODUCT_URL`、`MARKETPLACE_PERFORMANCE_URL` 默认进入 `https://app.1688.com/`。取得应用订购详情页后可分别配置为对应的 HTTPS 1688 官方链接，不能把 AppKey 当作产品/offer ID 拼接续费地址。
+
+当前顶部栏按用户提供的公告和截图在本项目中实现。公告未提供官方套头组件的接入代码；是否必须使用平台指定组件、真实 `app.order.get` 的权限/分页/日期语义、实际订购详情页及旺旺会话，仍需在审核环境联调并由审核员确认，不代表已经通过平台审核。
+
+验证：`npm run test:1688-marketplace`（需已执行迁移的测试数据库，全部平台请求为模拟）；界面检查：`PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CRM_UI_URL=http://127.0.0.1:5173 node scripts/verify-1688-marketplace-ui.mjs`。
+
 ## 使用教程（动画）
 
 `docs/tutorial/index.html` 是约 4 分 21 秒的动画教程（经营看板、商品采集、图片工坊、上架队列、产品目录、订单、客户经营、聊天与询盘、客服绩效、回复质量、关键词库、数据同步、账户管理、AI 助手），浏览器直接打开即可播放、拖动进度、按章节跳转（空格暂停，←/→ 快退快进）；示意界面中的店铺、客户与金额均为虚构数据。`docs/tutorial/销途CRM使用教程.mp4` 为渲染好的 1920×1080、30fps 视频（画面无字幕）；`销途CRM使用教程.srt` 是与画面同步的 78 条中文讲解字幕；`销途CRM使用教程-软字幕.mp4` 内嵌可开关的字幕轨（QuickTime/VLC/PotPlayer 等可显示）；`销途CRM使用教程-字幕版.mp4` 字幕直接烧录在画面上，适合上传到不读取外挂字幕的平台。讲解文案在 `index.html` 的 `NARRATION`（按场景的相对秒数），网页播放器同样显示字幕，可用“字幕”按钮开关。修改教程后重新渲染（需要本机 Chrome、`playwright-core` 和带 libx264 的 ffmpeg，例如 `npm i playwright-core ffmpeg-static` 装在任意目录）：

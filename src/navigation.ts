@@ -1,4 +1,4 @@
-import { Headset, Images, LayoutDashboard, MessagesSquare, Package, PackageCheck, ReceiptText, Settings, Users, type LucideIcon } from 'lucide-react'
+import { CircleHelp, Headset, Images, LayoutDashboard, MessagesSquare, Package, PackageCheck, ReceiptText, Settings, Users, type LucideIcon } from 'lucide-react'
 import type { SessionUser } from './api'
 
 export const has = (user: SessionUser, ...names: string[]) => (user.permissions || []).some(p => p === '*' || names.some(name => p === name || p === `${name.split(':')[0]}:*`))
@@ -46,6 +46,7 @@ export const sections: Section[] = [
     { id: 'orders', label: '订单归属', more: true, can: perf },
     { id: 'favorites', label: '我关注的', more: true, can: perf },
   ] },
+  { id: 'help', label: '帮助与客服', icon: CircleHelp, bottom: true, tabs: [{ id: 'guide', label: '使用指南' }, { id: 'support', label: '联系客服' }] },
   { id: 'settings', label: '设置', icon: Settings, bottom: true, tabs: [
     { id: 'shops', label: '店铺授权', can: u => has(u, 'integration:read') || perf(u) },
     { id: 'agents', label: '客服账号', can: perf },

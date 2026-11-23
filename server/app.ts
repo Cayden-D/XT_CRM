@@ -25,6 +25,7 @@ import { imageWorkshopRoutes } from './routes/image-workshop.js'
 import { chatInquiryRoutes } from './routes/1688-chat-inquiry.js'
 import { inquiryReviewRoutes } from './routes/inquiry-review.js'
 import { orderListRoutes } from './routes/1688-order-list.js'
+import { marketplaceRoutes } from './routes/1688-marketplace.js'
 
 export async function buildApp() {
   const app = Fastify({
@@ -85,6 +86,7 @@ export async function buildApp() {
   await app.register(productCollectionRoutes, { prefix: '/api/product-collections' })
   await app.register(aiRoutes, { prefix: '/api/ai' })
   await app.register(integration1688Routes, { prefix: '/api/integrations/1688' })
+  await app.register(marketplaceRoutes, { prefix: '/api/integrations/1688/marketplace' })
   await app.register(performanceRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performanceAnalysisRoutes, { prefix: '/api/integrations/1688/performance' })
   await app.register(performanceKeywordRoutes, { prefix: '/api/integrations/1688/performance' })

@@ -2,7 +2,7 @@
 
 :root { font-family: 'Noto Sans SC', sans-serif; color: #1d2f44; background: #eef1f5; font-synthesis: none; --navy:#162940; --ink:#1d2f44; --muted:#748191; --line:#dde3ea; --brand:#3a7add; --brand-pale:#e9f3ff; --gold:#d79628; }
 * { box-sizing: border-box; }
-html, body { overflow-x:hidden; }
+html, body { overflow-x:clip; }
 body { margin:0; min-width:320px; min-height:100vh; }
 button, textarea, input, select { font:inherit; }
 button { color:inherit; }

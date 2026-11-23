@@ -37,15 +37,18 @@ export function NeedShop({ text }: { text: string }) {
 /** A small popup menu for tabs that are used less often. */
 export function MoreMenu({ label, active, children }: { label: string; active: boolean; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false), ref = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState({ top: 0, left: 0 })
   useEffect(() => {
     if (!open) return
     const outside = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false) }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    const moved = () => setOpen(false)
     document.addEventListener('mousedown', outside); document.addEventListener('keydown', escape)
-    return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape) }
+    window.addEventListener('resize', moved); window.addEventListener('scroll', moved)
+    return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape); window.removeEventListener('resize', moved); window.removeEventListener('scroll', moved) }
   }, [open])
   return <div className="tab-more" ref={ref}>
-    <button className={active ? 'active' : ''} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(v => !v)}>{label}<i aria-hidden="true" /></button>
-    {open && <div className="tab-more-menu" role="menu">{children(() => setOpen(false))}</div>}
+    <button className={active ? 'active' : ''} aria-expanded={open} aria-haspopup="menu" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setPosition({ top: rect.bottom, left: Math.max(8, Math.min(rect.left, window.innerWidth - 160)) }); setOpen(v => !v) }}>{label}<i aria-hidden="true" /></button>
+    {open && <div className="tab-more-menu" role="menu" style={{ ...position, right: 'auto' }}>{children(() => setOpen(false))}</div>}
   </div>
 }

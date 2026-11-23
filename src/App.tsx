@@ -25,6 +25,8 @@ import { OPEN_AI, resetAiFocus } from './aiFocus'
 import { clearToken,getCurrentUser,getToken,type SessionUser } from './api'
 import { aiPage, has, navigate, parseRoute, tabsFor, visibleSections, type Route } from './navigation'
 import { MoreMenu } from './ui'
+import MarketplaceHeader from './MarketplaceHeader'
+import HelpPage from './HelpPage'
 
 function Sidebar({ route, open, close, user, onLogout }: { route: Route; open: boolean; close: () => void; user: SessionUser; onLogout: () => void }) {
   const go = (id: string) => { navigate(id); close() }
@@ -62,6 +64,7 @@ function Topbar({ route, user, openMenu, openAI }: { route: Route; user: Session
 function Page({ route: { section, tab }, user, intent, toolKey }: { route: Route; user: SessionUser; intent?: ImageIntent; toolKey: number }) {
   const id = `${section.id}/${tab.id}`
   switch (section.id) {
+    case 'help': return <HelpPage support={tab.id === 'support'} user={user} />
     case 'home': return <DashboardPage user={user} />
     case 'customers': return tab.id === 'offline' ? <CustomersPage /> : <CustomerOpsPage user={user} view={tab.id === 'segments' ? 'settings' : tab.id as 'list' | 'pool' | 'due'} />
     case 'chats': return <ChatInquiryPage user={user} tab={tab.id === 'inquiry' || tab.id === 'review' ? tab.id : 'chats'} />
@@ -141,7 +144,10 @@ function Workspace() {
   return <div className="app-shell">
     <Sidebar route={route} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
-      <Topbar route={route} user={session} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
+      <div className="app-toolbar">
+        <MarketplaceHeader section={route.section.id} />
+        <Topbar route={route} user={session} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
+      </div>
       <div className="page-content"><Page route={route} user={session} intent={imageIntent} toolKey={toolKey} /></div>
     </main>
     <AiAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={aiPage(route)} pageTitle={title} />
