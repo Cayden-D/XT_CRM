@@ -11,6 +11,10 @@ const purposesFor = (permissions: string[]): AppPurpose[] => [
 ]
 
 export async function marketplaceRoutes(app: FastifyInstance) {
+  // Contact details remain available without subscription tables or platform API permissions.
+  app.get('/support', { preHandler: requireAuth }, async () => ({
+    support: { phone: config.MARKETPLACE_SUPPORT_PHONE, wangwang: config.MARKETPLACE_SUPPORT_WANGWANG },
+  }))
   app.get('/', { preHandler: requireAuth }, async request => ({
     support: { phone: config.MARKETPLACE_SUPPORT_PHONE, wangwang: config.MARKETPLACE_SUPPORT_WANGWANG },
     connections: await marketplaceConnections(request.authUser.tenantId, purposesFor(request.authUser.permissions)),

@@ -362,17 +362,15 @@ npm run test:order-list
 
 ## 1688 应用市场审核入口
 
-登录后的各业务页面顶部固定显示服务市场栏，提供使用指南、联系客服、返回 PC 应用市场及订购/续费入口。「帮助与客服」对所有已登录账号开放，包含授权、采集上架、图片、订单客户聊天、绩效工资和续费说明，并提供公告中的千牛 PC / 手机市场入口。默认客服电话为 `18879905890`，旺旺为 `t_1516142198847_0435`，可通过 `.env.local` 的 `MARKETPLACE_SUPPORT_PHONE`、`MARKETPLACE_SUPPORT_WANGWANG` 调整。
+1688 服务市场已自动提供官方套头、服务期及续费提醒，本系统不再叠加自制套头。电脑端在现有导航栏右侧提供「使用指南」「联系客服」「应用市场」，手机端使用固定底部入口，正文留出空间避免遮挡。客服按钮及旺旺聊天入口使用提供的 `src/assets/customer-service.svg` 图标。
 
-部署时执行新迁移 `071_1688_marketplace_subscription.sql` 并重启 API。商品和绩效应用须分别获准调用 `cn.alibaba.open:app.order.get-1`；查询使用各自的 AppKey、签名、令牌及当前租户店铺的订购会员身份，不向浏览器返回原始订单、款项或令牌。订购服务到期与 OAuth 授权过期分别计算。剩余 14 天以内显示续费文字，7 天以内显示动态入口；对减少动画的系统设置停止动画。未知、未付款或查询失败的记录不会被当作已订购或已到期。
+「帮助与客服」对所有已登录账号开放，包含授权、采集上架、图片、订单客户聊天、绩效工资和订购说明。默认客服电话为 `18879905890`，旺旺会员名为 `t_1516142198847_0435`，可通过 `.env.local` 的 `MARKETPLACE_SUPPORT_PHONE`、`MARKETPLACE_SUPPORT_WANGWANG` 调整。点击客服入口可查看电话与旺旺，电话使用 `tel:` 链接，旺旺图标可直接打开官方网页聊天。客服信息通过已登录接口 `/api/integrations/1688/marketplace/support` 读取，只读客服配置，不查询订购表或调用订购接口，不依赖迁移 071。
 
-首次打开某店铺时，按 29 天步长重叠查询历史订单，每次请求最多一页 50 条，分页与日期进度保存至数据库，关闭页面后下次继续。最早下单日由 `ALI1688_MARKETPLACE_HISTORY_START` 设置，默认 `2020-07-01`，应不晚于该应用最早可能的订购日期，不能用店铺授权日替代。回查完成后每天自动核对近期和已知服务中/服务前/挂起订单的下单窗口；手动刷新和错误重试至少间隔 15 分钟。没有打开页面时不主动调用平台。连续服务的续费订单延长当前服务期，有间断的未来订单不计入当前剩余天数。
+电脑端「应用市场」链接为 `https://app.1688.com/`，手机端为 `https://m-fuwu.1688.com/page/pluginlist.htm`。帮助页面同时提供千牛 PC 服务市场 `https://fuwu.1688.com/qn/index.html` 和手机市场的独立入口。
 
-`MARKETPLACE_PRODUCT_URL`、`MARKETPLACE_PERFORMANCE_URL` 默认进入 `https://app.1688.com/`。取得应用订购详情页后可分别配置为对应的 HTTPS 1688 官方链接，不能把 AppKey 当作产品/offer ID 拼接续费地址。
+原有 `app.order.get` 后端能力及迁移 071 保留，当前页面不再自动回查订购订单，也不显示自制的服务期、刷新或续费入口；官方套头的展示及提醒由 1688 平台负责。此次调整无需新增数据库迁移。上线后仍需在真实服务市场中检查入口布局、电话和旺旺跳转。
 
-当前顶部栏按用户提供的公告和截图在本项目中实现。公告未提供官方套头组件的接入代码；是否必须使用平台指定组件、真实 `app.order.get` 的权限/分页/日期语义、实际订购详情页及旺旺会话，仍需在审核环境联调并由审核员确认，不代表已经通过平台审核。
-
-验证：`npm run test:1688-marketplace`（需已执行迁移的测试数据库，全部平台请求为模拟）；界面检查：`PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CRM_UI_URL=http://127.0.0.1:5173 node scripts/verify-1688-marketplace-ui.mjs`。
+界面检查：`PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CRM_UI_URL=http://127.0.0.1:5173 node scripts/verify-1688-marketplace-ui.mjs`。保留的订购后端回归为 `npm run test:1688-marketplace`，需已执行迁移的测试数据库，平台请求均为模拟。
 
 ## 使用教程（动画）
 

@@ -25,7 +25,7 @@ import { OPEN_AI, resetAiFocus } from './aiFocus'
 import { clearToken,getCurrentUser,getToken,type SessionUser } from './api'
 import { aiPage, has, navigate, parseRoute, tabsFor, visibleSections, type Route } from './navigation'
 import { MoreMenu } from './ui'
-import MarketplaceHeader from './MarketplaceHeader'
+import ServiceLinks from './ServiceLinks'
 import HelpPage from './HelpPage'
 
 function Sidebar({ route, open, close, user, onLogout }: { route: Route; open: boolean; close: () => void; user: SessionUser; onLogout: () => void }) {
@@ -57,7 +57,10 @@ function Topbar({ route, user, openMenu, openAI }: { route: Route; user: Session
       {front.map(t => <button key={t.id} className={route.tab.id === t.id ? 'active' : ''} aria-current={route.tab.id === t.id ? 'page' : undefined} onClick={() => go(t.id)}>{t.label}</button>)}
       {more.length > 0 && <MoreMenu label={current?.label ?? '更多'} active={Boolean(current)}>{close => more.map(t => <button key={t.id} role="menuitem" className={route.tab.id === t.id ? 'active' : ''} onClick={() => { go(t.id); close() }}>{t.label}</button>)}</MoreMenu>}
     </nav>}
-    <button className="ai-shortcut" onClick={openAI}><Sparkles size={16} /><span>问 AI</span></button>
+    <div className="topbar-actions">
+      <ServiceLinks />
+      <button className="ai-shortcut" onClick={openAI}><Sparkles size={16} /><span>问 AI</span></button>
+    </div>
   </header>
 }
 
@@ -144,10 +147,7 @@ function Workspace() {
   return <div className="app-shell">
     <Sidebar route={route} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
-      <div className="app-toolbar">
-        <MarketplaceHeader section={route.section.id} />
-        <Topbar route={route} user={session} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
-      </div>
+      <Topbar route={route} user={session} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
       <div className="page-content"><Page route={route} user={session} intent={imageIntent} toolKey={toolKey} /></div>
     </main>
     <AiAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={aiPage(route)} pageTitle={title} />

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { getMarketplace, MARKETPLACE_URL, supportWangwangUrl } from './MarketplaceHeader'
-import type { MarketplaceData } from '../shared/1688-marketplace'
+import { getSupportContact, MARKETPLACE_URL, supportWangwangUrl, type SupportContact } from './marketplaceApi'
+import supportLogo from './assets/customer-service.svg'
 import type { SessionUser } from './api'
 import { has } from './navigation'
 
@@ -13,9 +13,10 @@ const guides = [
 ]
 
 export default function HelpPage({ support, user }: { support: boolean; user: SessionUser }) {
-  const [data, setData] = useState<MarketplaceData | null>(null)
+  const [data, setData] = useState<SupportContact | null>(null)
   const [error, setError] = useState(false)
-  useEffect(() => { let active = true; getMarketplace().then(value => { if (active) setData(value) }).catch(() => { if (active) setError(true) }); return () => { active = false } }, [])
+  const [retry, setRetry] = useState(0)
+  useEffect(() => { let active = true; setError(false); getSupportContact().then(value => { if (active) setData(value) }).catch(() => { if (active) setError(true) }); return () => { active = false } }, [retry])
   return <div className="help-page">
     {!support && <>
       <p className="help-intro">从店铺授权开始，按下面的步骤完成日常操作。页面入口会根据当前账号权限显示。</p>
@@ -23,11 +24,11 @@ export default function HelpPage({ support, user }: { support: boolean; user: Se
         <h2>{guide.title}</h2><ol>{guide.steps.map(step => <li key={step}>{step}</li>)}</ol>
         {(!guide.permission.length || has(user, ...guide.permission)) && <a href={`#/${guide.path}`}>前往操作 →</a>}
       </section>)}
-      <section className="help-section"><h2>服务期与续费</h2><p>顶部常驻服务市场栏可切换应用和店铺，查看订购服务期。剩余 14 天内显示续费提醒，7 天内加强提醒。点击「订购 / 续费」进入 1688 应用市场，登录订购账号，找到对应应用完成续费。</p><p>首次查询会分段核对历史订单，可能需要几分钟；服务期查询失败时请联系客服核实。店铺授权到期与应用服务到期是两回事，重新授权不会延长订购服务期。</p></section>
+      <section className="help-section"><h2>服务期与续费</h2><p>从 1688 服务市场进入应用时，平台自带的顶部套头提供服务期和续费提示，可通过「我的服务」查看订购。也可点击「应用市场」，登录订购账号后找到对应应用管理订购。</p><p>店铺授权到期与应用服务到期分别计算，重新授权不会延长订购服务期。有疑问时请联系客服核实。</p></section>
     </>}
     <section className="help-section" id="support">
       <h2>联系客服</h2><p>授权、采集、发布、服务期或使用问题，请联系销途客服。请提供店铺名称、所在页面、操作时间和错误提示，便于定位问题。</p>
-      {data ? <div className="help-contacts"><a href={`tel:${data.support.phone.replace(/[ -]/g, '')}`}>电话：{data.support.phone}</a><a href={supportWangwangUrl(data.support.wangwang)} target="_blank" rel="noopener noreferrer">旺旺：{data.support.wangwang}</a></div> : <p role="status">{error ? '客服信息读取失败，请刷新页面重试。' : '正在读取客服联系方式…'}</p>}
+      {data ? <div className="help-contacts"><a href={`tel:${data.phone.replace(/[ -]/g, '')}`}>电话：{data.phone}</a><a href={supportWangwangUrl(data.wangwang)} target="_blank" rel="noopener noreferrer"><img src={supportLogo} alt="" width="24" height="24" />旺旺：{data.wangwang}</a></div> : <div role="status"><p>{error ? '客服信息读取失败，请重试。' : '正在读取客服联系方式…'}</p>{error && <button className="shop-button" onClick={() => setRetry(n => n + 1)}>重新加载客服信息</button>}</div>}
       <p>请勿向客服提供登录密码、验证码或授权令牌。</p>
     </section>
     <section className="help-section"><h2>返回市场</h2><p>通过 1688 官方市场查看应用和管理订购。</p><div className="help-contacts"><a href={MARKETPLACE_URL} target="_blank" rel="noopener noreferrer">PC 应用市场</a><a href="https://fuwu.1688.com/qn/index.html" target="_blank" rel="noopener noreferrer">千牛 PC 服务市场</a><a href="https://m-fuwu.1688.com/page/pluginlist.htm" target="_blank" rel="noopener noreferrer">千牛手机服务市场</a></div></section>
