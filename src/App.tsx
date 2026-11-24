@@ -26,6 +26,7 @@ import { clearToken,getCurrentUser,getToken,type SessionUser } from './api'
 import { aiPage, has, navigate, parseRoute, tabsFor, visibleSections, type Route } from './navigation'
 import { MoreMenu } from './ui'
 import ServiceLinks from './ServiceLinks'
+import { FloatingSupport, SupportProvider } from './SupportContact'
 import HelpPage from './HelpPage'
 
 function Sidebar({ route, open, close, user, onLogout }: { route: Route; open: boolean; close: () => void; user: SessionUser; onLogout: () => void }) {
@@ -144,12 +145,13 @@ function Workspace() {
   if (hash.startsWith('#/collector-connect')) return <CollectorConnect user={session} hash={hash} />
   const route = parseRoute(hash, session)
   const title = route.section.tabs.length > 1 ? `${route.section.label} · ${route.tab.label}` : route.section.label
-  return <div className="app-shell">
+  return <SupportProvider key={session.id ?? session.sub ?? session.email}><div className="app-shell">
     <Sidebar route={route} open={menuOpen} close={() => setMenuOpen(false)} user={session} onLogout={logout} />
     <main className={aiOpen ? 'main ai-visible' : 'main'}>
       <Topbar route={route} user={session} openMenu={() => setMenuOpen(true)} openAI={() => openAI()} />
       <div className="page-content"><Page route={route} user={session} intent={imageIntent} toolKey={toolKey} /></div>
     </main>
     <AiAssistant open={aiOpen} close={() => setAiOpen(false)} initialPrompt={prompt} userName={session.displayName} page={aiPage(route)} pageTitle={title} />
-  </div>
+    <FloatingSupport />
+  </div></SupportProvider>
 }

@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react'
-import { getSupportContact, MARKETPLACE_URL, supportWangwangUrl, type SupportContact } from './marketplaceApi'
-import supportLogo from './assets/customer-service.svg'
+import { MARKETPLACE_URL } from './marketplaceApi'
+import { ContactButtons } from './SupportContact'
 import type { SessionUser } from './api'
 import { has } from './navigation'
 
@@ -13,10 +12,6 @@ const guides = [
 ]
 
 export default function HelpPage({ support, user }: { support: boolean; user: SessionUser }) {
-  const [data, setData] = useState<SupportContact | null>(null)
-  const [error, setError] = useState(false)
-  const [retry, setRetry] = useState(0)
-  useEffect(() => { let active = true; setError(false); getSupportContact().then(value => { if (active) setData(value) }).catch(() => { if (active) setError(true) }); return () => { active = false } }, [retry])
   return <div className="help-page">
     {!support && <>
       <p className="help-intro">从店铺授权开始，按下面的步骤完成日常操作。页面入口会根据当前账号权限显示。</p>
@@ -28,7 +23,7 @@ export default function HelpPage({ support, user }: { support: boolean; user: Se
     </>}
     <section className="help-section" id="support">
       <h2>联系客服</h2><p>授权、采集、发布、服务期或使用问题，请联系销途客服。请提供店铺名称、所在页面、操作时间和错误提示，便于定位问题。</p>
-      {data ? <div className="help-contacts"><a href={`tel:${data.phone.replace(/[ -]/g, '')}`}>电话：{data.phone}</a><a href={supportWangwangUrl(data.wangwang)} target="_blank" rel="noopener noreferrer"><img src={supportLogo} alt="" width="24" height="24" />旺旺：{data.wangwang}</a></div> : <div role="status"><p>{error ? '客服信息读取失败，请重试。' : '正在读取客服联系方式…'}</p>{error && <button className="shop-button" onClick={() => setRetry(n => n + 1)}>重新加载客服信息</button>}</div>}
+      <ContactButtons />
       <p>请勿向客服提供登录密码、验证码或授权令牌。</p>
     </section>
     <section className="help-section"><h2>返回市场</h2><p>通过 1688 官方市场查看应用和管理订购。</p><div className="help-contacts"><a href={MARKETPLACE_URL} target="_blank" rel="noopener noreferrer">PC 应用市场</a><a href="https://fuwu.1688.com/qn/index.html" target="_blank" rel="noopener noreferrer">千牛 PC 服务市场</a><a href="https://m-fuwu.1688.com/page/pluginlist.htm" target="_blank" rel="noopener noreferrer">千牛手机服务市场</a></div></section>
