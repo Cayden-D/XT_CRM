@@ -34,7 +34,9 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
       SELECT 1 FROM auth_1688_identities i
       JOIN users u ON u.id=i.user_id JOIN tenants t ON t.id=u.tenant_id
       WHERE i.app_key=$1 AND i.ali_id=$2 AND u.id=$3 AND t.id=$4
-        AND t.ali1688_owner_id=i.ali_id AND t.status='active' AND u.status='active' AND u.deleted_at IS NULL`,
+        AND (t.ali1688_owner_id=i.ali_id OR EXISTS(
+          SELECT 1 FROM tenant_1688_shops s WHERE s.tenant_id=t.id AND s.ali_id=i.ali_id))
+        AND t.status='active' AND u.status='active' AND u.deleted_at IS NULL`,
     [oauth1688.appKey, oauth1688.aliId, sub, tenantId])).rowCount
     if (!authorized) return reply.code(401).send({ error: 'UNAUTHORIZED', message: '1688 账号和工作区的关联已变更，请重新授权登录。' })
   }

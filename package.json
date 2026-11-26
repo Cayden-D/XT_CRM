@@ -8,6 +8,7 @@
     "dev:api": "tsx watch server/index.ts",
     "start:api": "tsx server/index.ts",
     "build:api": "tsc -p tsconfig.server.json && node -e \"require('node:fs').cpSync('server/assets', 'dist-server/server/assets', { recursive: true })\"",
+    "1688:allow-shops": "tsx scripts/authorize-workspace-shops.ts",
     "1688:link-identity": "tsx scripts/link-1688-identity.ts",
     "test:1688-sign-in": "tsx scripts/test-1688-sign-in.ts",
     "test:api": "tsx scripts/test-api.ts",

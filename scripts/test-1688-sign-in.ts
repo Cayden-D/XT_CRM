@@ -5,6 +5,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { buildApp } from '../server/app.js'
 import { config } from '../server/config.js'
 import { db } from '../server/db.js'
+import { authorizeWorkspaceShops } from '../server/integrations/1688-workspace-shops.js'
 import { decryptGrant, saveConnection, stateHash } from '../server/integrations/1688.js'
 
 const key = `signin-${randomUUID()}`
@@ -23,7 +24,7 @@ const app = await buildApp()
 const originalFetch = globalThis.fetch
 const tenantIds = new Set<string>()
 const [shopA, shopB, legacyShop, mixedShop, otherMixedShop] = Array.from({ length: 5 }, () => randomUUID())
-const ids: Record<string, string> = { first: shopA, same: shopA, second: shopB, legacy: legacyShop, mixed: mixedShop }
+const ids: Record<string, string> = { first: shopA, same: shopA, second: shopB, legacy: legacyShop, mixed: mixedShop, mixedOther: otherMixedShop }
 let exchanges = 0
 globalThis.fetch = async (url, init) => {
   assert.equal(String(url), `https://gw.open.1688.com/openapi/http/1/system.oauth2/getToken/${key}`)
@@ -197,6 +198,40 @@ try {
   const collectorSession = await app.inject({ method: 'GET', url: '/api/product-collections/session', headers: { 'x-collector-key': collectorKey } })
   assert.equal(collectorSession.statusCode, 401)
   assert.equal((await db.query('SELECT count(*)::int AS n FROM integration_1688_connections WHERE tenant_id=$1', [mixedTenant])).rows[0].n, 1)
+  await db.query(`
+    WITH role AS (INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,'super_admin','超级管理员','["*"]') RETURNING id)
+    INSERT INTO user_roles(user_id,role_id) SELECT $2,id FROM role`, [mixedTenant, mixedUser])
+  const mixedSlug = 'mixed-' + key
+  const ownedShops = [mixedShop, otherMixedShop]
+  await assert.rejects(authorizeWorkspaceShops(mixedSlug, [mixedShop], true), /全部历史账号/)
+  await assert.rejects(authorizeWorkspaceShops(mixedSlug, [...ownedShops, shopB], true), /未在该工作区/)
+  await authorizeWorkspaceShops(mixedSlug, ownedShops)
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM tenant_1688_shops WHERE tenant_id=$1', [mixedTenant])).rows[0].n, 0, 'preview makes no changes')
+  await authorizeWorkspaceShops(mixedSlug, ownedShops, true)
+  await authorizeWorkspaceShops(mixedSlug, ownedShops, true)
+  const ownerSession = signedIn(await complete('mixed', await start()))
+  assert.ok(ownerSession.user.roles.includes('super_admin'))
+  assert.equal(ownerSession.user.tenantId, mixedTenant)
+  assert.equal((await get('/api/product-collections/session', ownerSession.token)).statusCode, 401, 'collector session requires its own key')
+  assert.equal((await app.inject({ method: 'GET', url: '/api/product-collections/session', headers: { 'x-collector-key': collectorKey } })).statusCode, 200)
+  await assert.rejects(saveConnection(second.user.tenantId, second.user.sub,
+    { aliId: otherMixedShop, access_token: 'wrong-group', expires_in: 3600 }), { code: 'SHOP_ACCOUNT_MISMATCH' })
+  await assert.rejects(saveConnection(mixedTenant, mixedUser,
+    { aliId: randomUUID(), access_token: 'unapproved', expires_in: 3600 }), { code: 'SHOP_ACCOUNT_MISMATCH' })
+  // Explicitly linking another group account preserves its own member permissions.
+  const member = (await db.query("INSERT INTO users(tenant_id,email,display_name) VALUES($1,'group-member@integration.local','店铺成员') RETURNING id", [mixedTenant])).rows[0].id
+  await db.query(`WITH role AS (INSERT INTO roles(tenant_id,code,name,permissions) VALUES($1,'viewer','只读','["integration:read"]') RETURNING id)
+    INSERT INTO user_roles(user_id,role_id) SELECT $2,id FROM role`, [mixedTenant, member])
+  await db.query('INSERT INTO auth_1688_identities(app_key,ali_id,user_id) VALUES($1,$2,$3)', [key, otherMixedShop, member])
+  const groupMember = signedIn(await complete('mixedOther', await start()))
+  assert.deepEqual(groupMember.user.permissions, ['integration:read'])
+  assert.equal((await get('/api/auth/me', groupMember.token)).statusCode, 200)
+  assert.equal((await get('/api/integrations/1688/connections', groupMember.token)).json().data.length, 1)
+  assert.equal((await get('/api/integrations/1688/connections', second.token)).json().data.length, 0)
+  await db.query('DELETE FROM tenant_1688_shops WHERE ali_id=$1', [otherMixedShop])
+  assert.equal((await get('/api/auth/me', groupMember.token)).statusCode, 401)
+  await db.query('INSERT INTO tenant_1688_shops(tenant_id,ali_id) VALUES($1,$2)', [mixedTenant, otherMixedShop])
+
   await bind(legacy)
   await bind(legacy) // Repeating a planned migration is safe.
   const migrated = signedIn(await complete('legacy', await start()))
@@ -210,6 +245,7 @@ try {
   globalThis.fetch = originalFetch
   await db.query('DELETE FROM auth_1688_sign_in_states WHERE app_key=$1', [key])
   await db.query('DELETE FROM auth_1688_identities WHERE app_key=$1', [key])
+  await db.query('DELETE FROM audit_logs WHERE tenant_id=ANY($1::uuid[])', [[...tenantIds]])
   await db.query('DELETE FROM tenants WHERE id=ANY($1::uuid[])', [[...tenantIds]])
   await app.close()
   await db.end()
