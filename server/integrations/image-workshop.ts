@@ -7,7 +7,7 @@ import { inspectPublishingImages } from './1688-agent.js'
 import { imagePreviewClient, putPrivateImage, requireImageStorage } from './oss-images.js'
 import { generateQwenImage, generatedImageUrl, type ImageModel } from '../llm/qwen-image.js'
 import { brandById, brandPolicy, checkBrandShop, defaultBrand, ownBrandNames, type OwnBrand } from './brands.js'
-import { applyCustomHeroFrame, applyHeroReferenceFrame, CUSTOM_HERO_FRAME, HERO_BOTTOM_PERCENT, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS, HERO_TOP_PERCENT } from './hero-reference-frame.js'
+import { applyCustomHeroFrame, applyHeroReferenceFrame, composeHeroContent, CUSTOM_HERO_FRAME, HERO_CONTENT_LAYOUT, heroCanvas, heroContentFrame, heroContentSize, HERO_REFERENCE_FRAME, HERO_REFERENCE_MARKS } from './hero-reference-frame.js'
 import { heroDesignForShop, type HeroFrame, type ShopHeroCopy } from './shop-hero-templates.js'
 import { imageSuiteFacts } from './image-suite-facts.js'
 import { generateQwenText, type QwenModel } from '../llm/qwen.js'
@@ -218,7 +218,7 @@ export function editPrompt(operation: 'white_bg' | 'background', scene?: string)
   return `${KEEP}把背景换成：${scene}。光线方向、色温和透视与商品一致，商品自然融入场景，主体清晰突出，真实摄影质感。${CLEAN}`
 }
 
-export const SUITE_COPY_VERSION = '2'
+export const SUITE_COPY_VERSION = '3'
 export type SuiteFacts = { title: string; category?: string | null; attributes: Record<string, string>; skus: string[]; sellerName?: string | null; points?: string; badges?: string[]; heroCopy?: HeroCopy | null; heroReferenceFrame?: HeroFrame | null; shopCopy?: ShopHeroCopy | null }
 /** Words for the 1688 首图, written per product from its own facts. */
 export type HeroCopy = { headline: string; subline: string; features: string[] }
@@ -280,13 +280,8 @@ function suiteBody(type: GeneratedType, facts: SuiteFacts, attrs: string) {
       if (facts.heroReferenceFrame) {
         const builtin = facts.heroReferenceFrame.mode === HERO_REFERENCE_FRAME
         const style = builtin ? '深蓝黑渐变背景，主标题用大号粗体和浅色描边，卖点用纵排的金色圆角标签。' : '按商品选取简洁、对比清晰的背景，主标题清楚醒目，卖点用纵排标签。'
-        const insets = facts.heroReferenceFrame.mode === CUSTOM_HERO_FRAME ? facts.heroReferenceFrame.insets : null
-        const margin = (inset: number) => Math.ceil(inset * 100) + 3
-        const room = insets
-          ? `上方 ${margin(insets.top)}%、下方 ${margin(insets.bottom)}%、左侧 ${margin(insets.left)}%、右侧 ${margin(insets.right)}%`
-          : `上方 ${HERO_TOP_PERCENT}%、下方 ${HERO_BOTTOM_PERCENT}% 和两侧 5%`
-        return `${base}生成 1688 批发商品首图的中间内容：左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。${style}${productCopy}${fixedCopy}以上是全部文案。`
-          + `将商品和文案放在画面中部，${room} 仅延伸背景，供程序合成固定边框。不要另画边框、品牌字样或品牌标识。${text}${noFake}${CLEAN}`
+        return `${base}生成 1688 批发商品首图的独立商品内容图：左侧居中排产品文案，右侧放大、完整展示商品，文字与商品互不遮挡。${style}${productCopy}${fixedCopy}以上是全部文案。`
+          + `整张图片都会放入模板的商品窗口，商品和文案充分利用整个画面，仅保留少量正常排版间距。背景连续延伸至四边，不加上下白条、空白横带或信箱式留白，不为模板预留顶部、底部或两侧空间。不要另画边框、品牌字样或品牌标识。${text}${noFake}${CLEAN}`
       }
       const badges = configured ? [] : (facts.badges ?? HERO_BADGES).slice(0, 3)
       const terms = fixedCopy || (badges.length ? `用一行小字写已配置的店铺优势：${badges.join('、')}。` : '')
@@ -356,18 +351,27 @@ async function brandLogoOf(asset: Asset) {
 
 // ---------- worker ----------
 type Asset = { id: string; tenant_id: string; operation: string; provider: string; model: string | null; reference_urls: string[]; source_url: string | null; options: Json; prompt: string | null; status: string; task_id: string | null; attempts: number; created_at: Date }
-const retryable = (error: unknown) => error instanceof IntegrationError && ['APIMART_RATE_LIMIT', 'APIMART_NETWORK', 'IMAGE_MODEL_NETWORK', 'IMAGE_MODEL_TIMEOUT', 'APIMART_FAILED'].includes(error.code)
+const GENERATION_ATTEMPTS = 4
+const GENERATION_RETRY_MS = 20 * 60_000
+const retryable = (error: unknown) => error instanceof IntegrationError && ['APIMART_RATE_LIMIT', 'APIMART_NETWORK', 'IMAGE_MODEL_NETWORK', 'IMAGE_MODEL_TIMEOUT', 'APIMART_FAILED', 'APIMART_INVALID', 'APIMART_RESPONSE', 'APIMART_TASK_FAILED'].includes(error.code)
 /** Failures after the provider finished: the paid result is fetched and saved again instead of generating anew. */
 export const STORAGE_ERRORS = ['OSS_IMAGE_UPLOAD', 'OSS_IMAGE_READ', 'IMAGE_DOWNLOAD_FAILED']
 const STORAGE_RETRY_MS = 60 * 60_000
 
 async function complete(asset: Asset, png: Buffer, cost?: number) {
-  const { png: decoded, width, height } = await toPng(png)
+  const decoded = await toPng(png)
+  let { width, height } = decoded
   const mode = asset.operation === 'suite_hero' ? asset.options.heroFrame : undefined
-  let normalized = decoded
-  if (mode === HERO_REFERENCE_FRAME) normalized = await applyHeroReferenceFrame(decoded, width, height)
-  else if (mode === CUSTOM_HERO_FRAME) normalized = await applyCustomHeroFrame(decoded, width, height, await readImage(asset.options.heroFrameKey, asset.tenant_id), asset.options.heroFrameInsets)
-  else if (asset.options.brand?.logo) normalized = await applyLogo(decoded, await readImage(await brandLogoOf(asset), asset.tenant_id))
+  let normalized = decoded.png
+  if (mode && asset.options.heroContentLayout === HERO_CONTENT_LAYOUT) {
+    const canvas = heroCanvas(asset.options.size ?? '1:1', asset.options.resolution ?? '1k')
+    const frame = mode === CUSTOM_HERO_FRAME ? await readImage(asset.options.heroFrameKey, asset.tenant_id) : undefined
+    normalized = await composeHeroContent(decoded.png, canvas.width, canvas.height, mode, frame, asset.options.heroFrameInsets)
+    ;({ width, height } = canvas)
+  }
+  else if (mode === HERO_REFERENCE_FRAME) normalized = await applyHeroReferenceFrame(decoded.png, width, height)
+  else if (mode === CUSTOM_HERO_FRAME) normalized = await applyCustomHeroFrame(decoded.png, width, height, await readImage(asset.options.heroFrameKey, asset.tenant_id), asset.options.heroFrameInsets)
+  else if (asset.options.brand?.logo) normalized = await applyLogo(decoded.png, await readImage(await brandLogoOf(asset), asset.tenant_id))
   const key = await storeImage(asset.tenant_id, asset.id, normalized)
   let finding: Finding | undefined
   // Made for automatic listing with AI images on: the owner chose to publish generated pictures without screening.
@@ -389,11 +393,20 @@ async function fail(asset: Asset, error: unknown) {
     await db.query("UPDATE image_assets SET next_poll_at=now()+interval '30 seconds',lease_until=NULL,error=$2,updated_at=now() WHERE id=$1", [asset.id, `${message}（生成已完成，稍后自动重新保存）`])
     return
   }
-  if (retryable(error) && asset.attempts < 4 && Date.now() - new Date(asset.created_at).getTime() < 20 * 60_000) {
-    await db.query("UPDATE image_assets SET next_poll_at=now()+($2::int*interval '20 seconds'),lease_until=NULL,error=$3,updated_at=now() WHERE id=$1", [asset.id, asset.attempts, message])
+  if (retryable(error) && asset.attempts < GENERATION_ATTEMPTS && Date.now() - new Date(asset.created_at).getTime() < GENERATION_RETRY_MS) {
+    // A terminal provider task cannot recover by polling its old id. Resubmit only that picture, with the same inputs;
+    // network/polling failures keep the accepted task, and storage failures keep the already paid result above.
+    const resubmit = error instanceof IntegrationError && error.code === 'APIMART_TASK_FAILED'
+    const retryMessage = asset.status === 'pending' || resubmit
+      ? `${message}（稍后自动重试，第 ${asset.attempts}/${GENERATION_ATTEMPTS - 1} 次）`
+      : `${message}（稍后自动查询生成结果）`
+    await db.query(`UPDATE image_assets SET status=CASE WHEN $4 THEN 'pending' ELSE status END,
+      task_id=CASE WHEN $4 THEN NULL ELSE task_id END,
+      next_poll_at=now()+($2::int*interval '20 seconds'),lease_until=NULL,error=$3,updated_at=now() WHERE id=$1`, [asset.id, asset.attempts, retryMessage, resubmit])
     return
   }
-  await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, message])
+  const reason = retryable(error) && asset.attempts >= GENERATION_ATTEMPTS ? `${message}（已自动重试 ${GENERATION_ATTEMPTS - 1} 次，仍未完成）` : message
+  await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, reason])
 }
 
 async function step(asset: Asset) {
@@ -407,14 +420,21 @@ async function step(asset: Asset) {
     if (asset.status === 'pending') {
       if (asset.options.brand?.logo) await brandLogoOf(asset) // before anything is paid for
       const refs = await Promise.all(asset.reference_urls.map(r => referenceUrl(asset.tenant_id, r)))
-      const taskId = await submitImageTask({ model: asset.model as SuiteModel, prompt: asset.prompt!, imageUrls: refs, size: asset.options.size ?? '1:1', resolution: asset.options.resolution ?? '1k', quality: asset.options.quality ?? 'medium' })
+      let size = asset.options.size ?? '1:1'
+      if (asset.operation === 'suite_hero' && asset.options.heroContentLayout === HERO_CONTENT_LAYOUT) {
+        const canvas = heroCanvas(size, asset.options.resolution ?? '1k')
+        const frame = asset.options.heroFrame === CUSTOM_HERO_FRAME ? await readImage(asset.options.heroFrameKey, asset.tenant_id) : undefined
+        const { area } = await heroContentFrame(canvas.width, canvas.height, asset.options.heroFrame, frame, asset.options.heroFrameInsets)
+        size = heroContentSize(area)
+      }
+      const taskId = await submitImageTask({ model: asset.model as SuiteModel, prompt: asset.prompt!, imageUrls: refs, size, resolution: asset.options.resolution ?? '1k', quality: asset.options.quality ?? 'medium' })
       await db.query("UPDATE image_assets SET status='processing',task_id=$2,next_poll_at=now()+interval '8 seconds',lease_until=NULL,error=NULL,updated_at=now() WHERE id=$1", [asset.id, taskId])
       return
     }
     const task = await getImageTask(asset.task_id!)
     if (task.status === 'completed') { await complete(asset, await download(resultUrl(task.url!), 25_000_000, resultUrl), task.cost); return }
-    if (task.status === 'failed') { await db.query("UPDATE image_assets SET status='failed',error=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id, `生成失败：${task.error}`]); return }
-    if (Date.now() - new Date(asset.created_at).getTime() > 20 * 60_000) { await db.query("UPDATE image_assets SET status='failed',error='生成超时（超过 20 分钟），请重试。',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id]); return }
+    if (task.status === 'failed') { await fail(asset, new IntegrationError('APIMART_TASK_FAILED', task.error ?? '图片生成失败，请重试。', 502)); return }
+    if (Date.now() - new Date(asset.created_at).getTime() > GENERATION_RETRY_MS) { await db.query("UPDATE image_assets SET status='failed',error='生成超时（超过 20 分钟），请重试。',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id]); return }
     await db.query("UPDATE image_assets SET next_poll_at=now()+interval '4 seconds',lease_until=NULL,updated_at=now() WHERE id=$1", [asset.id])
   } catch (error) { await fail(asset, error) }
 }
@@ -481,7 +501,7 @@ export async function queueReplacements(tenantId: string, productId: string, act
 export function suiteDesign(type: GeneratedType, facts: SuiteFacts, brand: OwnBrand | null) {
   const framed = type === 'suite_hero' && facts.heroReferenceFrame
   const selected = brand ? { name: brand.name, hasLogo: Boolean(brand.logo_key) } : null
-  const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name,
+  const options = framed ? { heroFrame: framed.mode, heroShopId: framed.connectionId, heroShopName: framed.name, heroContentLayout: HERO_CONTENT_LAYOUT,
     ...(framed.mode === CUSTOM_HERO_FRAME ? { heroFrameKey: framed.key, ...(framed.insets ? { heroFrameInsets: framed.insets } : {}) } : {}) }
     : brand ? { brand: { id: brand.id, name: brand.name, logo: logoApplies(type, selected), ...(type === 'suite_white' || !brand.connection_id ? {} : { connectionId: brand.connection_id }) } } : {}
   return { prompt: suitePrompt(type, facts, selected), options: {

@@ -28,6 +28,8 @@ const [{ db }, { saveConnection }, { runClaimedCollectionQueueJob, resumeImageBl
 const app = await (await import('../server/app.js')).buildApp()
 const png = await sharp({ create: { width: 800, height: 800, channels: 3, background: '#cfd8dc' } }).png().toBuffer()
 const schema = { global: { systemParam: { catId: '101' } }, data: { title: { fields: { label: '标题', required: true, maxLength: 100 } }, primaryPicture: { fields: { label: '主图', required: true, maxItems: 5 } }, description: { fields: { label: '详情', required: true, value: { detailList: [{ id: '0', title: '图文详情', content: null, contentUrl: null, isRequired: true }], smartDetail: { kept: true }, sizeTableDescriptionBlackIdList: '[1]' } } }, catProp: { fields: { label: '属性', dataSource: [{ name: 'p-brand', label: '品牌', uiType: 'input' }] } }, beginAmount: { fields: { label: '最小起订量' } }, saleProp: { fields: { dataSource: [{ name: 'p-3216', propertyId: 3216, label: '颜色', required: true, supportImg: true, customizable: true, fieldType: 'string' }] } }, skuTable: { fields: { column: [] } }, officialLogistics: { fields: { label: '件重尺' } }, priceRange: { fields: { label: '报价', required: true, column: [{ name: 'pricerange_beginAmount', required: true, uiType: 'cbunumber' }, { name: 'pricerange_price', required: true, uiType: 'cbunumber' }] } } } }
+const failedTasks = new Set<string>()
+let publishOfferId = '990001'
 let albumUploads = 0, published: any = null, submits = 0, visionCalls = 0, addCalls = 0, listFails = true, uploadFailures = 0, uploadAttempts = 0, unreachable = 0
 const fullAlbums = new Set<string>()
 let capacityLimit: number | null = null, profileFull = false, profileCalls = 0, lostAddReply = false
@@ -51,6 +53,7 @@ globalThis.fetch = async (input, init) => {
     return reply({ model: 'qwen3.8-flash', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(answer) } }] })
   }
   if (url === 'https://apimart.fixture.invalid/v1/images/generations') { submits++; return reply({ code: 200, data: [{ status: 'submitted', task_id: `task_${submits}` }] }) }
+  if (url.startsWith('https://apimart.fixture.invalid/v1/tasks/') && failedTasks.has(url.split('/').pop()!)) return reply({ code: 200, data: { status: 'failed', error: { message: 'Your request did not pass content safety review.' } } })
   if (url.startsWith('https://apimart.fixture.invalid/v1/tasks/')) return reply({ code: 200, data: { id: url.split('/').pop(), status: 'completed', progress: 100, cost: 0.01, result: { images: [{ url: ['https://upload.apimart.fixture/f/image/x.png'], expires_at: 1789000000 }] } } })
   // The collected SKU picture, read so it can be copied into the shop album.
   if (url === 'https://cbu01.alicdn.com/img/ibank/sku-mark.jpg') return new Response(png, { status: 200, headers: { 'content-type': 'image/png', 'content-length': String(png.length) } })
@@ -92,7 +95,7 @@ globalThis.fetch = async (input, init) => {
     return reply({ image: { id: `photo-${albumUploads}`, url: `https://cbu01.alicdn.com/img/ibank/album-${albumUploads}.jpg` } })
   }
   if (url.includes('alibaba.new.product.getSchema')) return reply({ result: { success: true, bizData: schema } })
-  if (url.includes('alibaba.new.product.add')) { published = JSON.parse((init?.body as URLSearchParams).get('dataBody')!); return reply({ result: { success: true, bizData: { dataJson: JSON.stringify({ itemId: '990001', offerStatus: 'auditing' }) } } }) }
+  if (url.includes('alibaba.new.product.add')) { published = JSON.parse((init?.body as URLSearchParams).get('dataBody')!); return reply({ result: { success: true, bizData: { dataJson: JSON.stringify({ itemId: publishOfferId, offerStatus: 'auditing' }) } } }) }
   throw new Error(`unexpected gateway endpoint ${url}`)
 }
 
@@ -154,17 +157,23 @@ try {
   const heroPrompt = (await db.query("SELECT prompt FROM image_assets WHERE collected_product_id=$1 AND operation='suite_hero'", [sourceId])).rows[0].prompt as string
   assert.match(heroPrompt, /主标题“车载香薰机”/); assert.match(heroPrompt, /“持久淡香”、“机器人造型”、“除异味”/)
   assert.match(heroPrompt, /左侧居中排产品文案，右侧放大、完整展示商品/)
+  assert.match(heroPrompt, /独立商品内容图/)
+  assert.doesNotMatch(heroPrompt, /上方 \d+%|下方 \d+%/)
   assert.doesNotMatch(heroPrompt, /72|18000Pa|工厂直供/, 'only the current product’s copy goes to the model')
   const generated = (await db.query("SELECT operation,options FROM image_assets WHERE collected_product_id=$1 ORDER BY operation", [sourceId])).rows
   assert.equal(generated.length, 8, 'five main pictures (no model picture) and three detail pictures')
   assert.ok(generated.every(r => r.options.unchecked === true))
   assert.deepEqual(generated.filter(r => r.options.heroFrame === 'tuoyang-v1').map(r => r.operation), ['suite_hero'])
   assert.equal(generated.find(r => r.operation === 'suite_hero').options.heroShopId, connection.id)
+  assert.equal(generated.find(r => r.operation === 'suite_hero').options.heroContentLayout, 'content-window-v1')
+  assert.ok(generated.filter(r => r.operation !== 'suite_hero').every(r => !r.options.heroContentLayout))
   assert.deepEqual(generated.filter(r => r.operation.startsWith('detail_')).map(r => r.options.size), ['3:4', '3:4', '3:4'])
   // OSS times out three times on the first finished picture: it is saved again later instead of failing.
   ossFailures = 3
   await drain()
   assert.equal(submits, 8)
+  const heroDimensions = (await db.query("SELECT width,height FROM image_assets WHERE collected_product_id=$1 AND operation='suite_hero'", [sourceId])).rows[0]
+  assert.deepEqual(heroDimensions, { width: 1024, height: 1024 }, 'final canvas follows the saved 1k output setting')
   assert.ok((await db.query("SELECT bool_and(status='completed') AS ok FROM image_assets WHERE collected_product_id=$1", [sourceId])).rows[0].ok)
 
   // A picture already marked failed by OSS (as before this fix) is fetched and saved again by the job, not generated again.
@@ -340,7 +349,39 @@ try {
   assert.notEqual(rerouted.report.imageBatch, routed.report.imageBatch)
   const reroutedFrame = (await db.query("SELECT options->>'heroFrame' AS frame FROM image_assets WHERE batch_id=$1 AND operation='suite_hero'", [rerouted.report.imageBatch])).rows[0]
   assert.equal(reroutedFrame.frame, 'tuoyang-v1')
-  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesEight: 'ok', shopTemplates: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', albumRolloverRecovery: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
+  // A rejected spec picture is retried alone while the listing waits, then automatically continues through publishing.
+  await drain(); await drain() // finish the template-routing batches above
+  fullAlbums.clear(); capacityLimit = null
+  await db.query("UPDATE integration_1688_album_settings SET album_id='780' WHERE connection_id=$1", [connection.id])
+  const retrySource = await collect(connection.id), submissionsBeforeRetry = submits
+  const retryJob = await run(retrySource)
+  await db.query("UPDATE image_assets SET next_poll_at=now() WHERE collected_product_id=$1", [retrySource])
+  await workshop.runImageWorkerOnce() // submit all eight pictures
+  const spec = (await db.query("SELECT * FROM image_assets WHERE collected_product_id=$1 AND operation='suite_spec'", [retrySource])).rows[0]
+  failedTasks.add(spec.task_id)
+  await db.query("UPDATE image_assets SET next_poll_at=now() WHERE collected_product_id=$1", [retrySource])
+  await workshop.runImageWorkerOnce() // seven completed, spec rejected
+  const inRetry = (await db.query('SELECT * FROM image_assets WHERE id=$1', [spec.id])).rows[0]
+  assert.deepEqual([inRetry.status, inRetry.task_id, inRetry.attempts], ['pending', null, 1])
+  const waitingForRetry = await run(retrySource)
+  assert.equal(waitingForRetry.status, 'queued', waitingForRetry.message)
+  assert.equal(waitingForRetry.report.imageBatch, retryJob.report.imageBatch)
+  assert.match(waitingForRetry.message, /正在自动重试.*继续上架/)
+  assert.doesNotMatch(waitingForRetry.message, /保存未成功/)
+  await drain()
+  assert.equal(submits - submissionsBeforeRetry, 9, 'eight originals plus only the rejected spec picture')
+  const retriedRows = (await db.query('SELECT id,status,attempts FROM image_assets WHERE collected_product_id=$1', [retrySource])).rows
+  assert.equal(retriedRows.length, 8)
+  assert.ok(retriedRows.every(r => r.status === 'completed'))
+  assert.equal(retriedRows.find(r => r.id === spec.id).attempts, 2)
+  assert.ok(retriedRows.filter(r => r.id !== spec.id).every(r => r.attempts === 1), 'successful pictures are reused')
+  assert.equal((await run(retrySource)).report.generatedImages, 8, 'resumed without a manual requeue')
+  publishOfferId = '990002'
+  const retryPublished = await run(retrySource)
+  assert.equal(retryPublished.status, 'published', retryPublished.message)
+  assert.equal(submits - submissionsBeforeRetry, 9, 'upload and publishing do not regenerate pictures')
+
+  console.log(JSON.stringify({ offKeepsBlocking: 'ok', generatesEight: 'ok', shopTemplates: 'ok', albumFailureStops: 'ok', albumCreatedOnce: 'ok', albumFoundByName: 'ok', albumRolloverRecovery: 'ok', retryReusesBatch: 'ok', publishedUnchecked: 'ok', skuAsCollected: 'ok', heroCopy: 'ok', sourcePackage: 'ok', generationRetried: 'ok', retryContinuesListing: 'ok', uploadRetried: 'ok', ossSavedAgain: 'ok', creditsChecked: 'ok', creditsCharged: 'ok', autoResume: 'ok', livePlatformWrites: 0 }))
 } finally {
   globalThis.fetch = originalFetch
   Object.assign(OSS.prototype, originalOss)

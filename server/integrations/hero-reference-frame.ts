@@ -1,4 +1,4 @@
-import sharp from 'sharp'
+import sharp, { type OverlayOptions } from 'sharp'
 import { fileURLToPath } from 'node:url'
 
 export const HERO_REFERENCE_FRAME = 'tuoyang-v1'
@@ -6,6 +6,8 @@ export const CUSTOM_HERO_FRAME = 'custom-v1'
 export const HERO_REFERENCE_MARKS = ['义乌拓洋', '超级工厂']
 export const HERO_TOP_PERCENT = 12, HERO_BOTTOM_PERCENT = 20
 export type HeroInsets = { top: number; bottom: number; left: number; right: number }
+export const HERO_CONTENT_LAYOUT = 'content-window-v1'
+type ImageArea = { left: number; top: number; width: number; height: number }
 
 const bands = (height: number) => ({
   top: Math.max(1, Math.floor(height * HERO_TOP_PERCENT / 100)),
@@ -125,6 +127,119 @@ function frameOpening(insets: HeroInsets, width: number, height: number) {
   const left = Math.round(insets.left * width), right = Math.round(insets.right * width)
   const top = Math.round(insets.top * height), bottom = Math.round(insets.bottom * height)
   return { left, top, width: width - left - right, height: height - top - bottom }
+}
+
+/** Remove only near-white template background connected to the opening, never enclosed white lettering. */
+async function clearOpeningWhite(frame: Buffer, area: ImageArea) {
+  const { data, info } = await sharp(frame).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+  const { width, height } = info
+  const seed = (area.top + Math.floor(area.height / 2)) * width + area.left + Math.floor(area.width / 2)
+  if (data[seed * 4 + 3] > 8) return frame
+  const seen = new Uint8Array(width * height), queue = new Uint32Array(width * height)
+  let head = 0, tail = 0, changed = false
+  const visit = (pixel: number) => {
+    if (seen[pixel]) return
+    seen[pixel] = 1
+    const i = pixel * 4
+    const white = Math.min(data[i], data[i + 1], data[i + 2]) >= 245
+      && Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) <= 8
+    if (data[i + 3] > 8 && !white) return
+    if (white && data[i + 3] > 0) { data[i + 3] = 0; changed = true }
+    queue[tail++] = pixel
+  }
+  visit(seed)
+  while (head < tail) {
+    const pixel = queue[head++], x = pixel % width
+    if (x > 0) visit(pixel - 1)
+    if (x + 1 < width) visit(pixel + 1)
+    if (pixel >= width) visit(pixel - width)
+    if (pixel + width < width * height) visit(pixel + width)
+  }
+  return changed ? sharp(data, { raw: info }).png().toBuffer() : frame
+}
+
+/** A deterministic final canvas: the provider's content image may have a different aspect ratio or pixel size. */
+export function heroCanvas(size: string, resolution: string) {
+  const edge = resolution === '2k' ? 2048 : 1024
+  return size === '3:4' ? { width: edge * 3 / 4, height: edge } : { width: edge, height: edge }
+}
+
+/** APIMart's documented aspect ratios, shared by the configured image models. */
+export function heroContentSize(area: Pick<ImageArea, 'width' | 'height'>) {
+  const sizes = ['1:1', '3:2', '2:3', '4:3', '3:4', '5:4', '4:5', '16:9', '9:16', '2:1', '1:2', '3:1', '1:3', '21:9', '9:21']
+  const error = (size: string) => { const [w, h] = size.split(':').map(Number); return Math.abs(Math.log(w / h / (area.width / area.height))) }
+  return sizes.reduce((best, size) => error(size) < error(best) ? size : best)
+}
+
+/** Build the frame and the exact opening together so submission and composition use the same geometry. */
+export async function heroContentFrame(width: number, height: number, mode: string, frame?: Buffer, insets?: HeroInsets | null) {
+  if (mode === HERO_REFERENCE_FRAME) {
+    const scale = width / referenceWidth
+    const top = Math.round(200 * scale), bottom = Math.round(356 * scale)
+    const left = Math.round(24 * scale), right = Math.round(20 * scale)
+    const area = { left, top, width: width - left - right, height: height - top - bottom }
+    const overlay = await sharp({ create: { width, height, channels: 4, background: '#00000000' } }).composite([
+      { input: await sharp(header).resize({ width }).png().toBuffer(), left: 0, top: 0 },
+      { input: await sharp(footer).resize({ width }).png().toBuffer(), left: 0, top: height - bottom },
+      { input: { create: { width: left, height: area.height, channels: 4, background: '#000000ff' } }, left: 0, top },
+      { input: { create: { width: right, height: area.height, channels: 4, background: '#000000ff' } }, left: width - right, top },
+    ]).png().toBuffer()
+    return { area, overlay }
+  }
+  if (!frame) throw new Error('Custom hero frame is missing')
+  const meta = await sharp(frame).metadata()
+  const sourceWidth = meta.width!, sourceHeight = meta.height!
+  const source = frameOpening(insets ?? { top: HERO_TOP_PERCENT / 100, bottom: HERO_BOTTOM_PERCENT / 100, left: 0, right: 0 }, sourceWidth, sourceHeight)
+  // Nine-slice layout: header/footer scale uniformly by width; side rails span the opening. Logo/text keep their shape.
+  const scale = width / sourceWidth
+  const top = Math.round(source.top * scale), bottom = Math.round((sourceHeight - source.top - source.height) * scale)
+  const left = Math.round(source.left * scale), right = Math.round((sourceWidth - source.left - source.width) * scale)
+  const area = { left, top, width: width - left - right, height: height - top - bottom }
+  if (source.width <= 0 || source.height <= 0 || area.width <= 0 || area.height <= 0) throw new Error('Hero template opening is too small')
+  const pieces: OverlayOptions[] = []
+  const piece = async (rect: ImageArea, target: ImageArea) => {
+    if (rect.width > 0 && rect.height > 0 && target.width > 0 && target.height > 0) pieces.push({
+      input: await sharp(frame).extract(rect).resize({ width: target.width, height: target.height, fit: 'fill' }).png().toBuffer(), left: target.left, top: target.top,
+    })
+  }
+  await piece({ left: 0, top: 0, width: sourceWidth, height: source.top }, { left: 0, top: 0, width, height: top })
+  await piece({ left: 0, top: source.top + source.height, width: sourceWidth, height: sourceHeight - source.top - source.height }, { left: 0, top: height - bottom, width, height: bottom })
+  await piece({ left: 0, top: source.top, width: source.left, height: source.height }, { left: 0, top, width: left, height: area.height })
+  await piece({ left: source.left + source.width, top: source.top, width: sourceWidth - source.left - source.width, height: source.height }, { left: width - right, top, width: right, height: area.height })
+  const overlay = await sharp({ create: { width, height, channels: 4, background: '#00000000' } }).composite(pieces).png().toBuffer()
+  return { area, overlay: await clearOpeningWhite(overlay, area) }
+}
+
+/** Trim only completely blank edge strips (at most 15% per edge), preserving faint product edges and small lettering. */
+async function trimContentBands(png: Buffer) {
+  const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+  const { width, height } = info
+  const blank = (x: number, y: number) => {
+    const i = (y * width + x) * 4
+    return data[i + 3] <= 8 || Math.min(data[i], data[i + 1], data[i + 2]) >= 254
+  }
+  const row = (y: number) => { for (let x = 0; x < width; x++) if (!blank(x, y)) return false; return true }
+  const col = (x: number) => { for (let y = 0; y < height; y++) if (!blank(x, y)) return false; return true }
+  const edge = (length: number, test: (i: number) => boolean) => {
+    const max = Math.floor(length * 0.15)
+    let n = 0
+    while (n <= max && test(n)) n++
+    return n > max ? 0 : n
+  }
+  const top = edge(height, row), bottom = edge(height, n => row(height - n - 1))
+  const left = edge(width, col), right = edge(width, n => col(width - n - 1))
+  return sharp(png).extract({ left, top, width: width - left - right, height: height - top - bottom }).png().toBuffer()
+}
+
+/** Fit the whole content into the opening without cropping or stretching; extend edge backgrounds to close ratio gaps. */
+export async function composeHeroContent(png: Buffer, width: number, height: number, mode: string, frame?: Buffer, insets?: HeroInsets | null) {
+  const { area, overlay } = await heroContentFrame(width, height, mode, frame, insets)
+  const fitted = await sharp(await trimContentBands(png)).flatten({ background: '#ffffff' })
+    .resize({ width: area.width, height: area.height, fit: 'inside' }).png().toBuffer({ resolveWithObject: true })
+  const left = area.left + Math.floor((area.width - fitted.info.width) / 2)
+  const top = area.top + Math.floor((area.height - fitted.info.height) / 2)
+  const background = await sharp(fitted.data).extend({ left, top, right: width - left - fitted.info.width, bottom: height - top - fitted.info.height, extendWith: 'copy' }).png().toBuffer()
+  return sharp(background).composite([{ input: overlay, left: 0, top: 0 }]).png().toBuffer()
 }
 
 export async function applyCustomHeroFrame(png: Buffer, width: number, height: number, frame: Buffer, insets?: HeroInsets | null) {

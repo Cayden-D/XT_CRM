@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
-import { applyCustomHeroFrame, prepareCustomHeroFrame } from '../server/integrations/hero-reference-frame.js'
+import { applyCustomHeroFrame, prepareCustomHeroFrame, HERO_CONTENT_LAYOUT } from '../server/integrations/hero-reference-frame.js'
 
 // Image workshop against mocked DashScope (Qwen vision + Qwen image), APIMart (GPT-Image-2.5, async tasks) and OSS.
 process.env.DASHSCOPE_API_KEY = 'workshop-fixture-key'
@@ -32,7 +32,7 @@ const calls = { vision: 0, visionImages: [] as string[], qwen: [] as any[], subm
 const tasks = new Map<string, { polls: number; fail: boolean }>()
 let frameToScreen = ''
 let copyInputs: string[] = []
-let failNextTask = false
+let failNextTask = false, failAllTasks = false, submitStatus = 200, pollStatus = 200, submitNetwork = false
 let photoMode: 'ok' | 'reject' | 'network' = 'ok'
 const photos: { album: string; type: string; size: number }[] = []
 const reply = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
@@ -65,11 +65,14 @@ globalThis.fetch = async (input, init) => {
   if (url === 'https://apimart.fixture.invalid/v1/images/generations') {
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer apimart-fixture-key')
     const body = JSON.parse(String(init?.body)); calls.submit.push(body)
-    const id = `task_${calls.submit.length}`; tasks.set(id, { polls: 0, fail: failNextTask }); failNextTask = false
+    if (submitNetwork) { submitNetwork = false; throw new TypeError('fixture network failure') }
+    if (submitStatus !== 200) { const status = submitStatus; submitStatus = 200; return reply({ code: status }, status) }
+    const id = `task_${calls.submit.length}`; tasks.set(id, { polls: 0, fail: failNextTask || failAllTasks }); failNextTask = false
     return reply({ code: 200, data: [{ status: 'submitted', task_id: id }] })
   }
   if (url.startsWith('https://apimart.fixture.invalid/v1/tasks/')) {
     calls.polls++
+    if (pollStatus !== 200) { const status = pollStatus; pollStatus = 200; return reply({ code: status }, status) }
     const id = url.split('/').pop()!, task = tasks.get(id)!
     task.polls++
     if (task.fail) return reply({ code: 200, data: { id, status: 'failed', error: { message: '内容审核未通过' } } })
@@ -183,15 +186,80 @@ try {
   const suiteDone = (await call('GET', `/assets?batchId=${suite.batchId}`)).json().data
   assert.deepEqual([suiteDone.every((a: any) => a.status === 'completed'), Number(suiteDone[0].cost)], [true, 0.01317])
 
-  // A failed task is reported and can be retried.
+  const newPicture = async () => (await call('POST', '/suites', { title: '手提收纳箱', references: [{ url: cdn('main') }], types: ['suite_white'] })).json().data.assets[0]
+  const picture = async (id: string) => (await db.query('SELECT * FROM image_assets WHERE id=$1', [id])).rows[0]
+  // A terminal rejection (including content safety) must get a new task id, retaining the exact request and asset.
   failNextTask = true
-  const one = (await call('POST', '/suites', { title: '手提收纳箱', references: [{ url: cdn('main') }], types: ['suite_white'] })).json().data.assets[0]
+  const one = await newPicture(), initialSubmits = calls.submit.length
   await drain(); await drain()
-  const failed = (await call('GET', `/assets?ids=${one.id}`)).json().data[0]
-  assert.deepEqual([failed.status, failed.error], ['failed', '生成失败：内容审核未通过'])
-  assert.equal((await call('POST', `/assets/${one.id}/retry`)).json().data.status, 'pending')
+  const waiting = await picture(one.id)
+  assert.deepEqual([waiting.status, waiting.task_id, waiting.attempts, waiting.lease_until], ['pending', null, 1, null])
+  assert.match(waiting.error, /稍后自动重试，第 1\/3 次/)
+  assert.ok(new Date(waiting.next_poll_at).getTime() - Date.now() > 15_000, 'retry backs off rather than flooding the provider')
+  assert.equal(await workshop.runImageWorkerOnce(), 0, 'not claimed before the delay')
+  await Promise.all([drain(), drain()]) // the database lease also protects concurrent workers
+  assert.equal(calls.submit.length, initialSubmits + 2, 'only one resubmission')
+  assert.deepEqual(calls.submit.at(-1), calls.submit.at(-2), 'prompt, references and output parameters are unchanged')
+  await drain(); await drain()
+  assert.deepEqual([(await picture(one.id)).status, (await picture(one.id)).attempts], ['completed', 2])
+
+  // A transient poll failure keeps the accepted task instead of paying for another generation.
+  const polling = await newPicture()
+  await drain()
+  const accepted = await picture(polling.id), beforePoll = calls.submit.length
+  pollStatus = 500
+  await drain()
+  assert.deepEqual([(await picture(polling.id)).status, (await picture(polling.id)).task_id], ['processing', accepted.task_id])
+  await drain(); await drain()
+  assert.equal((await picture(polling.id)).status, 'completed')
+  assert.equal(calls.submit.length, beforePoll)
+
+  // Submission failures, including HTTP 400 safety rejection, retry without losing the picture.
+  for (const failure of [400, 429, 500, 'network'] as const) {
+    const asset = await newPicture()
+    if (failure === 'network') submitNetwork = true
+    else submitStatus = failure
+    await drain()
+    assert.deepEqual([(await picture(asset.id)).status, (await picture(asset.id)).task_id], ['pending', null])
+    assert.match((await picture(asset.id)).error, /自动重试/)
+    await drain(); await drain(); await drain()
+    assert.deepEqual([(await picture(asset.id)).status, (await picture(asset.id)).attempts], ['completed', 2])
+  }
+  for (const status of [401, 402]) {
+    const asset = await newPicture()
+    submitStatus = status
+    await drain()
+    assert.equal((await picture(asset.id)).status, 'failed', 'auth and balance errors need administrator action')
+  }
+
+  // Repeated rejection stops after the initial submission and three retries, surviving separate worker runs.
+  failAllTasks = true
+  const exhausted = await newPicture(), beforeExhausted = calls.submit.length
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    await drain(); await drain()
+    const row = await picture(exhausted.id)
+    assert.equal(row.attempts, attempt)
+    assert.equal(row.status, attempt < 4 ? 'pending' : 'failed')
+    if (attempt < 4) assert.ok(new Date(row.next_poll_at).getTime() - Date.now() > attempt * 20_000 - 5000)
+  }
+  failAllTasks = false
+  assert.equal(calls.submit.length, beforeExhausted + 4)
+  await drain()
+  assert.equal(calls.submit.length, beforeExhausted + 4, 'exhausted tasks stay stopped')
+  const failed = (await call('GET', `/assets?ids=${exhausted.id}`)).json().data[0]
+  assert.equal(failed.status, 'failed')
+  assert.match(failed.error, /已自动重试 3 次/)
+  assert.equal((await call('POST', `/assets/${exhausted.id}/retry`)).json().data.status, 'pending')
+  assert.equal((await picture(exhausted.id)).attempts, 0, 'manual retry starts a fresh bounded cycle')
   await drain(); await drain(); await drain()
-  assert.equal((await call('GET', `/assets?ids=${one.id}`)).json().data[0].status, 'completed')
+  assert.equal((await picture(exhausted.id)).status, 'completed')
+
+  failNextTask = true
+  const expired = await newPicture()
+  await drain()
+  await db.query("UPDATE image_assets SET created_at=now()-interval '21 minutes' WHERE id=$1", [expired.id])
+  await drain()
+  assert.equal((await picture(expired.id)).status, 'failed', 'old jobs do not open another generation cycle')
 
   // Replacements: one new picture per flagged main picture, made only from the unflagged ones; not queued twice.
   const before = calls.submit.length
@@ -372,7 +440,10 @@ try {
   assert.equal(customHero.options.brand, undefined)
   assert.ok(customHero.options.heroFrameInsets.left < customHero.options.heroFrameInsets.right)
   const { rows: [customJob] } = await db.query('SELECT prompt FROM image_assets WHERE id=$1', [customHero.id])
-  assert.match(customJob.prompt, /上方 10%、下方 19%、左侧 6%、右侧 8%/)
+  assert.match(customJob.prompt, /独立商品内容图/)
+  assert.match(customJob.prompt, /不为模板预留顶部、底部或两侧空间/)
+  assert.doesNotMatch(customJob.prompt, /上方 \d+%|下方 \d+%/)
+  assert.equal(customHero.options.heroContentLayout, HERO_CONTENT_LAYOUT)
   const duplicate = await call('POST', customPath, { name: '宠物红框', revision: 2, content: secondContent })
   assert.equal(duplicate.json().error, 'HERO_TEMPLATE_NAME_TAKEN')
   const secondUpload = await call('POST', customPath, { name: '宠物绿框', revision: 2, content: secondContent })
@@ -408,25 +479,38 @@ try {
   const defaultSuite = (await call('POST', '/suites', { title: '车载充气泵', references: [{ url: cdn('main') }], types: ['suite_hero'] })).json().data.assets[0]
   assert.equal(defaultSuite.options.brand.logo, true)
   assert.equal(defaultSuite.options.heroFrame, undefined)
+  const legacyHero = (await db.query(`INSERT INTO image_assets(tenant_id,operation,provider,model,reference_urls,options,prompt,created_by)
+    SELECT tenant_id,operation,provider,model,reference_urls,options-'heroContentLayout',prompt,created_by FROM image_assets WHERE id=$1 RETURNING id`, [customHero.id])).rows[0]
   frameToScreen = framed.id
   for (let i = 0; i < 4; i++) await drain()
   const processed = (await call('GET', '/assets?ids=' + framed.id + ',' + white.id + ',' + customHero.id)).json().data
   assert.ok(processed.every((a: any) => a.status === 'completed' && !a.risky))
   const savedFrame = objects.get('image-workshop/' + tenant + '/' + framed.id + '.png')!
-  const pixel = async (x: number, y: number) => [...await sharp(savedFrame).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  const savedFrameMeta = await sharp(savedFrame).metadata()
+  const pixel = async (x: number, y: number) => [...await sharp(savedFrame).extract({ left: Math.floor(x * savedFrameMeta.width! / 1024), top: Math.floor(y * savedFrameMeta.height! / 1024), width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
   assert.deepEqual(await pixel(8, 8), [0, 0, 0])
   assert.deepEqual(await pixel(512, 512), [215, 226, 220])
   const footer = await pixel(1000, 1000)
   assert.ok(footer[0] > footer[1] && footer[1] > footer[2], 'the original gold footer is present')
   assert.deepEqual(objects.get('image-workshop/' + tenant + '/' + white.id + '.png'), (await workshop.toPng(png)).png)
   const customBytes = objects.get('image-workshop/' + tenant + '/' + customHero.id + '.png')!
-  const customPixel = async (y: number, x = 512) => [...await sharp(customBytes).extract({ left: x, top: y, width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
+  const customMeta = await sharp(customBytes).metadata()
+  const customPixel = async (y: number, x = 512) => [...await sharp(customBytes).extract({ left: Math.floor(x * customMeta.width! / 1024), top: Math.floor(y * customMeta.height! / 1024), width: 1, height: 1 }).removeAlpha().raw().toBuffer()]
   assert.deepEqual(await customPixel(16), [202, 18, 36], 'the queued task retains its first uploaded version')
   assert.deepEqual(await customPixel(100), [215, 226, 220], 'the template needs less than the legacy top band')
   assert.deepEqual(await customPixel(850), [215, 226, 220], 'the template needs less than the legacy bottom band')
   assert.deepEqual(await customPixel(512), [215, 226, 220], 'the sample center does not cover the generated product')
   assert.deepEqual(await customPixel(512, 8), [202, 18, 36], 'the uploaded side rail is preserved')
   assert.deepEqual(await customPixel(1000), [202, 18, 36], 'the matching custom footer is used')
+  const legacyBytes = objects.get('image-workshop/' + tenant + '/' + legacyHero.id + '.png')!
+  assert.deepEqual([...await sharp(legacyBytes).extract({ left: 512, top: 1000, width: 1, height: 1 }).removeAlpha().raw().toBuffer()], [202, 18, 36])
+  const newMetadata = await sharp(customBytes).metadata()
+  const savedDimensions = (await db.query('SELECT width,height FROM image_assets WHERE id=$1', [customHero.id])).rows[0]
+  assert.deepEqual(savedDimensions, { width: newMetadata.width, height: newMetadata.height })
+  const builtinPrompt = (await db.query('SELECT prompt FROM image_assets WHERE id=$1', [framed.id])).rows[0].prompt
+  const framedSubmission = calls.submit.find(s => s.prompt === builtinPrompt)
+  assert.ok(framedSubmission)
+  assert.notEqual(framedSubmission.size, '1:1', 'generate for the content window rather than the square final canvas')
   const wrongAlbum = await call('POST', `/assets/${customHero.id}/photo`, { connectionId: shop.id, albumId: '1001', confirmed: true })
   assert.equal(wrongAlbum.json().error, 'HERO_SHOP_MISMATCH')
 
